@@ -1,0 +1,60 @@
+/* Plan stage motion. Owned by features/plan. Token colours only. */
+
+:root {
+  --plan-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Evidence entrance: a short settle, staggered by inline animation-delay. */
+@keyframes plan-evidence-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+.plan-evidence-in {
+  animation: plan-evidence-in 260ms var(--plan-ease-out) both;
+}
+
+/* One pulse ring when a box is located (from the plan or a chat row). */
+@keyframes plan-pulse {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+
+.plan-pulse {
+  animation: plan-pulse 700ms var(--plan-ease-out) 1 both;
+}
+
+/* Located room: one fill flash. */
+@keyframes plan-room-flash {
+  0% {
+    fill-opacity: 0.55;
+  }
+}
+
+.plan-room-flash {
+  animation: plan-room-flash 700ms var(--plan-ease-out) 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-evidence-in {
+    animation: plan-fade-in 120ms linear both;
+  }
+  .plan-pulse {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+@keyframes plan-fade-in {
+  from {
+    opacity: 0;
+  }
+}

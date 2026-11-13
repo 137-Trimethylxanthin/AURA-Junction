@@ -1,0 +1,25 @@
+# Stoa dataset (12 GB, not for git)
+/data/
+
+# Frontend
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+frontend/e2e/__screens__/
+frontend/test-results/
+frontend/playwright-report/
+.wrangler/
+
+# Gemini experiment images are derived from CubiCasa5k (CC BY-NC-SA): never commit
+.omc/research/gemini/experiments/
+
+# Backend
+backend/build/
+backend/.venv/
+__pycache__/
+*.env
+.pytest_cache/
+.ruff_cache/
+frontend/test-results-api/

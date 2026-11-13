@@ -1,0 +1,1722 @@
+{
+  "contract_version": "1.0",
+  "id": "swiss-46639",
+  "title": "Plan 3e étage",
+  "subtitle": "Site 11420 · 1:200",
+  "frame": {
+    "dxf_min": [
+      -20.166657,
+      -16.868711
+    ],
+    "dxf_max": [
+      9.146366,
+      12.430481
+    ],
+    "margin_m": 0.6,
+    "m_per_unit": 1,
+    "y_flip": true,
+    "px": [
+      1221,
+      1220
+    ]
+  },
+  "m_per_pct_x": 0.30513,
+  "m_per_pct_y": 0.30499,
+  "images": {
+    "rebuilt": "/drawings/swiss-46639/plan.svg",
+    "original": "/drawings/swiss-46639/original-crop.png",
+    "original_alignment": "approximate"
+  },
+  "rooms": [
+    {
+      "room_id": "3.01",
+      "num": "3.01",
+      "name": "Terrasse",
+      "unit": "A",
+      "area_m2": 30.39,
+      "outdoor": true,
+      "points": [
+        [
+          86.41,
+          2.3
+        ],
+        [
+          86.41,
+          27.44
+        ],
+        [
+          82.83,
+          27.44
+        ],
+        [
+          82.83,
+          14.88
+        ],
+        [
+          82.83,
+          13.4
+        ],
+        [
+          68.08,
+          13.4
+        ],
+        [
+          68.08,
+          7.47
+        ],
+        [
+          68.08,
+          5.95
+        ],
+        [
+          48.27,
+          5.95
+        ],
+        [
+          48.27,
+          2.3
+        ]
+      ],
+      "label_at": [
+        80.61,
+        7.86
+      ]
+    },
+    {
+      "room_id": "3.02",
+      "num": "3.02",
+      "name": "Séjour/repas",
+      "unit": "A",
+      "area_m2": 38.57,
+      "outdoor": false,
+      "points": [
+        [
+          66.24,
+          27.22
+        ],
+        [
+          66.24,
+          28.86
+        ],
+        [
+          62.2,
+          28.86
+        ],
+        [
+          62.2,
+          17.58
+        ],
+        [
+          62.2,
+          17.57
+        ],
+        [
+          62.2,
+          17.36
+        ],
+        [
+          62.16,
+          17.36
+        ],
+        [
+          62.16,
+          17.57
+        ],
+        [
+          48.16,
+          17.55
+        ],
+        [
+          48.16,
+          7.43
+        ],
+        [
+          66.59,
+          7.43
+        ],
+        [
+          66.59,
+          14.88
+        ],
+        [
+          68.07,
+          14.88
+        ],
+        [
+          81.34,
+          14.88
+        ],
+        [
+          81.34,
+          26.98
+        ],
+        [
+          66.73,
+          26.98
+        ],
+        [
+          66.73,
+          27.22
+        ]
+      ],
+      "label_at": [
+        75.18,
+        22.06
+      ]
+    },
+    {
+      "room_id": "3.03",
+      "num": "3.03",
+      "name": "Cuisine",
+      "unit": "A",
+      "area_m2": 7.83,
+      "outdoor": false,
+      "points": [
+        [
+          48.16,
+          17.58
+        ],
+        [
+          62.16,
+          17.61
+        ],
+        [
+          62.16,
+          23.61
+        ],
+        [
+          48.16,
+          23.61
+        ]
+      ],
+      "label_at": [
+        58.94,
+        20.84
+      ],
+      "rect": {
+        "x": 48.16,
+        "y": 17.58,
+        "w": 14,
+        "h": 6.02,
+        "w_m": 4.275,
+        "h_m": 1.837
+      }
+    },
+    {
+      "room_id": "3.04",
+      "num": "3.04",
+      "name": "Chambre à coucher",
+      "unit": "A",
+      "area_m2": 17.04,
+      "outdoor": false,
+      "points": [
+        [
+          48.16,
+          24.11
+        ],
+        [
+          61.7,
+          24.11
+        ],
+        [
+          61.7,
+          37.61
+        ],
+        [
+          48.16,
+          37.61
+        ]
+      ],
+      "label_at": [
+        54.91,
+        30.86
+      ],
+      "rect": {
+        "x": 48.16,
+        "y": 24.11,
+        "w": 13.55,
+        "h": 13.51,
+        "w_m": 4.135,
+        "h_m": 4.12
+      }
+    },
+    {
+      "room_id": "3.05",
+      "num": "3.05",
+      "name": "Chambre à coucher",
+      "unit": "A",
+      "area_m2": 13.81,
+      "outdoor": false,
+      "points": [
+        [
+          66.74,
+          27.48
+        ],
+        [
+          81.34,
+          27.48
+        ],
+        [
+          81.34,
+          37.64
+        ],
+        [
+          66.74,
+          37.64
+        ]
+      ],
+      "label_at": [
+        73.93,
+        32.98
+      ],
+      "rect": {
+        "x": 66.74,
+        "y": 27.48,
+        "w": 14.6,
+        "h": 10.16,
+        "w_m": 4.458,
+        "h_m": 3.1
+      }
+    },
+    {
+      "room_id": "3.06",
+      "num": "3.06",
+      "name": "Bain",
+      "unit": "A",
+      "area_m2": 6,
+      "outdoor": false,
+      "points": [
+        [
+          60.04,
+          43.53
+        ],
+        [
+          48.16,
+          43.53
+        ],
+        [
+          48.16,
+          38.11
+        ],
+        [
+          60.04,
+          38.11
+        ]
+      ],
+      "label_at": [
+        56.76,
+        40.83
+      ],
+      "rect": {
+        "x": 48.16,
+        "y": 38.11,
+        "w": 11.88,
+        "h": 5.42,
+        "w_m": 3.628,
+        "h_m": 1.653
+      }
+    },
+    {
+      "room_id": "3.07",
+      "num": "3.07",
+      "name": "Chambre à coucher",
+      "unit": "A",
+      "area_m2": 13.76,
+      "outdoor": false,
+      "points": [
+        [
+          66.74,
+          48.26
+        ],
+        [
+          66.74,
+          38.14
+        ],
+        [
+          81.34,
+          38.14
+        ],
+        [
+          81.34,
+          48.26
+        ]
+      ],
+      "label_at": [
+        73.91,
+        43.62
+      ],
+      "rect": {
+        "x": 66.74,
+        "y": 38.14,
+        "w": 14.6,
+        "h": 10.12,
+        "w_m": 4.458,
+        "h_m": 3.087
+      }
+    },
+    {
+      "room_id": "3.08",
+      "num": "3.08",
+      "name": "Couloir",
+      "unit": "A",
+      "area_m2": 15.87,
+      "outdoor": false,
+      "points": [
+        [
+          61.7,
+          38.11
+        ],
+        [
+          62.2,
+          38.11
+        ],
+        [
+          62.2,
+          28.9
+        ],
+        [
+          66.24,
+          28.9
+        ],
+        [
+          66.24,
+          58.76
+        ],
+        [
+          58.57,
+          58.76
+        ],
+        [
+          58.57,
+          50.93
+        ],
+        [
+          60.01,
+          50.93
+        ],
+        [
+          60.54,
+          50.93
+        ],
+        [
+          60.54,
+          38.11
+        ]
+      ],
+      "label_at": [
+        63.37,
+        55.89
+      ]
+    },
+    {
+      "room_id": "3.09",
+      "num": "3.09",
+      "name": "Bain",
+      "unit": "A",
+      "area_m2": 5.98,
+      "outdoor": false,
+      "points": [
+        [
+          48.16,
+          45.02
+        ],
+        [
+          60.04,
+          45.02
+        ],
+        [
+          60.04,
+          50.43
+        ],
+        [
+          48.16,
+          50.43
+        ]
+      ],
+      "label_at": [
+        55.28,
+        48.21
+      ],
+      "rect": {
+        "x": 48.16,
+        "y": 45.02,
+        "w": 11.88,
+        "h": 5.41,
+        "w_m": 3.628,
+        "h_m": 1.65
+      }
+    },
+    {
+      "room_id": "3.10",
+      "num": "3.10",
+      "name": "Chambre à coucher",
+      "unit": "A",
+      "area_m2": 13.6,
+      "outdoor": false,
+      "points": [
+        [
+          66.74,
+          58.76
+        ],
+        [
+          66.74,
+          48.76
+        ],
+        [
+          81.34,
+          48.76
+        ],
+        [
+          81.34,
+          58.76
+        ]
+      ],
+      "label_at": [
+        73.82,
+        54.18
+      ],
+      "rect": {
+        "x": 66.74,
+        "y": 48.76,
+        "w": 14.6,
+        "h": 10,
+        "w_m": 4.458,
+        "h_m": 3.05
+      }
+    },
+    {
+      "room_id": "3.11",
+      "num": "3.11",
+      "name": "Réduit",
+      "unit": "A",
+      "area_m2": 3.26,
+      "outdoor": false,
+      "points": [
+        [
+          52.61,
+          50.93
+        ],
+        [
+          52.61,
+          58.76
+        ],
+        [
+          48.16,
+          58.76
+        ],
+        [
+          48.16,
+          50.93
+        ]
+      ],
+      "label_at": [
+        50.37,
+        55.57
+      ],
+      "rect": {
+        "x": 48.16,
+        "y": 50.93,
+        "w": 4.46,
+        "h": 7.84,
+        "w_m": 1.36,
+        "h_m": 2.39
+      }
+    },
+    {
+      "room_id": "3.12",
+      "num": "3.12",
+      "name": "Bain",
+      "unit": "A",
+      "area_m2": 3.62,
+      "outdoor": false,
+      "points": [
+        [
+          58.08,
+          50.93
+        ],
+        [
+          58.08,
+          58.76
+        ],
+        [
+          53.11,
+          58.76
+        ],
+        [
+          53.11,
+          50.93
+        ]
+      ],
+      "label_at": [
+        55.81,
+        56.06
+      ],
+      "rect": {
+        "x": 53.11,
+        "y": 50.93,
+        "w": 4.96,
+        "h": 7.84,
+        "w_m": 1.515,
+        "h_m": 2.39
+      }
+    },
+    {
+      "room_id": "3.13",
+      "num": "3.13",
+      "name": "Terrasse",
+      "unit": "A",
+      "area_m2": 53.16,
+      "outdoor": true,
+      "points": [
+        [
+          81.34,
+          60.25
+        ],
+        [
+          82.82,
+          60.25
+        ],
+        [
+          97.67,
+          60.25
+        ],
+        [
+          97.67,
+          80.66
+        ],
+        [
+          69.7,
+          80.66
+        ],
+        [
+          69.7,
+          75.91
+        ],
+        [
+          69.7,
+          75.89
+        ],
+        [
+          69.7,
+          60.25
+        ]
+      ],
+      "label_at": [
+        83.69,
+        70.46
+      ]
+    },
+    {
+      "room_id": "3.14",
+      "num": "3.14",
+      "name": "Terrasse",
+      "unit": "B",
+      "area_m2": 25.53,
+      "outdoor": true,
+      "points": [
+        [
+          21.65,
+          35.84
+        ],
+        [
+          21.65,
+          38.8
+        ],
+        [
+          9.36,
+          38.8
+        ],
+        [
+          9.36,
+          40.25
+        ],
+        [
+          9.36,
+          54.59
+        ],
+        [
+          2.29,
+          54.59
+        ],
+        [
+          2.29,
+          32.63
+        ],
+        [
+          46.67,
+          32.63
+        ],
+        [
+          46.67,
+          34.35
+        ],
+        [
+          21.65,
+          34.35
+        ]
+      ],
+      "label_at": [
+        17.84,
+        35.38
+      ]
+    },
+    {
+      "room_id": "3.15",
+      "num": "3.15",
+      "name": "Cuisine",
+      "unit": "B",
+      "area_m2": 8.86,
+      "outdoor": false,
+      "points": [
+        [
+          36.21,
+          35.84
+        ],
+        [
+          36.21,
+          50.89
+        ],
+        [
+          29.89,
+          50.92
+        ],
+        [
+          29.89,
+          35.84
+        ]
+      ],
+      "label_at": [
+        33.05,
+        39
+      ],
+      "rect": {
+        "x": 29.89,
+        "y": 35.84,
+        "w": 6.32,
+        "h": 15.08,
+        "w_m": 1.93,
+        "h_m": 4.6
+      }
+    },
+    {
+      "room_id": "3.16",
+      "num": "3.16",
+      "name": "Chambre à coucher",
+      "unit": "B",
+      "area_m2": 13.55,
+      "outdoor": false,
+      "points": [
+        [
+          46.67,
+          50.43
+        ],
+        [
+          36.7,
+          50.43
+        ],
+        [
+          36.7,
+          35.84
+        ],
+        [
+          46.67,
+          35.84
+        ]
+      ],
+      "label_at": [
+        41.69,
+        40.83
+      ],
+      "rect": {
+        "x": 36.7,
+        "y": 35.84,
+        "w": 9.98,
+        "h": 14.59,
+        "w_m": 3.045,
+        "h_m": 4.45
+      }
+    },
+    {
+      "room_id": "3.17",
+      "num": "3.17",
+      "name": "Séjour/repas",
+      "unit": "B",
+      "area_m2": 31.11,
+      "outdoor": false,
+      "points": [
+        [
+          29.85,
+          35.84
+        ],
+        [
+          29.85,
+          50.96
+        ],
+        [
+          29.89,
+          50.96
+        ],
+        [
+          36.21,
+          50.93
+        ],
+        [
+          36.42,
+          50.93
+        ],
+        [
+          36.42,
+          54.92
+        ],
+        [
+          34.73,
+          54.92
+        ],
+        [
+          10.84,
+          54.92
+        ],
+        [
+          10.84,
+          40.29
+        ],
+        [
+          21.62,
+          40.29
+        ],
+        [
+          21.65,
+          40.29
+        ],
+        [
+          21.66,
+          40.29
+        ],
+        [
+          23.14,
+          40.29
+        ],
+        [
+          23.14,
+          35.84
+        ]
+      ],
+      "label_at": [
+        22.51,
+        48.71
+      ]
+    },
+    {
+      "room_id": "3.18",
+      "num": "3.18",
+      "name": "Bain",
+      "unit": "B",
+      "area_m2": 4.59,
+      "outdoor": false,
+      "points": [
+        [
+          46.67,
+          59.75
+        ],
+        [
+          41.08,
+          59.75
+        ],
+        [
+          41.08,
+          50.93
+        ],
+        [
+          46.67,
+          50.93
+        ]
+      ],
+      "label_at": [
+        43.88,
+        56.95
+      ],
+      "rect": {
+        "x": 41.08,
+        "y": 50.93,
+        "w": 5.59,
+        "h": 8.82,
+        "w_m": 1.707,
+        "h_m": 2.69
+      }
+    },
+    {
+      "room_id": "3.19",
+      "num": "3.19",
+      "name": "Chambre à coucher",
+      "unit": "B",
+      "area_m2": 16.33,
+      "outdoor": false,
+      "points": [
+        [
+          27.9,
+          65.7
+        ],
+        [
+          10.84,
+          65.7
+        ],
+        [
+          10.84,
+          55.42
+        ],
+        [
+          27.9,
+          55.42
+        ]
+      ],
+      "label_at": [
+        18.12,
+        60.99
+      ],
+      "rect": {
+        "x": 10.84,
+        "y": 55.42,
+        "w": 17.05,
+        "h": 10.29,
+        "w_m": 5.205,
+        "h_m": 3.138
+      }
+    },
+    {
+      "room_id": "3.20",
+      "num": "3.20",
+      "name": "Bain",
+      "unit": "B",
+      "area_m2": 5.6,
+      "outdoor": false,
+      "points": [
+        [
+          34.23,
+          65.7
+        ],
+        [
+          28.39,
+          65.7
+        ],
+        [
+          28.39,
+          55.42
+        ],
+        [
+          34.23,
+          55.42
+        ]
+      ],
+      "label_at": [
+        31.31,
+        62.79
+      ],
+      "rect": {
+        "x": 28.39,
+        "y": 55.42,
+        "w": 5.85,
+        "h": 10.29,
+        "w_m": 1.785,
+        "h_m": 3.138
+      }
+    },
+    {
+      "room_id": "3.21",
+      "num": "3.21",
+      "name": "Couloir",
+      "unit": "B",
+      "area_m2": 10.51,
+      "outdoor": false,
+      "points": [
+        [
+          40.59,
+          50.93
+        ],
+        [
+          40.59,
+          60.25
+        ],
+        [
+          41.08,
+          60.25
+        ],
+        [
+          46.67,
+          60.25
+        ],
+        [
+          46.67,
+          65.7
+        ],
+        [
+          34.73,
+          65.7
+        ],
+        [
+          34.73,
+          55.45
+        ],
+        [
+          34.73,
+          54.96
+        ],
+        [
+          36.7,
+          54.96
+        ],
+        [
+          36.7,
+          54.92
+        ],
+        [
+          36.45,
+          54.92
+        ],
+        [
+          36.45,
+          50.93
+        ],
+        [
+          36.67,
+          50.93
+        ],
+        [
+          36.7,
+          50.93
+        ]
+      ],
+      "label_at": [
+        40.2,
+        63.22
+      ]
+    },
+    {
+      "room_id": "3.22",
+      "num": "3.22",
+      "name": "Terrasse",
+      "unit": "B",
+      "area_m2": 56.97,
+      "outdoor": true,
+      "points": [
+        [
+          46.67,
+          77.37
+        ],
+        [
+          59.22,
+          77.37
+        ],
+        [
+          59.22,
+          97.7
+        ],
+        [
+          34.98,
+          97.7
+        ],
+        [
+          34.98,
+          67.19
+        ],
+        [
+          46.67,
+          67.19
+        ]
+      ],
+      "label_at": [
+        45.23,
+        87.48
+      ]
+    }
+  ],
+  "units": [
+    {
+      "id": "A",
+      "label": "Apartment A"
+    },
+    {
+      "id": "B",
+      "label": "Apartment B"
+    }
+  ],
+  "credit": {
+    "text": "Swiss Dwellings v3.0.0 by Matthias Standfest et al. (Archilyse AG), doi:10.5281/zenodo.7788422, CC BY 4.0. Rendered from the dataset geometry; labels and numbering are synthetic.",
+    "license": "CC BY 4.0",
+    "url": "https://doi.org/10.5281/zenodo.7788422"
+  },
+  "evidence": {
+    "window": [
+      {
+        "id": "win-01",
+        "x": 46.28,
+        "y": 8.84,
+        "w": 2.26,
+        "h": 8.16,
+        "subject": "window",
+        "room_id": "3.02",
+        "unit": "A"
+      },
+      {
+        "id": "win-02",
+        "x": 67.77,
+        "y": 13.01,
+        "w": 15.36,
+        "h": 2.26,
+        "subject": "window",
+        "room_id": "3.02",
+        "unit": "A"
+      },
+      {
+        "id": "win-03",
+        "x": 80.95,
+        "y": 14.69,
+        "w": 2.26,
+        "h": 8.98,
+        "subject": "window",
+        "room_id": "3.02",
+        "unit": "A"
+      },
+      {
+        "id": "win-04",
+        "x": 46.28,
+        "y": 23.94,
+        "w": 2.26,
+        "h": 5.7,
+        "subject": "window",
+        "room_id": "3.04",
+        "unit": "A"
+      },
+      {
+        "id": "win-05",
+        "x": 80.95,
+        "y": 28.64,
+        "w": 2.26,
+        "h": 6.85,
+        "subject": "window",
+        "room_id": "3.05",
+        "unit": "A"
+      },
+      {
+        "id": "win-06",
+        "x": 22.89,
+        "y": 33.96,
+        "w": 7.34,
+        "h": 2.26,
+        "subject": "window",
+        "room_id": "3.17",
+        "unit": "B"
+      },
+      {
+        "id": "win-07",
+        "x": 36.56,
+        "y": 33.96,
+        "w": 5.21,
+        "h": 2.26,
+        "subject": "window",
+        "room_id": "3.16",
+        "unit": "B"
+      },
+      {
+        "id": "win-08",
+        "x": 80.95,
+        "y": 38.04,
+        "w": 2.26,
+        "h": 6.85,
+        "subject": "window",
+        "room_id": "3.07",
+        "unit": "A"
+      },
+      {
+        "id": "win-09",
+        "x": 9.04,
+        "y": 38.42,
+        "w": 12.91,
+        "h": 2.26,
+        "subject": "window",
+        "room_id": "3.17",
+        "unit": "B"
+      },
+      {
+        "id": "win-10",
+        "x": 80.95,
+        "y": 48.69,
+        "w": 2.26,
+        "h": 5.7,
+        "subject": "window",
+        "room_id": "3.10",
+        "unit": "A"
+      },
+      {
+        "id": "win-11",
+        "x": 8.98,
+        "y": 57.25,
+        "w": 2.26,
+        "h": 7.34,
+        "subject": "window",
+        "room_id": "3.19",
+        "unit": "B"
+      },
+      {
+        "id": "win-12",
+        "x": 12.69,
+        "y": 65.32,
+        "w": 7.34,
+        "h": 2.26,
+        "subject": "window",
+        "room_id": "3.19",
+        "unit": "B"
+      }
+    ],
+    "door": [
+      {
+        "id": "door-01",
+        "x": 47.97,
+        "y": 5.7,
+        "w": 18.21,
+        "h": 2,
+        "subject": "door",
+        "room_id": "3.02",
+        "unit": "A"
+      },
+      {
+        "id": "door-02",
+        "x": 65.99,
+        "y": 29.58,
+        "w": 1.02,
+        "h": 3.48,
+        "subject": "door",
+        "room_id": "3.05",
+        "unit": "A"
+      },
+      {
+        "id": "door-03",
+        "x": 61.44,
+        "y": 31.99,
+        "w": 1.02,
+        "h": 3.48,
+        "subject": "door",
+        "room_id": "3.08",
+        "unit": "A"
+      },
+      {
+        "id": "door-04",
+        "x": 48.18,
+        "y": 37.36,
+        "w": 3.14,
+        "h": 1.02,
+        "subject": "door",
+        "room_id": "3.06",
+        "unit": "A"
+      },
+      {
+        "id": "door-05",
+        "x": 65.99,
+        "y": 40.2,
+        "w": 1.02,
+        "h": 3.48,
+        "subject": "door",
+        "room_id": "3.07",
+        "unit": "A"
+      },
+      {
+        "id": "door-06",
+        "x": 9.11,
+        "y": 40.21,
+        "w": 2,
+        "h": 12,
+        "subject": "door",
+        "room_id": "3.17",
+        "unit": "B"
+      },
+      {
+        "id": "door-07",
+        "x": 59.78,
+        "y": 47.11,
+        "w": 1.02,
+        "h": 3.15,
+        "subject": "door",
+        "room_id": "3.09",
+        "unit": "A"
+      },
+      {
+        "id": "door-08",
+        "x": 36.91,
+        "y": 50.16,
+        "w": 3.47,
+        "h": 1.02,
+        "subject": "door",
+        "room_id": "3.21",
+        "unit": "B"
+      },
+      {
+        "id": "door-09",
+        "x": 65.99,
+        "y": 50.81,
+        "w": 1.02,
+        "h": 3.48,
+        "subject": "door",
+        "room_id": "3.10",
+        "unit": "A"
+      },
+      {
+        "id": "door-10",
+        "x": 24.27,
+        "y": 54.66,
+        "w": 3.47,
+        "h": 1.02,
+        "subject": "door",
+        "room_id": "3.19",
+        "unit": "B"
+      },
+      {
+        "id": "door-11",
+        "x": 52.36,
+        "y": 55.31,
+        "w": 1.02,
+        "h": 3.15,
+        "subject": "door",
+        "room_id": "3.12",
+        "unit": "A"
+      },
+      {
+        "id": "door-12",
+        "x": 57.82,
+        "y": 55.57,
+        "w": 1.02,
+        "h": 3.15,
+        "subject": "door",
+        "room_id": "3.08",
+        "unit": "A"
+      },
+      {
+        "id": "door-13",
+        "x": 27.63,
+        "y": 55.58,
+        "w": 1.02,
+        "h": 3.15,
+        "subject": "door",
+        "room_id": "3.19",
+        "unit": "B"
+      },
+      {
+        "id": "door-14",
+        "x": 40.33,
+        "y": 56.45,
+        "w": 1.02,
+        "h": 3.15,
+        "subject": "door",
+        "room_id": "3.21",
+        "unit": "B"
+      },
+      {
+        "id": "door-15",
+        "x": 62.41,
+        "y": 58.51,
+        "w": 3.8,
+        "h": 2,
+        "subject": "door",
+        "room_id": "3.08",
+        "unit": "A",
+        "note": "Double door: two leaves drawn at the same spot, each counted."
+      },
+      {
+        "id": "door-16",
+        "x": 62.41,
+        "y": 58.51,
+        "w": 3.8,
+        "h": 2,
+        "subject": "door",
+        "room_id": "3.08",
+        "unit": "A",
+        "note": "Double door: two leaves drawn at the same spot, each counted."
+      },
+      {
+        "id": "door-17",
+        "x": 70.92,
+        "y": 58.51,
+        "w": 10.35,
+        "h": 2,
+        "subject": "door",
+        "room_id": "3.10",
+        "unit": "A"
+      },
+      {
+        "id": "door-18",
+        "x": 46.41,
+        "y": 61.72,
+        "w": 2,
+        "h": 3.8,
+        "subject": "door",
+        "room_id": "3.21",
+        "unit": "B",
+        "note": "Double door: two leaves drawn at the same spot, each counted."
+      },
+      {
+        "id": "door-19",
+        "x": 46.41,
+        "y": 61.72,
+        "w": 2,
+        "h": 3.8,
+        "subject": "door",
+        "room_id": "3.21",
+        "unit": "B",
+        "note": "Double door: two leaves drawn at the same spot, each counted."
+      },
+      {
+        "id": "door-20",
+        "x": 36.62,
+        "y": 65.45,
+        "w": 8.71,
+        "h": 2,
+        "subject": "door",
+        "room_id": "3.21",
+        "unit": "B"
+      },
+      {
+        "id": "door-21",
+        "x": 54.64,
+        "y": 66.15,
+        "w": 1.02,
+        "h": 3.8,
+        "subject": "door",
+        "room_id": "3.21",
+        "unit": "B"
+      },
+      {
+        "id": "door-22",
+        "x": 60.69,
+        "y": 66.34,
+        "w": 1.02,
+        "h": 3.8,
+        "subject": "door",
+        "room_id": "3.08",
+        "unit": "A"
+      }
+    ],
+    "washbasin": [
+      {
+        "id": "basin-01",
+        "x": 48.57,
+        "y": 41.8,
+        "w": 3.93,
+        "h": 1.97,
+        "subject": "washbasin",
+        "room_id": "3.06",
+        "unit": "A"
+      },
+      {
+        "id": "basin-02",
+        "x": 53.94,
+        "y": 44.74,
+        "w": 5.57,
+        "h": 1.97,
+        "subject": "washbasin",
+        "room_id": "3.09",
+        "unit": "A"
+      },
+      {
+        "id": "basin-03",
+        "x": 55.64,
+        "y": 50.67,
+        "w": 2.62,
+        "h": 2.3,
+        "subject": "washbasin",
+        "room_id": "3.12",
+        "unit": "A"
+      },
+      {
+        "id": "basin-04",
+        "x": 44.68,
+        "y": 55.69,
+        "w": 1.97,
+        "h": 3.93,
+        "subject": "washbasin",
+        "room_id": "3.18",
+        "unit": "B"
+      },
+      {
+        "id": "basin-05",
+        "x": 32.07,
+        "y": 55.7,
+        "w": 1.97,
+        "h": 3.93,
+        "subject": "washbasin",
+        "room_id": "3.20",
+        "unit": "B"
+      }
+    ]
+  },
+  "gold": [
+    {
+      "dataset_qid": "questions.jsonl:103409",
+      "dataset_qid_fr": "questions.jsonl:103410",
+      "question_en": "How many apartments are on this floor plan",
+      "answer": {
+        "kind": "count",
+        "subject": "apartment"
+      },
+      "scope": {
+        "kind": "floor"
+      },
+      "value": 2,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103411",
+      "dataset_qid_fr": "questions.jsonl:103412",
+      "question_en": "How many rooms are labelled Chambre à coucher",
+      "answer": {
+        "kind": "count",
+        "subject": "room"
+      },
+      "scope": {
+        "kind": "label",
+        "label": "Chambre à coucher"
+      },
+      "value": 6,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103413",
+      "dataset_qid_fr": "questions.jsonl:103414",
+      "question_en": "How many rooms are labelled Séjour/repas",
+      "answer": {
+        "kind": "count",
+        "subject": "room"
+      },
+      "scope": {
+        "kind": "label",
+        "label": "Séjour/repas"
+      },
+      "value": 2,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103415",
+      "dataset_qid_fr": "questions.jsonl:103416",
+      "question_en": "How many rooms are labelled Cuisine",
+      "answer": {
+        "kind": "count",
+        "subject": "room"
+      },
+      "scope": {
+        "kind": "label",
+        "label": "Cuisine"
+      },
+      "value": 2,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103417",
+      "dataset_qid_fr": "questions.jsonl:103418",
+      "question_en": "How many rooms are labelled Bain",
+      "answer": {
+        "kind": "count",
+        "subject": "room"
+      },
+      "scope": {
+        "kind": "label",
+        "label": "Bain"
+      },
+      "value": 5,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103419",
+      "dataset_qid_fr": "questions.jsonl:103420",
+      "question_en": "How many rooms are labelled Réduit",
+      "answer": {
+        "kind": "count",
+        "subject": "room"
+      },
+      "scope": {
+        "kind": "label",
+        "label": "Réduit"
+      },
+      "value": 1,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103421",
+      "dataset_qid_fr": "questions.jsonl:103422",
+      "question_en": "How many rooms are labelled Couloir",
+      "answer": {
+        "kind": "count",
+        "subject": "room"
+      },
+      "scope": {
+        "kind": "label",
+        "label": "Couloir"
+      },
+      "value": 2,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103423",
+      "dataset_qid_fr": "questions.jsonl:103424",
+      "question_en": "How many doors are drawn on this floor plan",
+      "answer": {
+        "kind": "count",
+        "subject": "door"
+      },
+      "scope": {
+        "kind": "floor"
+      },
+      "value": 22,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103425",
+      "dataset_qid_fr": "questions.jsonl:103426",
+      "question_en": "How many windows are drawn on this floor plan",
+      "answer": {
+        "kind": "count",
+        "subject": "window"
+      },
+      "scope": {
+        "kind": "floor"
+      },
+      "value": 12,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103427",
+      "dataset_qid_fr": "questions.jsonl:103428",
+      "question_en": "How many WCs are drawn on this floor plan",
+      "answer": {
+        "kind": "count",
+        "subject": "wc"
+      },
+      "scope": {
+        "kind": "floor"
+      },
+      "value": 5,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103429",
+      "dataset_qid_fr": "questions.jsonl:103430",
+      "question_en": "How many washbasins are drawn on this floor plan",
+      "answer": {
+        "kind": "count",
+        "subject": "washbasin"
+      },
+      "scope": {
+        "kind": "floor"
+      },
+      "value": 5,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103431",
+      "dataset_qid_fr": "questions.jsonl:103432",
+      "question_en": "How many bathtubs are drawn on this floor plan",
+      "answer": {
+        "kind": "count",
+        "subject": "bathtub"
+      },
+      "scope": {
+        "kind": "floor"
+      },
+      "value": 2,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103433",
+      "dataset_qid_fr": "questions.jsonl:103434",
+      "question_en": "How many showers are drawn on this floor plan",
+      "answer": {
+        "kind": "count",
+        "subject": "shower"
+      },
+      "scope": {
+        "kind": "floor"
+      },
+      "value": 2,
+      "tolerance": "exact"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103435",
+      "dataset_qid_fr": "questions.jsonl:103436",
+      "question_en": "What is the net floor area of room 3.04",
+      "answer": {
+        "kind": "area"
+      },
+      "scope": {
+        "kind": "room",
+        "room_id": "3.04"
+      },
+      "value": 17.04,
+      "tolerance": "2pct"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103437",
+      "dataset_qid_fr": "questions.jsonl:103438",
+      "question_en": "What is the net floor area of room 3.17",
+      "answer": {
+        "kind": "area"
+      },
+      "scope": {
+        "kind": "room",
+        "room_id": "3.17"
+      },
+      "value": 31.11,
+      "tolerance": "2pct"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103439",
+      "dataset_qid_fr": "questions.jsonl:103440",
+      "question_en": "What is the net floor area of apartment B",
+      "answer": {
+        "kind": "area"
+      },
+      "scope": {
+        "kind": "unit",
+        "unit": "B"
+      },
+      "value": 90.54,
+      "tolerance": "2pct"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103441",
+      "dataset_qid_fr": "questions.jsonl:103442",
+      "question_en": "What is the net floor area of apartment A",
+      "answer": {
+        "kind": "area"
+      },
+      "scope": {
+        "kind": "unit",
+        "unit": "A"
+      },
+      "value": 139.34,
+      "tolerance": "2pct"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103443",
+      "dataset_qid_fr": "questions.jsonl:103444",
+      "question_en": "What is the total area of rooms labelled Chambre à coucher",
+      "answer": {
+        "kind": "area"
+      },
+      "scope": {
+        "kind": "label",
+        "label": "Chambre à coucher"
+      },
+      "value": 88.09,
+      "tolerance": "2pct"
+    },
+    {
+      "dataset_qid": "questions.jsonl:103445",
+      "dataset_qid_fr": "questions.jsonl:103446",
+      "question_en": "What is the net floor area of all numbered indoor rooms",
+      "answer": {
+        "kind": "area"
+      },
+      "scope": {
+        "kind": "floor"
+      },
+      "value": 258,
+      "tolerance": "2pct"
+    }
+  ]
+}

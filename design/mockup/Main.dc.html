@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blueprint Proof: agent workspace</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#EEF1F5}
+a{color:#1D4ED8}a:hover{color:#1E3A8A}
+.bp button{font:inherit;color:inherit;cursor:pointer}
+.bp button:focus-visible,.bp input:focus-visible,.bp textarea:focus-visible{outline:2px solid #1D4ED8;outline-offset:2px}
+@media (hover:hover) and (pointer:fine){.bp .chip:hover{background:#E8EEFB;border-color:#B9C8EE}.bp .row:hover{background:#F3F6FC}.bp .ghost:hover{background:#EEF1F5}.bp .mi:hover{background:#F1F4F9}}
+.bp .mi:focus-visible{background:#F1F4F9}
+.bp .mark{transition:background-color .16s ease,border-color .16s ease,box-shadow .16s ease;animation:rise .18s cubic-bezier(.23,1,.32,1) both}
+.bp .mark::before{content:"";position:absolute;inset:-14px}
+@keyframes rise{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
+.bp .hint{animation:pop .2s cubic-bezier(.2,.8,.2,1)}
+.bp .room{transition:background-color .16s ease}
+.bp .menu{animation:pop .14s cubic-bezier(.2,.8,.2,1);transform-origin:top left}
+.bp .sheet{animation:slide .2s cubic-bezier(.2,.8,.2,1)}
+.bp .rec{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+@keyframes slide{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.35)}50%{box-shadow:0 0 0 8px rgba(220,38,38,0)}}
+.bp button:not(.room):not(.mark){transition:transform .1s ease-out,background-color .12s ease}
+.bp button:not(.room):not(.mark):active{transform:scale(.97)}
+.bp .rowwrap{flex-wrap:nowrap;overflow:hidden}
+.bp.root{height:100vh}
+.bp .plan{touch-action:none;-webkit-touch-callout:none;user-select:none}
+@media (max-width:900px){.bp .rowwrap{flex-wrap:wrap;overflow:visible}.bp.root{height:auto}}
+@media (prefers-reduced-motion:reduce){.bp .mark,.bp .room,.bp .menu,.bp .sheet,.bp .rec,.bp button{transition:none !important;animation:none !important;transform:none !important}}
+@media (prefers-reduced-transparency:reduce){.bp .menu,.bp .sheet{box-shadow:none}}
+</style>
+</helmet>
+<div class="bp root" style="min-height: 100vh; display: flex; flex-direction: column; font-family: Inter, system-ui, sans-serif; color: #0F172A; background: #EEF1F5; font-size: 14px; line-height: 1.45">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 10px 18px; background: #FFFFFF; border-bottom: 1px solid #E2E6EC">
+<div style="display: flex; align-items: center; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="7" fill="#0F172A"></rect><path d="M8 19V9h6.5a3 3 0 0 1 0 6H8m6.5 0H15a2 2 0 0 1 0 4H8" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linejoin="round"></path><circle cx="20.5" cy="19.5" r="2.2" fill="{{accent}}"></circle></svg>
+<span style="font-weight: 700; font-size: 15px; letter-spacing: -0.01em">Blueprint Proof</span>
+</div>
+<div style="width: 1px; height: 24px; background: #E2E6EC"></div>
+<div style="display: flex; flex-direction: column; min-width: 0">
+<span style="font-weight: 600">Plan 3e étage</span>
+<span style="font-size: 12px; color: #5B6474">Site 11420 · 1:200 · PDF, DXF, PNG of the same sheet</span>
+</div>
+<div style="flex-grow: 1"></div>
+<button class="ghost" type="button" onClick="{{openPlugins}}" style="display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid #D5DBE4; background: #FFFFFF; font-weight: 600">
+<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2v3M10 2v3M4.5 5h7v3a3.5 3.5 0 0 1-7 0zM8 11.5V14" fill="none" stroke="#0F172A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>Plugins
+</button>
+<button class="ghost" type="button" onClick="{{openTrace}}" style="display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid #D5DBE4; background: #FFFFFF">
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600">{{sessionCalls}}</span><span style="font-size: 13px; color: #334155">{{sessionCost}}</span>
+</button>
+</header>
+
+<div class="rowwrap" style="display: flex; flex-grow: 1; min-height: 0">
+
+<main style="flex: 999 1 560px; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px 10px; gap: 10px; position: relative">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+<div style="display: flex; border: 1px solid #D5DBE4; border-radius: 12px; background: #FFFFFF; padding: 3px; gap: 2px" role="group" aria-label="Tools">
+<sc-for list="{{tools}}" as="tl" hint-placeholder-count="3">
+<button type="button" onClick="{{tl.pick}}" aria-pressed="{{tl.on}}" title="{{tl.hint}}" style="{{tl.style}}"><span style="display: inline-flex">{{tl.icon}}</span>{{tl.label}}</button>
+</sc-for>
+</div>
+<button type="button" onClick="{{toggleCompare}}" aria-pressed="{{compare}}" style="{{compareBtnStyle}}">
+<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3" width="8" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"></rect><rect x="6.5" y="3" width="8" height="10" rx="1.5" fill="currentColor" fill-opacity=".18" stroke="currentColor" stroke-width="1.4"></rect></svg>Compare with original
+</button>
+<sc-if value="{{compare}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; border: 1px solid #D5DBE4; border-radius: 12px; background: #FFFFFF; padding: 3px; gap: 2px" role="group" aria-label="Compare mode">
+<button type="button" onClick="{{modeSwipe}}" aria-pressed="{{isSwipe}}" style="{{swipeBtnStyle}}">Swipe</button>
+<button type="button" onClick="{{modeBlend}}" aria-pressed="{{isBlend}}" style="{{blendBtnStyle}}">Blend</button>
+</div>
+<sc-if value="{{isBlend}}" hint-placeholder-val="{{false}}">
+<label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #334155; background: #FFFFFF; border: 1px solid #D5DBE4; border-radius: 12px; padding: 0 10px; min-height: 44px">Original
+<input type="range" min="0" max="100" value="{{opacity}}" onChange="{{setOpacity}}" aria-label="Opacity of the original drawing" style="width: 120px; accent-color: {{accent}}">
+<span style="font-family: 'JetBrains Mono', monospace; width: 36px">{{opacity}}%</span></label>
+</sc-if>
+</sc-if>
+<div style="flex-grow: 1"></div>
+<div style="display: flex; align-items: center; border: 1px solid #D5DBE4; border-radius: 12px; background: #FFFFFF; overflow: hidden" role="group" aria-label="Zoom">
+<button class="ghost" type="button" onClick="{{zoomOut}}" aria-label="Zoom out" style="width: 40px; height: 40px; border: 0; background: transparent; font-size: 18px">−</button>
+<span style="min-width: 52px; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 13px">{{zoomLabel}}</span>
+<button class="ghost" type="button" onClick="{{zoomIn}}" aria-label="Zoom in" style="width: 40px; height: 40px; border: 0; background: transparent; font-size: 18px">+</button>
+</div>
+</div>
+
+<div style="flex-grow: 1; min-height: 360px; overflow: auto; border-radius: 14px; background: #FFFFFF; border: 1px solid #E2E6EC; position: relative">
+<div class="plan" onContextMenu="{{openMenu}}" onClick="{{closeMenu}}" onPointerDown="{{pressStart}}" onPointerUp="{{pressEnd}}" onPointerCancel="{{pressEnd}}" style="position: relative; margin: 0 auto; aspect-ratio: 1221 / 1220; width: {{planWidth}}; max-width: {{planMax}}">
+<img src="/_blob/6978bc0401e34fd219b1ba0b2cb66d9d" alt="Rebuilt floor plan, 3rd floor, apartments A and B" style="position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; pointer-events: none" draggable="false">
+<sc-if value="{{compare}}" hint-placeholder-val="{{false}}">
+<img src="/_blob/6226dad725f42c0108cb77d2024a3379" alt="Original drawing from the dataset, overlaid" style="{{origStyle}}" draggable="false">
+<sc-if value="{{isSwipe}}" hint-placeholder-val="{{false}}">
+<div role="slider" aria-label="Drag to compare original and rebuilt drawing" aria-valuenow="{{split}}" tabindex="0" onPointerDown="{{splitDown}}" onPointerMove="{{splitMove}}" onPointerUp="{{splitUp}}" onPointerCancel="{{splitUp}}" style="{{splitStyle}}">
+<span style="position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); background: #0F172A"></span>
+<span style="position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 44px; height: 44px; border-radius: 22px; background: #0F172A; color: #FFFFFF; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(15,23,42,0.3)"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5L2 10l5 5M13 5l5 5-5 5" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+<span style="position: absolute; right: calc(50% + 30px); top: 12px; padding: 2px 8px; border-radius: 6px; background: #0F172A; color: #FFFFFF; font-size: 12px; font-weight: 600; white-space: nowrap">Original</span>
+<span style="position: absolute; left: calc(50% + 30px); top: 12px; padding: 2px 8px; border-radius: 6px; background: #FFFFFF; border: 1px solid #0F172A; font-size: 12px; font-weight: 600; white-space: nowrap">Rebuilt from CAD</span>
+</div>
+</sc-if>
+</sc-if>
+
+<sc-if value="{{showHint}}" hint-placeholder-val="{{false}}">
+<div class="hint" style="position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 7; padding: 8px 14px; border-radius: 999px; background: #0F172A; color: #FFFFFF; font-size: 13px; font-weight: 500; white-space: nowrap; pointer-events: none">Right-click or long-press a room for actions</div>
+</sc-if>
+
+<sc-for list="{{marks}}" as="mk" hint-placeholder-count="0">
+<div style="{{mk.style}}"><span style="position: absolute; left: -2px; top: -26px; padding: 2px 8px; border-radius: 6px; background: #0F766E; color: #FFFFFF; font-size: 12px; font-weight: 600; white-space: nowrap">{{mk.label}}</span></div>
+</sc-for>
+
+<sc-if value="{{isArea}}" hint-placeholder-val="{{false}}">
+<sc-for list="{{rooms}}" as="r" hint-placeholder-count="11">
+<button class="room" type="button" onClick="{{r.toggle}}" onMouseEnter="{{r.enter}}" onMouseLeave="{{clearHover}}" aria-label="{{r.aria}}" aria-pressed="{{r.included}}" style="{{r.style}}"></button>
+</sc-for>
+</sc-if>
+
+<sc-if value="{{isCount}}" hint-placeholder-val="{{true}}">
+<sc-for list="{{items}}" as="it" hint-placeholder-count="12">
+<button class="mark" type="button" onClick="{{it.tapBox}}" onMouseEnter="{{it.enter}}" onMouseLeave="{{clearHover}}" aria-label="{{it.aria}}" aria-pressed="{{it.kept}}" style="{{it.boxStyle}}"><span style="{{it.badgeStyle}}">{{it.n}}</span></button>
+</sc-for>
+</sc-if>
+
+<sc-if value="{{hasEditRoom}}" hint-placeholder-val="{{false}}">
+<div style="{{edit.boxStyle}}">
+<span style="{{edit.topStyle}}">{{edit.wText}} m</span>
+<span style="{{edit.sideStyle}}">{{edit.hText}} m</span>
+<div role="slider" aria-label="Drag to change room depth" aria-valuenow="{{edit.hText}}" tabindex="0" onPointerDown="{{edgeDown}}" onPointerMove="{{edgeMove}}" onPointerUp="{{edgeUp}}" onPointerCancel="{{edgeUp}}" style="position: absolute; left: 50%; bottom: -14px; transform: translateX(-50%); width: 56px; height: 28px; display: flex; align-items: center; justify-content: center; cursor: ns-resize; pointer-events: auto; touch-action: none"><span style="width: 40px; height: 8px; border-radius: 4px; background: #0F766E; box-shadow: 0 0 0 3px #FFFFFF"></span></div>
+</div>
+</sc-if>
+
+<sc-if value="{{markMode}}" hint-placeholder-val="{{false}}">
+<div onPointerDown="{{dragStart}}" onPointerMove="{{dragMove}}" onPointerUp="{{dragEnd}}" onPointerCancel="{{dragEnd}}" style="position: absolute; inset: 0; touch-action: none; cursor: crosshair; z-index: 6; background: rgba(15,118,110,0.04)">
+<sc-if value="{{hasDraft}}" hint-placeholder-val="{{false}}"><div style="{{draftStyle}}"></div></sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{menuOpen}}" hint-placeholder-val="{{false}}">
+<div class="menu" role="menu" aria-label="Plan actions" style="{{menuStyle}}">
+<div style="padding: 8px 12px 6px; font-size: 12px; color: #5B6474; border-bottom: 1px solid #EEF1F5">{{menuTitle}}</div>
+<sc-for list="{{menuItems}}" as="m" hint-placeholder-count="6">
+<sc-if value="{{m.sep}}" hint-placeholder-val="{{false}}"><div role="separator" style="height: 1px; margin: 4px 0; background: #EEF1F5"></div></sc-if>
+<button class="mi" type="button" role="menuitem" onClick="{{m.run}}" style="width: 100%; display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 14px; border: 0; background: transparent; text-align: left; font-size: 14px">
+<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" style="flex-shrink: 0"><path d="{{m.icon}}" fill="none" stroke="#475569" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<span style="flex-grow: 1">{{m.label}}</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</div>
+
+<sc-if value="{{hasEditRoom}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; left: 32px; bottom: 44px; z-index: 8; width: 320px; max-width: calc(100% - 64px); background: #FFFFFF; border: 1px solid #D5DBE4; border-radius: 14px; box-shadow: 0 12px 32px rgba(15,23,42,0.16); padding: 14px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+<div style="display: flex; flex-direction: column"><strong>{{edit.title}}</strong><span style="font-size: 12px; color: #5B6474">What-if edit · the drawing stays unchanged</span></div>
+<button class="ghost" type="button" onClick="{{closeEdit}}" aria-label="Close editor" style="width: 44px; height: 44px; border: 0; border-radius: 9px; background: transparent; font-size: 18px">×</button>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+<label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #475569">Wall length (m)<input type="text" inputmode="decimal" value="{{edit.w}}" onChange="{{setEditW}}" style="height: 44px; padding: 0 10px; border-radius: 10px; border: 1px solid #CBD3DF; font: inherit; font-family: 'JetBrains Mono', monospace"></label>
+<label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #475569">Room depth (m)<input type="text" inputmode="decimal" value="{{edit.h}}" onChange="{{setEditH}}" style="height: 44px; padding: 0 10px; border-radius: 10px; border: 1px solid #CBD3DF; font: inherit; font-family: 'JetBrains Mono', monospace"></label>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; padding: 10px 12px; border-radius: 10px; background: #F8FAFC">
+<span style="font-size: 13px; color: #334155">Area</span>
+<span style="font-family: 'JetBrains Mono', monospace"><span style="color: #5B6474; text-decoration: {{edit.oldStrike}}">{{edit.orig}}</span> <strong>{{edit.newArea}} m²</strong></span>
+</div>
+<button class="press" type="button" onClick="{{askEdit}}" style="min-height: 44px; border-radius: 11px; border: 0; background: #0F172A; color: #FFFFFF; font-weight: 600">Ask the agent with these sizes</button>
+</div>
+</sc-if>
+
+<sc-if value="{{sheetPlugins}}" hint-placeholder-val="{{false}}">
+<section class="sheet" aria-label="Plugins" style="position: absolute; left: 16px; top: 62px; bottom: 32px; z-index: 9; width: min(640px, calc(100% - 32px)); background: #FFFFFF; border: 1px solid #D5DBE4; border-radius: 16px; box-shadow: 0 16px 40px rgba(15,23,42,0.18); display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #EEF1F5">
+<div style="flex-grow: 1; display: flex; flex-direction: column"><strong style="font-size: 16px">Use it where you already work</strong><span style="font-size: 12px; color: #5B6474">Same answers and evidence, wherever the question comes from</span></div>
+<button class="ghost" type="button" onClick="{{closeSheet}}" aria-label="Close plugins" style="width: 40px; height: 40px; border: 0; border-radius: 10px; background: transparent; font-size: 20px">×</button>
+</div>
+<div style="flex-grow: 1; overflow: auto; padding: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<sc-for list="{{plugins}}" as="p" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid #E2E6EC; border-radius: 14px; min-width: 0">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px"><strong>{{p.name}}</strong><span style="{{p.stateStyle}}">{{p.state}}</span></div>
+<span style="font-size: 13px; color: #334155">{{p.desc}}</span>
+<code style="display: block; padding: 8px 10px; border-radius: 9px; background: #0F172A; color: #E2E8F0; font-family: 'JetBrains Mono', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all">{{p.code}}</code>
+</div>
+</sc-for>
+<div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px dashed #CBD3DF; border-radius: 14px">
+<strong>Prompt blocks</strong>
+<span style="font-size: 13px; color: #334155">Pre-built pieces the agent turns rambling into. Add your own, like a company room-code list.</span>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{blockLib}}" as="b" hint-placeholder-count="8"><span style="{{b.style}}">{{b.label}}</span></sc-for>
+</div>
+</div>
+</div>
+</section>
+</sc-if>
+
+<p style="margin: 0; font-size: 12px; color: #5B6474">Drawing: Swiss Dwellings v3.0.0, Archilyse AG (doi:10.5281/zenodo.7788422), CC BY 4.0. Rendered from the dataset geometry; labels and numbering are synthetic.</p>
+</main>
+
+<aside style="flex: 0 1 420px; max-width: 100%; min-width: 340px; min-height: 0; overflow: hidden; background: #FFFFFF; border-left: 1px solid #E2E6EC; display: flex; flex-direction: column; position: relative">
+<sc-if value="{{sheetTrace}}" hint-placeholder-val="{{false}}">
+<section class="sheet" aria-label="Reasoning tree" style="position: absolute; inset: 0; z-index: 9; background: #FFFFFF; display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #EEF1F5">
+<button class="ghost" type="button" onClick="{{closeSheet}}" style="display: inline-flex; align-items: center; gap: 4px; min-height: 44px; padding: 0 10px 0 6px; border: 0; border-radius: 10px; background: transparent; font-weight: 600"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M11 4L6 9l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>Chat</button>
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column"><strong style="font-size: 16px">Reasoning tree</strong><span style="font-size: 12px; color: #5B6474; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{traceQ}}</span></div>
+</div>
+<div style="flex-grow: 1; overflow: auto; padding: 14px 14px 8px">
+<sc-for list="{{trace}}" as="n" hint-placeholder-count="8">
+<div style="{{n.wrap}}">
+<div onMouseEnter="{{n.enter}}" onMouseLeave="{{clearHover}}" style="{{n.card}}">
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+<span style="{{n.dot}}"></span>
+<strong style="font-size: 13px">{{n.title}}</strong>
+<span style="font-size: 12px; color: #475569; padding: 1px 7px; border-radius: 999px; background: #EEF1F5">{{n.tag}}</span>
+<span style="flex-grow: 1"></span>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: {{n.confColor}}">{{n.conf}}</span>
+</div>
+<div style="font-size: 13px; color: #334155; margin-top: 4px">{{n.body}}</div>
+</div>
+</div>
+</sc-for>
+</div>
+<div style="padding: 10px 14px; border-top: 1px solid #EEF1F5; font-size: 12px; color: #475569; background: #F8FAFC">The plan stays visible: point at a step to see what it used. Vision-check values are samples until the Gemini Decisions API is wired in; geometry steps are exact.</div>
+</section>
+</sc-if>
+<div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #EEF1F5">
+<div style="width: 30px; height: 30px; border-radius: 10px; background: {{accent}}; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l1.6 4.2 4.4.3-3.4 2.8 1.1 4.3L8 10.7l-3.7 2.4 1.1-4.3L2 6l4.4-.3z" fill="#FFFFFF"></path></svg></div>
+<div style="flex-grow: 1; display: flex; flex-direction: column"><strong>Drawing agent</strong><span style="font-size: 12px; color: #5B6474">Answers from the drawing, shows the proof, says when it can’t</span></div>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; overflow: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px">
+<sc-for list="{{turns}}" as="t" hint-placeholder-count="2">
+<sc-if value="{{t.isUser}}" hint-placeholder-val="{{true}}">
+<div style="align-self: flex-end; max-width: 88%; display: flex; flex-direction: column; align-items: flex-end; gap: 4px">
+<div style="padding: 10px 14px; border-radius: 16px 16px 4px 16px; background: #0F172A; color: #FFFFFF">{{t.text}}</div>
+<sc-if value="{{t.hasScope}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #0F766E; font-weight: 600">{{t.scopeText}}</span></sc-if>
+<sc-if value="{{t.canTranslate}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #5B6474">
+<span>{{t.langName}} detected</span>
+<button class="ghost" type="button" onClick="{{t.toggleTr}}" style="min-height: 36px; padding: 0 10px; border: 1px solid #E2E6EC; border-radius: 9px; background: #FFFFFF; font-size: 12px">{{t.trLabel}}</button>
+</div>
+</sc-if>
+<sc-if value="{{t.showTr}}" hint-placeholder-val="{{false}}"><div style="font-size: 12px; color: #334155; background: #F1F5F9; padding: 6px 10px; border-radius: 10px">Understood as: “{{t.trText}}”</div></sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{t.isAgent}}" hint-placeholder-val="{{true}}">
+<div style="{{t.cardStyle}}">
+<sc-if value="{{t.isAbstain}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 6px"><strong style="font-size: 17px">Not on this drawing</strong><span style="color: #334155">{{t.why}}</span></div>
+</sc-if>
+<sc-if value="{{t.isNum}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap"><span style="font-size: 44px; line-height: 1; font-weight: 700; letter-spacing: -0.03em; font-variant-numeric: tabular-nums">{{t.value}}</span><span style="font-size: 18px; font-weight: 600">{{t.label}}</span></div>
+<div style="font-size: 13px; color: #334155">{{t.sentence}}</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<span style="padding: 3px 9px; border-radius: 999px; background: #E7F5EE; color: #14532D; font-size: 12px; font-weight: 600">Exact · CAD geometry</span>
+<span style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: #F1F5F9; color: #334155; font-size: 12px; font-weight: 600"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="none" stroke="#334155" stroke-width="1.3"></circle><circle cx="6" cy="6" r="1.6" fill="#334155"></circle></svg>{{t.checkText}}</span>
+<sc-if value="{{t.hasGold}}" hint-placeholder-val="{{true}}"><span style="{{t.goldStyle}}">{{t.goldText}}</span></sc-if>
+</div>
+<sc-if value="{{t.hasRejected}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: #FFF7ED; border: 1px solid #FED7AA; color: #7C2D12; font-size: 13px"><span style="flex-grow: 1">{{t.rejectedText}}</span><button class="ghost" type="button" onClick="{{resetAll}}" style="min-height: 40px; padding: 0 12px; border-radius: 9px; border: 1px solid #FDBA74; background: #FFFFFF; font-weight: 600">Undo</button></div>
+</sc-if>
+<sc-if value="{{t.showList}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 2px; border-top: 1px solid #EEF1F5; padding-top: 6px">
+<sc-for list="{{t.rows}}" as="it" hint-placeholder-count="5">
+<div onMouseEnter="{{it.enter}}" onMouseLeave="{{clearHover}}" style="{{it.rowStyle}}">
+<button class="row" type="button" onClick="{{it.locate}}" aria-label="{{it.locateAria}}" style="flex-grow: 1; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 6px; border: 0; border-radius: 10px; background: transparent; text-align: left">
+<span style="{{it.numStyle}}">{{it.n}}</span>
+<span style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-weight: 600; text-decoration: {{it.strike}}">{{it.title}}</span><span style="font-size: 12px; color: #5B6474">{{it.room}}</span></span>
+<span style="font-size: 12px; font-weight: 600; color: {{it.stateColor}}">{{it.stateText}}</span>
+</button>
+<button class="ghost" type="button" onClick="{{it.toggle}}" aria-label="{{it.rejectAria}}" title="{{it.rejectAria}}" style="flex-shrink: 0; width: 40px; height: 40px; border: 1px solid #E2E6EC; border-radius: 10px; background: #FFFFFF; display: inline-flex; align-items: center; justify-content: center; color: #475569"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="{{it.rejectIcon}}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+</div>
+</sc-for>
+</div>
+</sc-if>
+</sc-if>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+<sc-if value="{{t.notActive}}" hint-placeholder-val="{{false}}"><button class="ghost" type="button" onClick="{{t.activate}}" style="min-height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid #D5DBE4; background: #FFFFFF; font-size: 13px; font-weight: 600">Show on plan</button></sc-if>
+<sc-if value="{{t.hasList}}" hint-placeholder-val="{{true}}"><button class="ghost" type="button" onClick="{{t.toggleList}}" style="min-height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid #D5DBE4; background: #FFFFFF; font-size: 13px">{{t.listLabel}}</button></sc-if>
+<button class="ghost" type="button" onClick="{{t.openTrace}}" style="min-height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid #D5DBE4; background: #FFFFFF; font-size: 13px">Reasoning tree</button>
+<span style="flex-grow: 1"></span>
+<sc-if value="{{t.noFb}}" hint-placeholder-val="{{true}}">
+<button class="ghost" type="button" onClick="{{t.fbGood}}" aria-label="This answer is right" title="This answer is right" style="{{t.fbGoodStyle}}"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.5 9.5l3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+<button class="ghost" type="button" onClick="{{t.fbBad}}" aria-label="Something is wrong" title="Something is wrong" style="{{t.fbGoodStyle}}"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 3v7M9 14v.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></button>
+</sc-if>
+</div>
+<sc-if value="{{t.hasFb}}" hint-placeholder-val="{{false}}"><div style="font-size: 12px; color: #334155">{{t.fbText}}</div></sc-if>
+<div style="font-size: 12px; color: #5B6474; font-family: 'JetBrains Mono', monospace; border-top: 1px dashed #E2E6EC; padding-top: 6px">{{t.footer}}</div>
+</div>
+</sc-if>
+</sc-for>
+</div>
+
+<div style="border-top: 1px solid #E2E6EC; padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; background: #FBFCFD">
+<sc-if value="{{voice}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 14px; background: #FFFFFF; border: 1px solid #D5DBE4">
+<div style="display: flex; align-items: center; gap: 8px"><span class="rec" style="width: 10px; height: 10px; border-radius: 5px; background: #DC2626"></span><strong style="font-size: 13px">Heard you · Finnish detected</strong><span style="flex-grow: 1"></span><button class="ghost" type="button" onClick="{{closeVoice}}" aria-label="Discard" style="width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; font-size: 18px">×</button></div>
+<div style="font-size: 13px; color: #334155; font-style: italic">“{{voiceText}}”</div>
+<div style="font-size: 12px; font-weight: 600; color: #1E3A8A">Gemini built 2 questions from this · check them before asking</div>
+<sc-for list="{{voiceQs}}" as="vq" hint-placeholder-count="2">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+<sc-for list="{{vq.blocks}}" as="b" hint-placeholder-count="3"><span style="{{b.style}}">{{b.label}}</span></sc-for>
+</div>
+</sc-for>
+<div style="display: flex; gap: 8px">
+<button class="press" type="button" onClick="{{runVoice}}" style="flex-grow: 1; min-height: 44px; border-radius: 11px; border: 0; background: #0F172A; color: #FFFFFF; font-weight: 600">Ask both</button>
+<button class="ghost" type="button" onClick="{{closeVoice}}" style="min-height: 44px; padding: 0 14px; border-radius: 11px; border: 1px solid #D5DBE4; background: #FFFFFF; font-weight: 600">Change blocks</button>
+</div>
+</div>
+</sc-if>
+<div style="display: flex; flex-wrap: wrap; gap: 6px" aria-label="Prompt blocks">
+<sc-for list="{{blocks}}" as="b" hint-placeholder-count="6">
+<button class="chip" type="button" onClick="{{b.add}}" style="{{b.style}}">{{b.label}}</button>
+</sc-for>
+</div>
+<sc-if value="{{hasAttach}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{attach}}" as="a" hint-placeholder-count="1">
+<span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 2px 2px 12px; border-radius: 10px; background: #CCFBF1; color: #134E4A; font-size: 13px; font-weight: 600">{{a.label}}<button type="button" onClick="{{a.remove}}" aria-label="Remove attached area" style="width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: #134E4A; font-size: 16px">×</button></span>
+</sc-for>
+</div>
+</sc-if>
+<div style="display: flex; align-items: flex-end; gap: 8px; padding: 6px; border: 1px solid #CBD3DF; border-radius: 16px; background: #FFFFFF">
+<textarea id="q" rows="2" value="{{query}}" onChange="{{typeQuery}}" onKeyDown="{{keyQuery}}" placeholder="Ask, or tap the mic and talk. Any language." aria-label="Message the drawing agent" style="flex-grow: 1; min-width: 0; resize: none; border: 0; outline: none; padding: 8px; font: inherit; font-size: 15px; background: transparent; color: #0F172A"></textarea>
+<button class="press" type="button" onClick="{{openVoice}}" aria-label="Talk instead of typing" style="{{micStyle}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="2" width="6" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"></rect><path d="M4 9.5a6 6 0 0 0 12 0M10 15.5V18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path></svg></button>
+<button class="press" type="button" onClick="{{ask}}" aria-label="Send" style="width: 48px; height: 48px; border-radius: 12px; border: 0; background: #0F172A; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 10h12M11 5.5l4.5 4.5L11 14.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px" aria-label="Suggested questions">
+<sc-for list="{{suggestions}}" as="s" hint-placeholder-count="4">
+<button class="chip" type="button" onClick="{{s.pick}}" title="{{s.text}}" style="display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 40px; padding: 0 10px; border-radius: 10px; border: 1px solid #E2E6EC; background: #FFFFFF; font-size: 13px; text-align: left"><span style="font-size: 11px; font-weight: 700; color: #5B6474">{{s.lang}}</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{s.short}}</span></button>
+</sc-for>
+</div>
+</div>
+</aside>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#1D4ED8","options":["#1D4ED8","#0E5BD8","#1E40AF"]},"scene":{"editor":"enum","default":"chat","options":["chat","menu","mark","voice","compare","edit","reasoning","plugins"]},"$preview":{"width":1440,"height":960}}'>
+const WINDOWS=[{"x":46.28,"y":8.84,"w":2.26,"h":8.16,"room":"Séjour/repas 3.02","u":"A"},{"x":67.77,"y":13.01,"w":15.36,"h":2.26,"room":"Séjour/repas 3.02","u":"A"},{"x":80.95,"y":14.69,"w":2.26,"h":8.98,"room":"Séjour/repas 3.02","u":"A"},{"x":46.28,"y":23.94,"w":2.26,"h":5.7,"room":"Chambre à coucher 3.04","u":"A"},{"x":22.89,"y":33.96,"w":7.34,"h":2.26,"room":"Séjour/repas 3.17","u":"B"},{"x":36.56,"y":33.96,"w":5.21,"h":2.26,"room":"Chambre à coucher 3.16","u":"B"},{"x":80.95,"y":28.64,"w":2.26,"h":6.85,"room":"Chambre à coucher 3.05","u":"A"},{"x":9.04,"y":38.42,"w":12.91,"h":2.26,"room":"Séjour/repas 3.17","u":"B"},{"x":80.95,"y":38.04,"w":2.26,"h":6.85,"room":"Chambre à coucher 3.07","u":"A"},{"x":80.95,"y":48.69,"w":2.26,"h":5.7,"room":"Chambre à coucher 3.10","u":"A"},{"x":8.98,"y":57.25,"w":2.26,"h":7.34,"room":"Chambre à coucher 3.19","u":"B"},{"x":12.69,"y":65.32,"w":7.34,"h":2.26,"room":"Chambre à coucher 3.19","u":"B"}];
+const DOORS=[{"x":47.97,"y":5.7,"w":18.21,"h":2.0,"room":"Séjour/repas 3.02","u":"A"},{"x":65.99,"y":29.58,"w":1.02,"h":3.48,"room":"Chambre à coucher 3.05","u":"A"},{"x":61.44,"y":31.99,"w":1.02,"h":3.48,"room":"Couloir 3.08","u":"A"},{"x":48.18,"y":37.36,"w":3.14,"h":1.02,"room":"Bain 3.06","u":"A"},{"x":9.11,"y":40.21,"w":2.0,"h":12.0,"room":"Séjour/repas 3.17","u":"B"},{"x":65.99,"y":40.2,"w":1.02,"h":3.48,"room":"Chambre à coucher 3.07","u":"A"},{"x":36.91,"y":50.16,"w":3.47,"h":1.02,"room":"Couloir 3.21","u":"B"},{"x":59.78,"y":47.11,"w":1.02,"h":3.15,"room":"Bain 3.09","u":"A"},{"x":24.27,"y":54.66,"w":3.47,"h":1.02,"room":"Chambre à coucher 3.19","u":"B"},{"x":65.99,"y":50.81,"w":1.02,"h":3.48,"room":"Chambre à coucher 3.10","u":"A"},{"x":27.63,"y":55.58,"w":1.02,"h":3.15,"room":"Chambre à coucher 3.19","u":"B"},{"x":40.33,"y":56.45,"w":1.02,"h":3.15,"room":"Couloir 3.21","u":"B"},{"x":52.36,"y":55.31,"w":1.02,"h":3.15,"room":"Bain 3.12","u":"A"},{"x":57.82,"y":55.57,"w":1.02,"h":3.15,"room":"Couloir 3.08","u":"A"},{"x":62.41,"y":58.51,"w":3.8,"h":2.0,"room":"Couloir 3.08","u":"A"},{"x":62.41,"y":58.51,"w":3.8,"h":2.0,"room":"Couloir 3.08","u":"A"},{"x":70.92,"y":58.51,"w":10.35,"h":2.0,"room":"Chambre à coucher 3.10","u":"A"},{"x":46.41,"y":61.72,"w":2.0,"h":3.8,"room":"Couloir 3.21","u":"B"},{"x":46.41,"y":61.72,"w":2.0,"h":3.8,"room":"Couloir 3.21","u":"B"},{"x":36.62,"y":65.45,"w":8.71,"h":2.0,"room":"Couloir 3.21","u":"B"},{"x":54.64,"y":66.15,"w":1.02,"h":3.8,"room":"Couloir 3.21","u":"B"},{"x":60.69,"y":66.34,"w":1.02,"h":3.8,"room":"Couloir 3.08","u":"A"}];
+const BASINS=[{"x":48.57,"y":41.8,"w":3.93,"h":1.97,"room":"Bain 3.06","u":"A"},{"x":53.94,"y":44.74,"w":5.57,"h":1.97,"room":"Bain 3.09","u":"A"},{"x":55.64,"y":50.67,"w":2.62,"h":2.3,"room":"Bain 3.12","u":"A"},{"x":32.07,"y":55.7,"w":1.97,"h":3.93,"room":"Bain 3.20","u":"B"},{"x":44.68,"y":55.69,"w":1.97,"h":3.93,"room":"Bain 3.18","u":"B"}];
+const ROOMS=[{"num":"3.01","name":"Terrasse","area":30.39,"unit":"A","outdoor":true,"clip":"polygon(86.41% 2.3%, 86.41% 27.44%, 82.83% 27.44%, 82.83% 13.4%, 68.08% 13.4%, 68.08% 5.95%, 48.27% 5.95%, 48.27% 2.3%, 86.41% 2.3%)","lx":80.61,"ly":7.86},{"num":"3.02","name":"Séjour/repas","area":38.57,"unit":"A","outdoor":false,"clip":"polygon(66.24% 27.22%, 66.24% 28.86%, 62.2% 28.86%, 62.2% 17.36%, 62.16% 17.57%, 48.16% 17.55%, 48.16% 7.43%, 66.59% 7.43%, 66.59% 14.88%, 81.34% 14.88%, 81.34% 26.98%, 66.73% 26.98%, 66.73% 27.22%, 66.24% 27.22%)","lx":75.18,"ly":22.06},{"num":"3.03","name":"Cuisine","area":7.83,"unit":"A","outdoor":false,"clip":"polygon(48.16% 17.58%, 62.16% 17.61%, 62.16% 23.61%, 48.16% 23.61%, 48.16% 17.58%)","lx":58.94,"ly":20.84,"rw":4.275,"rh":1.837,"bx":48.16,"by":17.58,"bw":14.0,"bh":6.02},{"num":"3.04","name":"Chambre à coucher","area":17.04,"unit":"A","outdoor":false,"clip":"polygon(48.16% 24.11%, 61.7% 24.11%, 61.7% 37.61%, 48.16% 37.61%, 48.16% 24.11%)","lx":54.91,"ly":30.86,"rw":4.135,"rh":4.12,"bx":48.16,"by":24.11,"bw":13.55,"bh":13.51},{"num":"3.05","name":"Chambre à coucher","area":13.81,"unit":"A","outdoor":false,"clip":"polygon(66.74% 27.48%, 81.34% 27.48%, 81.34% 37.64%, 66.74% 37.64%, 66.74% 27.48%)","lx":73.93,"ly":32.98,"rw":4.458,"rh":3.1,"bx":66.74,"by":27.48,"bw":14.6,"bh":10.16},{"num":"3.06","name":"Bain","area":6.0,"unit":"A","outdoor":false,"clip":"polygon(60.04% 43.53%, 48.16% 43.53%, 48.16% 38.11%, 60.04% 38.11%, 60.04% 43.53%)","lx":56.76,"ly":40.83,"rw":3.628,"rh":1.653,"bx":48.16,"by":38.11,"bw":11.88,"bh":5.42},{"num":"3.07","name":"Chambre à coucher","area":13.76,"unit":"A","outdoor":false,"clip":"polygon(66.74% 48.26%, 66.74% 38.14%, 81.34% 38.14%, 81.34% 48.26%, 66.74% 48.26%)","lx":73.91,"ly":43.62,"rw":4.458,"rh":3.087,"bx":66.74,"by":38.14,"bw":14.6,"bh":10.12},{"num":"3.08","name":"Couloir","area":15.87,"unit":"A","outdoor":false,"clip":"polygon(61.7% 38.11%, 62.2% 38.11%, 62.2% 28.9%, 66.24% 28.9%, 66.24% 58.76%, 58.57% 58.76%, 58.57% 50.93%, 60.54% 50.93%, 60.54% 38.11%, 61.7% 38.11%)","lx":63.37,"ly":55.89},{"num":"3.09","name":"Bain","area":5.98,"unit":"A","outdoor":false,"clip":"polygon(48.16% 45.02%, 60.04% 45.02%, 60.04% 50.43%, 48.16% 50.43%, 48.16% 45.02%)","lx":55.28,"ly":48.21,"rw":3.628,"rh":1.65,"bx":48.16,"by":45.02,"bw":11.88,"bh":5.41},{"num":"3.10","name":"Chambre à coucher","area":13.6,"unit":"A","outdoor":false,"clip":"polygon(66.74% 58.76%, 66.74% 48.76%, 81.34% 48.76%, 81.34% 58.76%, 66.74% 58.76%)","lx":73.82,"ly":54.18,"rw":4.458,"rh":3.05,"bx":66.74,"by":48.76,"bw":14.6,"bh":10.0},{"num":"3.11","name":"Réduit","area":3.26,"unit":"A","outdoor":false,"clip":"polygon(52.61% 50.93%, 52.61% 58.76%, 48.16% 58.76%, 48.16% 50.93%, 52.61% 50.93%)","lx":50.37,"ly":55.57,"rw":1.36,"rh":2.39,"bx":48.16,"by":50.93,"bw":4.46,"bh":7.84},{"num":"3.12","name":"Bain","area":3.62,"unit":"A","outdoor":false,"clip":"polygon(58.08% 50.93%, 58.08% 58.76%, 53.11% 58.76%, 53.11% 50.93%, 58.08% 50.93%)","lx":55.81,"ly":56.06,"rw":1.515,"rh":2.39,"bx":53.11,"by":50.93,"bw":4.96,"bh":7.84},{"num":"3.13","name":"Terrasse","area":53.16,"unit":"A","outdoor":true,"clip":"polygon(81.34% 60.25%, 97.67% 60.25%, 97.67% 80.66%, 69.7% 80.66%, 69.7% 60.25%, 81.34% 60.25%)","lx":83.69,"ly":70.46},{"num":"3.14","name":"Terrasse","area":25.53,"unit":"B","outdoor":true,"clip":"polygon(21.65% 35.84%, 21.65% 38.8%, 9.36% 38.8%, 9.36% 54.59%, 2.29% 54.59%, 2.29% 32.63%, 46.67% 32.63%, 46.67% 34.35%, 21.65% 34.35%, 21.65% 35.84%)","lx":17.84,"ly":35.38},{"num":"3.15","name":"Cuisine","area":8.86,"unit":"B","outdoor":false,"clip":"polygon(36.21% 35.84%, 36.21% 50.89%, 29.89% 50.92%, 29.89% 35.84%, 36.21% 35.84%)","lx":33.05,"ly":39.0,"rw":1.93,"rh":4.6,"bx":29.89,"by":35.84,"bw":6.32,"bh":15.08},{"num":"3.16","name":"Chambre à coucher","area":13.55,"unit":"B","outdoor":false,"clip":"polygon(46.67% 50.43%, 36.7% 50.43%, 36.7% 35.84%, 46.67% 35.84%, 46.67% 50.43%)","lx":41.69,"ly":40.83,"rw":3.045,"rh":4.45,"bx":36.7,"by":35.84,"bw":9.98,"bh":14.59},{"num":"3.17","name":"Séjour/repas","area":31.11,"unit":"B","outdoor":false,"clip":"polygon(29.85% 35.84%, 29.85% 50.96%, 36.21% 50.93%, 36.42% 50.93%, 36.42% 54.92%, 10.84% 54.92%, 10.84% 40.29%, 23.14% 40.29%, 23.14% 35.84%, 29.85% 35.84%)","lx":22.51,"ly":48.71},{"num":"3.18","name":"Bain","area":4.59,"unit":"B","outdoor":false,"clip":"polygon(46.67% 59.75%, 41.08% 59.75%, 41.08% 50.93%, 46.67% 50.93%, 46.67% 59.75%)","lx":43.88,"ly":56.95,"rw":1.707,"rh":2.69,"bx":41.08,"by":50.93,"bw":5.59,"bh":8.82},{"num":"3.19","name":"Chambre à coucher","area":16.33,"unit":"B","outdoor":false,"clip":"polygon(27.9% 65.7%, 10.84% 65.7%, 10.84% 55.42%, 27.9% 55.42%, 27.9% 65.7%)","lx":18.12,"ly":60.99,"rw":5.205,"rh":3.138,"bx":10.84,"by":55.42,"bw":17.05,"bh":10.29},{"num":"3.20","name":"Bain","area":5.6,"unit":"B","outdoor":false,"clip":"polygon(34.23% 65.7%, 28.39% 65.7%, 28.39% 55.42%, 34.23% 55.42%, 34.23% 65.7%)","lx":31.31,"ly":62.79,"rw":1.785,"rh":3.138,"bx":28.39,"by":55.42,"bw":5.85,"bh":10.29},{"num":"3.21","name":"Couloir","area":10.51,"unit":"B","outdoor":false,"clip":"polygon(40.59% 50.93%, 40.59% 60.25%, 46.67% 60.25%, 46.67% 65.7%, 34.73% 65.7%, 34.73% 54.96%, 36.7% 54.96%, 36.45% 54.92%, 36.45% 50.93%, 40.59% 50.93%)","lx":40.2,"ly":63.22},{"num":"3.22","name":"Terrasse","area":56.97,"unit":"B","outdoor":true,"clip":"polygon(46.67% 77.37%, 59.22% 77.37%, 59.22% 97.7%, 34.98% 97.7%, 34.98% 67.19%, 46.67% 67.19%, 46.67% 77.37%)","lx":45.23,"ly":87.48}];
+
+const LANG={EN:'English',FR:'French',FI:'Finnish',DE:'German'};
+const LABELS={windows:{EN:'windows',FR:'fenêtres',FI:'ikkunaa',DE:'Fenster'},doors:{EN:'doors',FR:'portes',FI:'ovea',DE:'Türen'},basins:{EN:'washbasins',FR:'lavabos',FI:'pesuallasta',DE:'Waschbecken'}};
+const CANON={windows:'How many windows are drawn',doors:'How many doors are drawn',basins:'How many washbasins are drawn',area:'What is the net floor area',fire:'What is the fire rating of the entrance door',unknown:'(no match)'};
+const GOLD={windows:12,doors:22,basins:5};
+const NOUN={windows:'Window',doors:'Door',basins:'Washbasin'};
+const SRC={windows:WINDOWS,doors:DOORS,basins:BASINS};
+const SUGGESTIONS=[
+  {lang:'EN',text:'How many windows are drawn on this floor plan?',short:'How many windows?'},
+  {lang:'FR',text:'Quelle est la surface nette de l’appartement A en m² ?',short:'Surface nette appartement A ?'},
+  {lang:'FI',text:'Montako ovea tässä pohjapiirroksessa on?',short:'Montako ovea?'},
+  {lang:'EN',text:'What is the fire rating of the entrance door?',short:'Fire rating of the door?'}
+];
+const BLOCKS=['Count','Area','Where is','Compare','Check','List'];
+const VOICE_TEXT='no niin, elikkä montako ikkunaa siinä A-asunnossa on, siis siinä isommassa, ja sit paljonko siinä on sitä lattiapinta-alaa';
+function detect(t){
+  const s=(t||'').toLowerCase();
+  if(/montako|kuinka|paljonko|onko|missä|tässä|ikkun|ovea|asunno|pinta-ala|ä|ö/.test(s)) return 'FI';
+  if(/wie viele|fenster|tür|wohnung|fläche|ß|ü/.test(s)) return 'DE';
+  if(/combien|quelle|surface|fenêtre|porte|lavabo|appartement|ici|ç|é|è|ê/.test(s)) return 'FR';
+  return 'EN';
+}
+function route(t){
+  const s=(t||'').toLowerCase();
+  if(/fire|palo|feuer|incendie/.test(s)) return 'fire';
+  if(/window|fenêtre|fenetre|ikkun|fenster/.test(s)) return 'windows';
+  if(/lavabo|washbasin|sink|pesuallas|pesualtaa|waschbecken/.test(s)) return 'basins';
+  if(/door|porte|ovi|ove|tür/.test(s)) return 'doors';
+  if(/area|surface|pinta-ala|fläche|m²|m2|size|grösse/.test(s)) return 'area';
+  return 'unknown';
+}
+function unitOf(t){ const m=(t||'').match(/(apartment|appartement|asunto|asunno|wohnung|app\.?)\s*-?\s*([ab])\b/i) || (t||'').match(/\b([ab])-asunno/i); return m ? (m[2]||m[1]).toUpperCase() : null; }
+function inRect(b,r){ const cx=b.x+b.w/2, cy=b.y+b.h/2; return cx>=r.x && cx<=r.x+r.w && cy>=r.y && cy<=r.y+r.h; }
+ROOMS.forEach(r=>{ r.pts=(r.clip.match(/-?[\d.]+% -?[\d.]+%/g)||[]).map(p=>p.split(' ').map(v=>parseFloat(v))); });
+function inPoly(x,y,pts){ let c=false; for(let i=0,j=pts.length-1;i<pts.length;j=i++){ const [xi,yi]=pts[i],[xj,yj]=pts[j]; if((yi>y)!==(yj>y) && x<(xj-xi)*(y-yi)/(yj-yi)+xi) c=!c; } return c; }
+function roomAt(x,y){ return ROOMS.find(r=>inPoly(x,y,r.pts))||null; }
+function nearestRoom(x,y){ const hit=roomAt(x,y); if(hit) return hit; let best=null,bd=1e9; ROOMS.forEach(r=>{ const d=Math.hypot(r.lx-x,r.ly-y); if(d<bd){bd=d;best=r;} }); return bd<6?best:null; }
+const LOCALE={EN:'en-GB',FR:'fr-FR',FI:'fi-FI',DE:'de-DE'};
+function fmt(n,lang){ return new Intl.NumberFormat(LOCALE[lang]||'en-GB',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n); }
+function num(v){ const n=parseFloat(String(v).replace(',','.')); return isNaN(n)?0:n; }
+const TEMPLATES={Count:'How many windows are on this plan?',Area:'What is the net area of apartment A?','Where is':'Where are the washbasins?',Compare:'Compare the window count with the original drawing',Check:'Check the door count',List:'List every door'};
+function confFor(i){ return (0.91+((i*37)%9)/100).toFixed(2); }
+const ZOOMS=[100,140,180,240];
+const icon=(d)=>d;
+
+function sceneState(scene){
+  const base={turns:[{role:'user',text:'How many windows are drawn on this floor plan?',lang:'EN'},{role:'agent',qid:'windows',lang:'EN',scope:null,list:true}],active:1,off:{},hover:-1,query:'',tool:'select',marks:[],draft:null,menu:null,compare:false,opacity:55,sheet:null,voice:false,editRoom:null,editW:0,editH:0,z:0,tr:{}};
+  if(scene==='menu') return Object.assign(base,{menu:{x:57,y:33}});
+  if(scene==='mark'){ const r={x:47.4,y:39.2,w:13.6,h:15.2}; return Object.assign(base,{marks:[Object.assign({label:'Area 1'},r)],turns:base.turns.concat([{role:'user',text:'Combien de lavabos ici ?',lang:'FR',scope:{kind:'region',rect:r,label:'Area 1'}},{role:'agent',qid:'basins',lang:'FR',scope:{kind:'region',rect:r,label:'Area 1'},list:true}]),active:3,tr:{2:true}}); }
+  if(scene==='voice') return Object.assign(base,{voice:true});
+  if(scene==='compare') return Object.assign(base,{compare:true,opacity:60});
+  if(scene==='edit'){ const r=ROOMS.find(x=>x.num==='3.04'); return Object.assign(base,{editRoom:'3.04',editW:r.rw,editH:3.6,tool:'edit'}); }
+  if(scene==='reasoning') return Object.assign(base,{sheet:'trace'});
+  if(scene==='plugins') return Object.assign(base,{sheet:'plugins'});
+  return base;
+}
+
+class Component extends DCLogic {
+  constructor(props){ super(props); this.state=sceneState(props.scene||'chat'); this._q=''; }
+  componentDidUpdate(prev){ if(prev.scene!==this.props.scene) this.setState(sceneState(this.props.scene||'chat')); }
+  push(text,extra){
+    const lang=detect(text), qid=route(text), s=this.state;
+    let scope=null;
+    const lastMark=s.marks.length?s.marks[s.marks.length-1]:null;
+    if(s.attachRegion && lastMark) scope={kind:'region',rect:lastMark,label:lastMark.label};
+    const rm=(text||'').match(/\b3\.\d\d\b/);
+    const u=unitOf(text); if(!scope && u) scope={kind:'unit',unit:u};
+    if(!scope && rm && qid==='area') scope={kind:'room',num:rm[0]};
+    if(qid==='area' && !scope) scope={kind:'unit',unit:'A'};
+    const ov=extra&&extra.override?extra.override:null;
+    const turns=s.turns.map(t=>t.role==='agent'?Object.assign({},t,{list:false}):t).concat([Object.assign({role:'user',text,lang,scope},extra||{}),{role:'agent',qid,lang,scope,list:true,override:ov}]);
+    this._q='';
+    this.setState({turns,active:turns.length-1,off:{},hover:-1,sel:-1,query:'',attachRegion:false,menu:null,sheet:null});
+  }
+  answerOf(t){
+    if(t.qid in SRC){
+      let items=SRC[t.qid].map((b,i)=>Object.assign({i},b));
+      if(t.scope && t.scope.kind==='region') items=items.filter(b=>inRect(b,t.scope.rect));
+      if(t.scope && t.scope.kind==='unit') items=items.filter(b=>b.u===t.scope.unit);
+      return {kind:'count',items};
+    }
+    if(t.qid==='area'){
+      let rooms=ROOMS.map((r,i)=>Object.assign({i},r,(t.override&&t.override.num===r.num)?{area:t.override.area,edited:true}:{}));
+      if(t.scope && t.scope.kind==='region') rooms=rooms.filter(r=>inRect({x:r.lx,y:r.ly,w:0,h:0},t.scope.rect));
+      else if(t.scope && t.scope.kind==='room') rooms=rooms.filter(r=>r.num===t.scope.num);
+      else rooms=rooms.filter(r=>r.unit===((t.scope&&t.scope.unit)||'A'));
+      return {kind:'area',rooms};
+    }
+    return {kind:'abstain'};
+  }
+  renderVals(){
+    const accent=this.props.accent ?? '#1D4ED8';
+    const soft=accent+'1F', mid=accent+'38';
+    const s=this.state;
+    const toggle=(k)=>(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); const o=Object.assign({},this.state.off); if(o[k]) delete o[k]; else o[k]=true; this.setState({off:o,menu:null}); };
+    const enter=(k)=>()=>this.setState({hover:k});
+    const act=s.turns[s.active], ans=act?this.answerOf(act):{kind:'none'};
+
+    let items=[], rooms=[];
+    const rowsFor=(t,a,isActive)=>a.items.map((b,j)=>{
+      const kept=!(isActive && s.off[j]), hov=isActive && (s.hover===j || s.sel===j || s.hover==='all');
+      const dup=j>0 && a.items[j-1].x===b.x && a.items[j-1].y===b.y;
+      const noun=NOUN[t.qid];
+      return {n:j+1,kept,room:b.room,title:noun+' '+(j+1)+(dup?' · 2nd leaf of a double door':''),
+        aria:(kept?'':'Rejected: ')+noun+' '+(j+1)+' in '+b.room+(s.sel===j?'. Tap again to '+(kept?'reject':'restore'):'. Tap to select'),
+        locateAria:'Show '+noun.toLowerCase()+' '+(j+1)+' on the plan', rejectAria:(kept?'Not a '+noun.toLowerCase()+': reject ':'Restore ')+noun.toLowerCase()+' '+(j+1),
+        rejectIcon:kept?'M4 4l8 8M12 4l-8 8':'M3 8a5 5 0 1 0 1.5-3.5M3 3v2.5h2.5',
+        locate:isActive?()=>this.setState({sel:j,hover:-1}):()=>{},
+        tapBox:isActive?(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); if(this.state.sel===j){ const o=Object.assign({},this.state.off); if(o[j]) delete o[j]; else o[j]=true; this.setState({off:o,menu:null}); } else this.setState({sel:j,menu:null}); }:()=>{},
+        boxStyle:`position:absolute;left:${b.x}%;top:${b.y}%;width:${b.w}%;height:${b.h}%;min-width:12px;min-height:12px;padding:0;border-radius:4px;border:2px ${kept?'solid':'dashed'} ${kept?accent:'#94A3B8'};background:${kept?(hov?mid:soft):'rgba(148,163,184,0.10)'};box-shadow:${hov?'0 0 0 6px '+mid:'none'};z-index:${hov?3:2};animation-delay:${j*35}ms`,
+        badgeStyle:`position:absolute;left:${dup?'auto':'-13px'};right:${dup?'-13px':'auto'};top:-13px;min-width:24px;height:24px;padding:0 5px;box-sizing:border-box;border-radius:12px;background:${kept?accent:'#FFFFFF'};color:${kept?'#FFFFFF':'#475569'};border:${kept?'0':'1.5px solid #94A3B8'};box-shadow:0 0 0 2px #FFFFFF;font:700 13px/24px Inter,system-ui,sans-serif;text-align:center`,
+        rowStyle:`display:flex;align-items:center;gap:6px;padding:2px;border-radius:12px;background:${hov?'#EEF3FD':'transparent'}`,
+        numStyle:`flex-shrink:0;width:24px;height:24px;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:${kept?accent:'#FFFFFF'};color:${kept?'#FFFFFF':'#475569'};border:${kept?'0':'1.5px dashed #94A3B8'}`,
+        strike:kept?'none':'line-through',stateText:kept?'Counted':'Rejected',stateColor:kept?'#15803D':'#9A3412',
+        toggle:isActive?toggle(j):()=>{}, enter:isActive?enter(j):()=>{}};
+    });
+    if(ans.kind==='count') items=rowsFor(act,ans,true);
+    let areaSum=0, inclN=0, areaChanged=false;
+    if(ans.kind==='area'){
+      rooms=ans.rooms.map((r,j)=>{
+        const def=!r.outdoor, fl=!!s.off[j], inc=fl?!def:def, hov=s.hover===j||s.sel===j||s.hover==='all';
+        if(fl) areaChanged=true; if(inc){areaSum+=r.area; inclN++;}
+        return {included:inc,aria:r.num+' '+r.name+' '+r.area.toFixed(2)+' m², '+(inc?'included':'left out'),
+          style:`position:absolute;inset:0;width:100%;height:100%;padding:0;border:0;clip-path:${r.clip};background:${inc?(hov?mid:soft):(r.outdoor?'rgba(194,65,12,'+(hov?'0.16':'0.07')+')':'rgba(148,163,184,0.18)')};z-index:${hov?2:1}`,
+          toggle:toggle(j), enter:enter(j)};
+      });
+    }
+
+    let calls=0;
+    const turns=s.turns.map((t,i)=>{
+      if(t.role==='user'){
+        const canTr=t.lang!=='EN', showTr=!!s.tr[i];
+        const qid=route(t.text);
+        return {isUser:true,isAgent:false,text:t.text,langName:LANG[t.lang]||t.lang,canTranslate:canTr,showTr,
+          trLabel:showTr?'Hide':'Show in English',trText:CANON[qid]+(t.scope&&t.scope.kind==='region'?' in '+t.scope.label:(t.scope&&t.scope.kind==='unit'?' in apartment '+t.scope.unit:(qid in SRC?' on this floor plan':''))),
+          hasScope:!!(t.scope&&t.scope.kind==='region'),scopeText:t.scope&&t.scope.kind==='region'?'Scoped to '+t.scope.label+' on the plan':'',
+          toggleTr:()=>{ const tr=Object.assign({},this.state.tr); tr[i]=!tr[i]; this.setState({tr}); }};
+      }
+      const a=this.answerOf(t), isActive=i===s.active;
+      const fbv=(s.fb||{})[i];
+      const setFb=(v)=>()=>{ const f=Object.assign({},this.state.fb||{}); f[i]=v; this.setState({fb:f}); };
+      const base={isUser:false,isAgent:true,notActive:!isActive,activate:()=>this.setState({active:i,off:{},hover:-1,sel:-1}),
+        fbGood:setFb('good'),fbBad:setFb('bad'),hasFb:!!fbv,noFb:!fbv,fbText:fbv==='good'?'Thanks. Logged as correct.':'Thanks. Flagged for review; reject the wrong boxes to fix the count.',
+        fbGoodStyle:'width:40px;height:40px;border-radius:10px;border:1px solid #D5DBE4;background:#FFFFFF;display:inline-flex;align-items:center;justify-content:center;color:#334155',
+        openTrace:()=>this.setState({active:i,sheet:'trace'}),
+        cardStyle:`display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:16px;border:${isActive?'2px solid '+accent:'1px solid #E2E6EC'};background:#FFFFFF;max-width:100%`,
+        isAbstain:false,isNum:false,hasList:false,showList:false,hasRejected:false,hasGold:false,rows:[]};
+      if(a.kind==='abstain'){
+        return Object.assign(base,{isAbstain:true,why:t.qid==='fire'?'This floor plan and its DXF twin hold no fire-rating data. A door schedule or the IFC model would have it. I did not guess.':'I could not match that to anything on this drawing. Try rooms, areas, doors, windows or fixtures.',footer:'router: template cache · 0 model calls · nothing guessed'});
+      }
+      calls+=1;
+      const where=t.scope?(t.scope.kind==='region'?(t.lang==='FR'?' dans '+t.scope.label:' in '+t.scope.label):(t.lang==='FR'?' dans l’appartement '+t.scope.unit:(t.lang==='FI'?' asunnossa '+t.scope.unit:' in apartment '+t.scope.unit))):(t.lang==='FR'?' sur ce plan':(t.lang==='FI'?' tässä pohjassa':' on this plan'));
+      if(a.kind==='count'){
+        const rej=isActive?Object.keys(s.off).length:0, total=a.items.length, val=total-rej;
+        const gold=(!t.scope && GOLD[t.qid]!=null)?GOLD[t.qid]:null;
+        return Object.assign(base,{isNum:true,value:val,label:LABELS[t.qid][t.lang]||LABELS[t.qid].EN,sentence:(t.lang==='FR'?'Comptés':(t.lang==='FI'?'Laskettu':'Counted'))+where+'.',
+          checkText:'Vision agrees '+total+'/'+total+' · sample',
+          hasGold:gold!=null,gold,goldText:rej>0?'Dataset: '+gold+' · you: '+val:'Dataset: '+gold+' ✓',
+          goldStyle:`padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:${rej>0?'#FFF7ED':'#E7F5EE'};color:${rej>0?'#7C2D12':'#14532D'}`,
+          hasRejected:rej>0,rejectedText:'You rejected '+rej+'. Drawing says '+total+'.',
+          hasList:true,showList:!!t.list,listLabel:t.list?'Hide evidence':'Evidence ('+total+')',
+          toggleList:()=>{ const ts=this.state.turns.slice(); ts[i]=Object.assign({},ts[i],{list:!ts[i].list}); this.setState({turns:ts}); },
+          rows:rowsFor(t,a,isActive),
+          footer:'answer: DXF geometry, 0 calls · check: Decisions API, 1 call, '+total+' yes/no · ≈ $0.0002 est.'});
+      }
+      let sum=0,n=0; const arows=a.rooms.map((r,j)=>{ const fl=isActive&&!!s.off[j]; const inc=fl?r.outdoor:!r.outdoor; if(inc){sum+=r.area;n++;} const hov=isActive&&(s.hover===j||s.sel===j);
+        return {n:r.num,kept:inc,room:(inc?'+ ':'')+fmt(r.area,t.lang)+' m²'+(r.edited?' · your what-if size':''),title:r.name+(r.outdoor?' (outdoor)':''),
+          locateAria:'Show room '+r.num+' on the plan', rejectAria:(inc?'Leave out room ':'Add room ')+r.num, rejectIcon:inc?'M4 8h8':'M8 4v8M4 8h8',
+          locate:isActive?()=>this.setState({sel:j,hover:-1}):()=>{},
+          rowStyle:`display:flex;align-items:center;gap:6px;padding:2px;border-radius:12px;background:${hov?'#EEF3FD':(r.edited?'#E6FAF6':'transparent')}`,
+          numStyle:`flex-shrink:0;min-width:38px;height:24px;padding:0 6px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font:600 11px JetBrains Mono,monospace;background:${inc?accent:'#FFFFFF'};color:${inc?'#FFFFFF':'#475569'};border:${inc?'0':'1.5px dashed #94A3B8'}`,
+          strike:inc?'none':'line-through',stateText:inc?'Added':'Left out',stateColor:inc?'#15803D':'#9A3412',
+          toggle:isActive?toggle(j):()=>{}, enter:isActive?enter(j):()=>{}}; });
+      const plain=!t.override && t.scope && t.scope.kind==='unit';
+      const gold=plain&&t.scope.unit==='A'?fmt(139.34,t.lang)+' m²':(plain&&t.scope.unit==='B'?fmt(90.54,t.lang)+' m²':(t.scope&&t.scope.kind==='room'?(a.rooms[0]?fmt(a.rooms[0].area,t.lang)+' m²':null):null));
+      const scopeTxt=t.scope&&t.scope.kind==='room'?' of room '+t.scope.num:where;
+      return Object.assign(base,{isNum:true,value:fmt(sum,t.lang),label:'m²',goldText:'Dataset: '+gold+' ✓',goldStyle:'padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:#E7F5EE;color:#14532D',sentence:(t.lang==='FR'?'Surface nette':(t.lang==='FI'?'Nettopinta-ala':'Net floor area'))+scopeTxt+': '+n+' room'+(n===1?'':'s')+' added'+(a.rooms.some(r=>r.outdoor)?', outdoor spaces left out':'')+(t.override?'. Uses your what-if size for '+t.override.num:'')+'.',
+        checkText:'Vision read '+a.rooms.length+'/'+a.rooms.length+' labels · sample',hasGold:gold!=null,gold,
+        hasList:true,showList:!!t.list,listLabel:t.list?'Hide arithmetic':'Arithmetic ('+a.rooms.length+')',
+        toggleList:()=>{ const ts=this.state.turns.slice(); ts[i]=Object.assign({},ts[i],{list:!ts[i].list}); this.setState({turns:ts}); },
+        rows:arows,
+        footer:'answer: printed room areas + DXF boundary, 0 calls · check: 1 call · ≈ $0.0002 est.'});
+    });
+
+    const z=ZOOMS[s.z];
+    const rel=(e)=>{ const el=e.currentTarget; const r=el.getBoundingClientRect(); return {x:Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100)),y:Math.max(0,Math.min(100,(e.clientY-r.top)/r.height*100))}; };
+    const menuRoom=s.menu?nearestRoom(s.menu.x,s.menu.y):null;
+    const svgI=(d)=>d;
+    const stop=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); };
+    const menuItems=menuRoom?[
+      {label:'Ask about this spot',icon:'M9 16a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM7 7a2 2 0 1 1 2.8 1.8c-.5.3-.8.7-.8 1.2M9 12.5v.01',run:(e)=>{ stop(e); const n=this.state.marks.length+1; const m={x:s.menu.x-2,y:s.menu.y-2,w:4,h:4,label:'Spot '+n}; this.setState({marks:this.state.marks.concat([m]),attachRegion:true,menu:null}); }},
+      {label:'Mark an area for the question',icon:'M3 3h4M11 3h4M3 15h4M11 15h4M3 3v4M3 11v4M15 3v4M15 11v4',run:(e)=>{ stop(e); this.setState({tool:'mark',menu:null}); }},
+      {sep:true,label:'Area of '+menuRoom.name.toLowerCase()+' '+menuRoom.num,icon:'M3 3h12v12H3zM3 9h12M9 3v12',run:(e)=>{ stop(e); this.push('What is the net area of room '+menuRoom.num+'?'); }}
+    ].concat(menuRoom.rw?[{label:'Change sizes of '+menuRoom.num,icon:'M2 9h14M2 9l3-3M2 9l3 3M16 9l-3-3M16 9l-3 3',run:(e)=>{ stop(e); this.setState({editRoom:menuRoom.num,editW:menuRoom.rw,editH:menuRoom.rh,tool:'edit',menu:null}); }}]:[]).concat([
+      {label:'Compare with the original here',icon:'M2 4h7v10H2zM9 4h7v10H9z',run:(e)=>{ stop(e); this.setState({compare:true,menu:null}); }},
+      {sep:true,label:'Copy link to this spot',icon:'M8 10a3 3 0 0 0 4.2 0l2.3-2.3a3 3 0 0 0-4.2-4.2L9 4.8M10 8a3 3 0 0 0-4.2 0L3.5 10.3a3 3 0 0 0 4.2 4.2L9 13.2',run:(e)=>{ stop(e); this.setState({menu:null}); }}
+    ]).map(m=>Object.assign({sep:false},m)):(s.menu?[
+      {sep:false,label:'Mark an area for the question',icon:'M3 3h4M11 3h4M3 15h4M11 15h4M3 3v4M3 11v4M15 3v4M15 11v4',run:(e)=>{ stop(e); this.setState({tool:'mark',menu:null}); }},
+      {sep:false,label:'Compare with the original here',icon:'M2 4h7v10H2zM9 4h7v10H9z',run:(e)=>{ stop(e); this.setState({compare:true,menu:null}); }}
+    ]:[]);
+    const er=s.editRoom?ROOMS.find(r=>r.num===s.editRoom):null;
+    const eW=num(s.editW), eH=num(s.editH);
+    const edit=er?{title:er.name+' '+er.num,w:s.editW,h:s.editH,wText:fmt(eW,'EN'),hText:fmt(eH,'EN'),orig:fmt(er.area,'EN')+' m² →',newArea:fmt(eW*eH,'EN'),
+      oldStrike:'line-through',
+      boxStyle:`position:absolute;left:${er.bx}%;top:${er.by}%;width:${er.bw*(eW/er.rw)}%;height:${er.bh*(eH/er.rh)}%;border:2px solid #0F766E;background:rgba(15,118,110,0.08);z-index:4;pointer-events:none;box-sizing:border-box`,
+      topStyle:'position:absolute;left:50%;top:-26px;transform:translateX(-50%);padding:2px 8px;border-radius:6px;background:#0F766E;color:#FFFFFF;font:600 12px/18px JetBrains Mono,monospace;white-space:nowrap',
+      sideStyle:'position:absolute;right:-8px;top:50%;transform:translate(100%,-50%);padding:2px 8px;border-radius:6px;background:#0F766E;color:#FFFFFF;font:600 12px/18px JetBrains Mono,monospace;white-space:nowrap'}:{};
+
+    const ta=s.turns[s.active], ta0=ta?this.answerOf(ta):null;
+    const trace=[];
+    if(ta && ta0){
+      const q=s.turns[s.active-1];
+      const node=(lvl,title,tag,body,conf,kind,hl)=>trace.push({title,tag,body,conf:conf||'',enter:()=>this.setState({hover:hl===undefined?-1:hl}),confColor:kind==='exact'?'#15803D':(kind==='warn'?'#9A3412':'#4C1D95'),
+        wrap:`margin-left:${lvl*26}px;padding-left:${lvl?14:0}px;border-left:${lvl?'2px solid #E2E6EC':'0'};padding-bottom:10px`,
+        card:`padding:10px 12px;border-radius:12px;border:1px solid ${kind==='exact'?'#BBE5CC':(kind==='warn'?'#FED7AA':'#E2E6EC')};background:${kind==='exact'?'#F3FBF6':(kind==='warn'?'#FFF7ED':'#FFFFFF')}`,
+        dot:`width:8px;height:8px;border-radius:4px;background:${kind==='exact'?'#15803D':(kind==='warn'?'#EA580C':accent)}`});
+      node(0,'Question',(q?LANG[q.lang]:'')+' · detected',q?'“'+q.text+'”':'','','');
+      node(1,'Intent','Gemini · prompt builder',ta.qid in SRC?'count · '+NOUN[ta.qid].toLowerCase()+' · '+(ta.scope?(ta.scope.kind==='region'?ta.scope.label:'apartment '+ta.scope.unit):'whole floor'):(ta.qid==='area'?(ta.scope&&ta.scope.kind==='room'?'area · net · room '+ta.scope.num:(ta.scope&&ta.scope.kind==='region'?'area · net · '+ta.scope.label:'area · net · apartment '+((ta.scope&&ta.scope.unit)||'A')+' · without outdoor'))+(ta.override?' · what-if '+ta.override.num+' = '+ta.override.area+' m²':''):ta.qid),'0.98','');
+      if(ta0.kind==='abstain'){
+        node(1,'Look for the data','DXF + PNG','Searched layers and labels for a fire rating: none found.','','warn');
+        node(1,'Answer','abstain','“Not on this drawing.” Nothing guessed.','','warn');
+      } else {
+        node(1,'Pick the best source','router','DXF twin (exact CAD) beats the PNG image for counting and areas.','exact','exact');
+        if(ta0.kind==='count'){
+          node(2,'Read the layer','DXF · '+(ta.qid==='windows'?'WINDOW':(ta.qid==='doors'?'DOOR':'FIXTURE')),ta.qid==='windows'?'36 outlines; nested ones are parts of one window → 12 windows.':(ta.qid==='doors'?'22 door leaves; a double door counts twice.':'5 rectangles with basin ellipse + tap dot.'),'exact','exact','all');
+          if(ta.scope) node(2,'Apply the scope','geometry',ta.scope.kind==='region'?'Kept the ones whose centre is inside '+ta.scope.label+' → '+ta0.items.length+'.':'Kept the ones in apartment '+ta.scope.unit+' → '+ta0.items.length+'.','exact','exact');
+          const cs=ta0.items.map(b=>+confFor(b.i)), lo=cs.length?cs.indexOf(Math.min.apply(null,cs)):-1;
+          node(1,'Cross-check on the image','Gemini Decisions API',ta0.items.length+' numbered boxes on the PNG, one yes/no question each. All confirmed; point here to see the least certain one (#'+(lo+1)+').','lowest '+(lo>=0?Math.round(cs[lo]*100)+'%':'–'),'',lo);
+          node(1,'Answer','geometry + vision agree',ta0.items.length+' '+(LABELS[ta.qid].EN)+'. Each one is drawn on the plan for you to check.','exact','exact','all');
+        } else {
+          node(2,'Find the apartment','DXF · UNIT_OUTLINE','Dashed boundary of apartment '+((ta.scope&&ta.scope.unit)||'A')+'.','exact','exact');
+          node(2,'Collect rooms','DXF · ROOM_TEXT',ta0.rooms.length+' numbered rooms inside; terraces are outdoor and left out.','exact','exact');
+          node(1,'Cross-check on the image','Gemini Decisions API','Room labels and printed areas confirmed on the PNG.','0.96','');
+          node(1,'Answer','sum','Sum of printed net areas, shown room by room in the chat.','exact','exact');
+        }
+      }
+    }
+
+    const BLOCK_STYLE=(c)=>`display:inline-flex;align-items:center;min-height:30px;padding:0 10px;border-radius:8px;font-size:12px;font-weight:600;background:${c[0]};color:${c[1]};border:1px solid ${c[2]}`;
+    const VERB=['#E8EEFB','#1E3A8A','#C7D4F5'], OBJ=['#F1F5F9','#0F172A','#D5DBE4'], SCP=['#CCFBF1','#134E4A','#99F6E4'];
+    return {
+      accent, accentSoft:soft,
+      turns, items, rooms,
+      isCount:ans.kind==='count', isArea:ans.kind==='area',
+      clearHover:()=>this.setState({hover:-1}),
+      resetAll:()=>this.setState({off:{}}),
+      sessionCalls:String(calls), sessionCost:(calls===1?'model call':'model calls')+' · $'+(calls*0.0002).toFixed(4)+' est.',
+      tools:[['select','Select','Tap a box to find it; tap again to reject it'],['mark','Mark area','Drag a box on the plan to scope your question'],['edit','What-if sizes','Tap a room to change its sizes']].map(([id,label,hint])=>({label,hint,on:s.tool===id,icon:'',
+        pick:()=>this.setState({tool:id,menu:null}),
+        style:`display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border-radius:9px;border:0;font-weight:600;background:${s.tool===id?'#0F172A':'transparent'};color:${s.tool===id?'#FFFFFF':'#0F172A'}`})),
+      compare:s.compare, opacity:s.opacity,
+      isSwipe:s.compare&&s.cmode!=='blend', isBlend:s.compare&&s.cmode==='blend', split:Math.round(s.split??50),
+      origStyle:s.cmode==='blend'?`position:absolute;inset:0;width:100%;height:100%;display:block;mix-blend-mode:multiply;opacity:${(s.opacity/100).toFixed(2)};pointer-events:none`:`position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;background:#FFFFFF;clip-path:inset(0 ${100-(s.split??50)}% 0 0)`,
+      splitStyle:`position:absolute;top:0;bottom:0;left:${s.split??50}%;width:44px;transform:translateX(-50%);z-index:7;cursor:ew-resize;touch-action:none`,
+      splitDown:(e)=>{ e.stopPropagation(); try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){} const plan=e.currentTarget.closest('.plan'); this._split=plan?plan.getBoundingClientRect():null; },
+      splitMove:(e)=>{ const r=this._split; if(!r) return; this.setState({split:Math.max(2,Math.min(98,(e.clientX-r.left)/r.width*100))}); },
+      splitUp:()=>{ this._split=null; },
+      modeSwipe:()=>this.setState({cmode:'swipe'}), modeBlend:()=>this.setState({cmode:'blend'}),
+      swipeBtnStyle:`min-height:38px;padding:0 12px;border-radius:9px;border:0;font-weight:600;background:${s.cmode!=='blend'?'#0F172A':'transparent'};color:${s.cmode!=='blend'?'#FFFFFF':'#0F172A'}`,
+      blendBtnStyle:`min-height:38px;padding:0 12px;border-radius:9px;border:0;font-weight:600;background:${s.cmode==='blend'?'#0F172A':'transparent'};color:${s.cmode==='blend'?'#FFFFFF':'#0F172A'}`,
+      showHint:!s.hintSeen && !s.menu && !s.compare && s.tool==='select',
+      toggleCompare:()=>this.setState({compare:!this.state.compare}),
+      setOpacity:(e)=>this.setState({opacity:+(e&&e.target?e.target.value:55)}),
+      compareBtnStyle:`display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 12px;border-radius:12px;border:1px solid ${s.compare?'#B9C8EE':'#D5DBE4'};background:${s.compare?'#E8EEFB':'#FFFFFF'};color:${s.compare?'#1E3A8A':'#0F172A'};font-weight:600`,
+      zoomLabel:z+'%', planWidth:(z===100?'100%':z+'%'), planMax:(z===100?'min(100%, 900px)':'none'),
+      zoomIn:()=>this.setState({z:Math.min(ZOOMS.length-1,this.state.z+1)}),
+      zoomOut:()=>this.setState({z:Math.max(0,this.state.z-1)}),
+      marks:s.marks.map(m=>({label:m.label,style:`position:absolute;left:${m.x}%;top:${m.y}%;width:${m.w}%;height:${m.h}%;border:2px dashed #0F766E;background:rgba(15,118,110,0.07);border-radius:6px;z-index:5;pointer-events:none;box-sizing:border-box`})),
+      markMode:s.tool==='mark',
+      hasDraft:!!s.draft, draftStyle:s.draft?`position:absolute;left:${Math.min(s.draft.x0,s.draft.x1)}%;top:${Math.min(s.draft.y0,s.draft.y1)}%;width:${Math.abs(s.draft.x1-s.draft.x0)}%;height:${Math.abs(s.draft.y1-s.draft.y0)}%;border:2px dashed #0F766E;background:rgba(15,118,110,0.1);border-radius:6px`:'',
+      dragStart:(e)=>{ try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){} const p=rel(e); this.setState({draft:{x0:p.x,y0:p.y,x1:p.x,y1:p.y}}); },
+      pressStart:(e)=>{ if(!e || e.pointerType==='mouse' || this.state.tool==='mark') return; const p=rel(e); clearTimeout(this._lp); this._lp=setTimeout(()=>this.setState({menu:p}),450); },
+      pressEnd:()=>{ clearTimeout(this._lp); },
+      fb:s.fb||{},
+      dragMove:(e)=>{ if(!this.state.draft) return; const p=rel(e); this.setState({draft:Object.assign({},this.state.draft,{x1:p.x,y1:p.y})}); },
+      dragEnd:()=>{ const d=this.state.draft; if(!d) return; const r={x:Math.min(d.x0,d.x1),y:Math.min(d.y0,d.y1),w:Math.abs(d.x1-d.x0),h:Math.abs(d.y1-d.y0)}; if(r.w<1.5||r.h<1.5){ this.setState({draft:null}); return; } const n=this.state.marks.length+1; this.setState({draft:null,tool:'select',attachRegion:true,marks:this.state.marks.concat([Object.assign({label:'Area '+n},r)])}); },
+      openMenu:(e)=>{ if(e&&e.preventDefault) e.preventDefault(); const p=rel(e); this.setState({menu:p,hintSeen:true}); },
+      closeMenu:(e)=>{ if(this.state.menu){ this.setState({menu:null}); return; } if(this.state.tool==='edit' && e){ const p=rel(e); const r=roomAt(p.x,p.y); if(r && r.rw) this.setState({editRoom:r.num,editW:r.rw,editH:r.rh}); } else if(this.state.sel>=0) this.setState({sel:-1}); },
+      menuOpen:!!s.menu, menuTitle:menuRoom?menuRoom.name+' '+menuRoom.num+(menuRoom.area?' · '+fmt(menuRoom.area,'EN')+' m²':''):'No room here',
+      menuStyle:s.menu?`position:absolute;left:${Math.min(s.menu.x,70)}%;top:${Math.min(s.menu.y,64)}%;z-index:12;width:290px;background:#FFFFFF;border:1px solid #D5DBE4;border-radius:12px;box-shadow:0 14px 36px rgba(15,23,42,0.2);padding:4px 0;overflow:hidden`:'',
+      menuItems,
+      hasEditRoom:!!er, edit,
+      setEditW:(e)=>this.setState({editW:e&&e.target?e.target.value:this.state.editW}),
+      setEditH:(e)=>this.setState({editH:e&&e.target?e.target.value:this.state.editH}),
+      closeEdit:()=>this.setState({editRoom:null,tool:'select'}),
+      edgeDown:(e)=>{ e.stopPropagation(); try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){} const plan=e.currentTarget.closest('.plan'); this._edge={y:e.clientY,h:+this.state.editH,px:plan?plan.getBoundingClientRect().height:800}; },
+      edgeMove:(e)=>{ const g=this._edge; if(!g) return; const dm=(e.clientY-g.y)/g.px*30.5; this.setState({editH:Math.max(1,Math.round((g.h+dm)*100)/100)}); },
+      edgeUp:()=>{ this._edge=null; },
+      askEdit:()=>{ const r=ROOMS.find(x=>x.num===this.state.editRoom); const w=num(this.state.editW), h=num(this.state.editH); this.push('If room '+r.num+' were '+w.toFixed(2)+' × '+h.toFixed(2)+' m, what is the net area of apartment '+r.unit+'?',{override:{num:r.num,area:Math.round(w*h*100)/100}}); this.setState({editRoom:null,tool:'select'}); },
+      sheetTrace:s.sheet==='trace', sheetPlugins:s.sheet==='plugins', trace, traceQ:(s.turns[s.active-1]||{}).text||'',
+      openTrace:()=>this.setState({sheet:'trace'}), openPlugins:()=>this.setState({sheet:'plugins'}), closeSheet:()=>this.setState({sheet:null}),
+      plugins:[
+        {name:'MCP server',state:'Ready',desc:'Ask from Claude, ChatGPT or any MCP client. Answers come back with the evidence boxes.',code:'{ "mcpServers": { "blueprint-proof": { "url": "https://<your-host>/mcp" } } }'},
+        {name:'REST API',state:'Ready',desc:'One call: drawing + question in, answer + evidence JSON out.',code:'POST /ask\n{ "drawing": "plan-3e.pdf",\n  "question": "Montako ikkunaa?" }'},
+        {name:'Excel / CSV',state:'Ready',desc:'Export every counted object with its room and position for take-off sheets.',code:'GET /answers/42/evidence.csv'},
+        {name:'Chat bots',state:'Planned',desc:'Ask from the site team’s chat. Photo of a sheet in, marked-up answer back.',code:'@blueprint how many doors on level 3?'}
+      ].map(p=>Object.assign(p,{stateStyle:`font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:${p.state==='Ready'?'#E7F5EE':'#EEF1F5'};color:${p.state==='Ready'?'#14532D':'#475569'}`})),
+      blockLib:['Count','Area','Length','Where is','Compare','Check','List','Windows','Doors','Rooms','Fixtures','Apartment …','Room …','Marked area'].map((l,i)=>({label:l,style:BLOCK_STYLE(i<7?VERB:(i<11?OBJ:SCP))})),
+      blocks:BLOCKS.map(b=>({label:b,style:BLOCK_STYLE(VERB)+';min-height:40px',add:()=>{ if(b==='Compare'){ this.setState({compare:true}); } const q=TEMPLATES[b]; this._q=q; this.setState({query:q}); }})),
+      attach:s.attachRegion&&s.marks.length?[{label:s.marks[s.marks.length-1].label+' attached',remove:()=>this.setState({attachRegion:false})}]:[],
+      hasAttach:!!(s.attachRegion&&s.marks.length),
+      query:s.query,
+      typeQuery:(e)=>{ this._q=e&&e.target?e.target.value:''; this.setState({query:this._q}); },
+      keyQuery:(e)=>{ if(e && e.key==='Enter' && !e.shiftKey){ if(e.preventDefault) e.preventDefault(); const t=String((e.target&&e.target.value)||'').trim(); if(t) this.push(t); } },
+      ask:()=>{ const t=String(this._q||this.state.query||'').trim(); if(t) this.push(t); },
+      suggestions:SUGGESTIONS.map(x=>({lang:x.lang,text:x.text,short:x.short,pick:()=>this.push(x.text)})),
+      voice:s.voice, voiceText:VOICE_TEXT,
+      micStyle:`width:48px;height:48px;border-radius:12px;border:1px solid ${s.voice?'#FCA5A5':'#D5DBE4'};background:${s.voice?'#FEF2F2':'#FFFFFF'};color:${s.voice?'#DC2626':'#0F172A'};display:inline-flex;align-items:center;justify-content:center`,
+      openVoice:()=>this.setState({voice:true}), closeVoice:()=>this.setState({voice:false}),
+      voiceQs:[{blocks:[{label:'Count',style:BLOCK_STYLE(VERB)},{label:'Windows',style:BLOCK_STYLE(OBJ)},{label:'Apartment A',style:BLOCK_STYLE(SCP)}]},{blocks:[{label:'Area',style:BLOCK_STYLE(VERB)},{label:'Net floor area',style:BLOCK_STYLE(OBJ)},{label:'Apartment A',style:BLOCK_STYLE(SCP)}]}],
+      runVoice:()=>{ this.setState({voice:false}); this.push('Montako ikkunaa A-asunnossa on?',{}); setTimeout(()=>this.push('Paljonko on A-asunnon lattiapinta-ala?'),0); }
+    };
+  }
+}
+</script>
+</body>
+</html>
