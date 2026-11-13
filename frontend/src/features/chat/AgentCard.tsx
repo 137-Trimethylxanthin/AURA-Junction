@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import type { Lang } from '@/api/contract'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { t } from '@/i18n/strings'
 import { fmtCount, noun } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -55,10 +56,6 @@ function ChipPill({ chip }: { chip: Chip }) {
       {chip.text}
     </span>
   )
-}
-
-function Skeleton({ className }: { className?: string }) {
-  return <div aria-hidden className={cn('animate-pulse rounded-md bg-muted', className)} />
 }
 
 function EvidenceRow({ turnId, row, active }: { turnId: string; row: Row; active: boolean }) {
@@ -360,10 +357,10 @@ export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lan
     return (
       <CardShell active={active} turnId={turn.id} lang={userLang}>
         <div className="flex items-baseline gap-2" aria-busy="true">
-          <Skeleton className="h-11 w-20" />
-          <Skeleton className="h-5 w-24" />
+          <Skeleton aria-hidden className="h-11 w-20" />
+          <Skeleton aria-hidden className="h-5 w-24" />
         </div>
-        <Skeleton className="h-4 w-3/4" />
+        <Skeleton aria-hidden className="h-4 w-3/4" />
         <p className="text-sm text-muted-foreground">{t(userLang, 'pending')}</p>
       </CardShell>
     )

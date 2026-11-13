@@ -73,7 +73,7 @@ To re-create the frontend snapshot: `scripts/snapshot.sh`.
 | `AURA_IP_SALT` | Modal secret `aura-presenter` | Salt for hashed client IPs |
 | `ALLOWED_ORIGINS` | backend env | CORS origins (comma list) |
 | `ALLOWED_ORIGIN_REGEX` | backend env | CORS regex; default matches `aura*.pages.dev`, set it if the Pages project is named otherwise |
-| `AURA_BUDGET_SEED` | backend env | Initial event budget |
+| `AURA_BUDGET_SEED` | backend env | Initial event budget (default 94; the lead may set 98 to count 4 dev live calls) |
 | `AURA_MODELS` | backend env | Gemini model names |
 | `VITE_API_URL` | frontend build | API base URL |
 | `AURA_LIVE` | tests | `1` enables live Gemini tests |

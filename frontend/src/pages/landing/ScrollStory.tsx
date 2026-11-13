@@ -496,3 +496,5 @@ function StillSteps({ steps }: { steps: StepText[] }) {
     </Reveal>
   )
 }
+
+export default ScrollStory

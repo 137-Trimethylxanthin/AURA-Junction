@@ -1,4 +1,4 @@
-import type { Lang, Subject } from '@/api/contract'
+import type { BoxSubjectAny, Lang } from '@/api/contract'
 
 export const LOCALE: Record<Lang, string> = { en: 'en-GB', fr: 'fr-FR', fi: 'fi-FI', de: 'de-DE' }
 
@@ -35,7 +35,7 @@ export function fmtCost(usd: number): string {
 
 type Forms = [one: string, other: string]
 
-const NOUNS: Record<Lang, Record<Subject, Forms>> = {
+const NOUNS: Record<Lang, Record<BoxSubjectAny, Forms>> = {
   en: {
     window: ['window', 'windows'],
     door: ['door', 'doors'],
@@ -45,6 +45,8 @@ const NOUNS: Record<Lang, Record<Subject, Forms>> = {
     shower: ['shower', 'showers'],
     room: ['room', 'rooms'],
     apartment: ['apartment', 'apartments'],
+    label: ['printed label', 'printed labels'],
+    fire_rating: ['fire rating', 'fire ratings'],
   },
   fr: {
     window: ['fenêtre', 'fenêtres'],
@@ -55,6 +57,8 @@ const NOUNS: Record<Lang, Record<Subject, Forms>> = {
     shower: ['douche', 'douches'],
     room: ['pièce', 'pièces'],
     apartment: ['appartement', 'appartements'],
+    label: ['texte imprimé', 'textes imprimés'],
+    fire_rating: ['résistance au feu', 'résistances au feu'],
   },
   // Finnish numerals > 1 take the partitive singular: 1 ikkuna, 12 ikkunaa.
   fi: {
@@ -66,6 +70,8 @@ const NOUNS: Record<Lang, Record<Subject, Forms>> = {
     shower: ['suihku', 'suihkua'],
     room: ['huone', 'huonetta'],
     apartment: ['asunto', 'asuntoa'],
+    label: ['merkintä', 'merkintää'],
+    fire_rating: ['palonkestoluokka', 'palonkestoluokkaa'],
   },
   de: {
     window: ['Fenster', 'Fenster'],
@@ -76,17 +82,19 @@ const NOUNS: Record<Lang, Record<Subject, Forms>> = {
     shower: ['Dusche', 'Duschen'],
     room: ['Raum', 'Räume'],
     apartment: ['Wohnung', 'Wohnungen'],
+    label: ['Beschriftung', 'Beschriftungen'],
+    fire_rating: ['Feuerwiderstand', 'Feuerwiderstände'],
   },
 }
 
 /** Noun for `n` items of `subject`, chosen with Intl.PluralRules. */
-export function noun(subject: Subject, n: number, lang: Lang): string {
+export function noun(subject: BoxSubjectAny, n: number, lang: Lang): string {
   const rule = cached(plural, lang, () => new Intl.PluralRules(LOCALE[lang])).select(n)
   const [one, other] = NOUNS[lang][subject]
   return rule === 'one' ? one : other
 }
 
 /** "12 windows", "1 ikkuna", "22 ovea". */
-export function countPhrase(subject: Subject, n: number, lang: Lang): string {
+export function countPhrase(subject: BoxSubjectAny, n: number, lang: Lang): string {
   return `${fmtCount(n, lang)} ${noun(subject, n, lang)}`
 }

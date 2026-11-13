@@ -45,7 +45,7 @@ async def test_flash_lite_function_calling_round_trip(client):
     # Every number in the model's explanation is in the tool result.
     nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", final.args["explanation"])]
     assert nums and all(n in [*tr.numbers, tr.value] for n in nums)
-    assert client.budget.event_used() == 41 + 2
+    assert client.budget.event_used() == 94 + 2
 
 
 def test_fixtures_hold_no_image_bytes_or_key():

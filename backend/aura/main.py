@@ -8,12 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import statistics
 import time
 from collections.abc import AsyncIterator
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -24,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from aura import tools
 from aura.budget import Budget, RequestRecord
 from aura.cache import AnswerCache, CheckCache
-from aura.config import BACKEND_DIR, Settings, get_settings, models_enabled
+from aura.config import Settings, get_settings, models_enabled
 from aura.contract import CONTRACT_VERSION, AskRequest, DrawingSummary
 from aura.gemini.client import GeminiClient, Transport
 from aura.logging import AccessLogMiddleware, RequestLogFile, setup_logging
@@ -56,24 +54,6 @@ def _volume():
     import modal
 
     return modal.Volume.from_name("aura-data")
-
-
-def _eval_results_dirs(settings: Settings) -> list[Path]:
-    return [settings.data_dir / "eval" / "results", BACKEND_DIR / "eval" / "results"]
-
-
-def _full_set(settings: Settings) -> dict | None:
-    for base in _eval_results_dirs(settings):
-        p = base / "swiss.json"
-        if p.is_file():
-            try:
-                r = json.loads(p.read_text())
-            except ValueError:
-                return None
-            if all(k in r for k in ("correct", "gold_total")):
-                return {"correct": r["correct"], "gold_total": r["gold_total"],
-                        "measured_at": r.get("measured_at", ""), "source": "eval/swiss_full.py"}
-    return None
 
 
 def create_app(
@@ -195,11 +175,7 @@ def create_app(
                 "subtitle": dr.get("subtitle"), "facts": dr.get("facts"),
             }
             out.append(DrawingSummary.model_validate(summ).model_dump(exclude_none=True))
-        body: dict = {"contract_version": CONTRACT_VERSION, "drawings": out}
-        fs = _full_set(settings)
-        if fs:
-            body["full_set"] = fs
-        return body
+        return {"contract_version": CONTRACT_VERSION, "drawings": out}
 
     @app.get("/drawings/{drawing_id}/status")
     async def drawing_status(drawing_id: str, request: Request):
@@ -214,6 +190,10 @@ def create_app(
         d = svc(request).registry.get(drawing_id)
         if d is None:
             return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
+        status = d.drawing.get("status", "ready")
+        if status != "ready":
+            why = d.drawing.get("error") if status == "failed" else None
+            return _err("processing", why or f"Drawing '{drawing_id}' is {status}.", 409)
         return d.public_drawing()
 
     @app.get("/drawings/{drawing_id}/{name}")
@@ -233,7 +213,7 @@ def create_app(
             async with asyncio.timeout(settings.turn_deadline_s):
                 return JSONResponse(await ask(s, body, caller))
         except TimeoutError:
-            return _err("internal", "The answer took too long.", 504)
+            return _err("timeout", "The answer took too long.", 504)
 
     @app.get("/budget")
     async def get_budget(request: Request) -> dict:

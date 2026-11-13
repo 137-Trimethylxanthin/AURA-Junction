@@ -15,6 +15,8 @@ CONTRACT_VERSION = "1.1"
 Lang = Literal["en", "fr", "fi", "de"]
 LANGS: tuple[str, ...] = ("en", "fr", "fi", "de")
 Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "room", "apartment"]
+TextSubject = Literal["label", "fire_rating"]
+BoxSubject = Subject | TextSubject
 BOX_SUBJECTS: tuple[str, ...] = ("window", "door", "washbasin", "wc", "bathtub", "shower")
 Method = Literal["cad_geometry", "ocr", "detector", "vision", "none"]
 TraceKind = Literal["exact", "model", "warn", "info"]
@@ -30,7 +32,7 @@ ErrorCode = Literal[
     "presenter_required",
     "processing",
     "timeout",
-]
+]  # timeout: SSE `error` event; /ask answers 504
 ToolName = Literal[
     "count_objects",
     "room_areas",
@@ -71,7 +73,7 @@ class Box(_M):
     y: float
     w: float
     h: float
-    subject: Subject
+    subject: BoxSubject  # 'label' / 'fire_rating': printed-text boxes (text in `note`)
     room_id: str | None = None
     unit: str | None = None
     note: str | None = None
@@ -184,6 +186,11 @@ class Check(_M):
     anchors_max: float | None = None
     image: Literal["dataset_png", "upload", "none"] | None = None
     recall: Recall | None = None
+    # Cost of the check itself (the answer's own cost is the top-level calls/cost_usd).
+    calls: int | None = None  # Decisions requests made for this answer's check: 1 live, 0 cached
+    cost_usd: float | None = None
+    tokens: int | None = None
+    cached: bool | None = None
 
 
 class Gold(_M):
@@ -272,6 +279,7 @@ class RoomPoly(_Open):
     points: list[tuple[float, float]]
     label_at: tuple[float, float]
     rect: RoomRect | None = None
+    area_source: Literal["printed", "outline"] | None = None
 
 
 class Credit(_Open):
@@ -284,6 +292,7 @@ class Facts(BaseModel):
     gold_total: int
     correct: int
     measured_at: str
+    languages: list[str] | None = None
 
 
 class Drawing(_Open):

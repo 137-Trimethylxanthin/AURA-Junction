@@ -179,7 +179,7 @@ test('client-side checks: images need presenter access, oversize and unknown typ
   const seen = await fakeApi(page)
   await page.goto('/app')
   await uploadInput(page).setInputFiles(png())
-  await expect(page.locator('[data-upload-rejected]')).toContainText('need presenter access')
+  await expect(page.locator('[data-upload-rejected]')).toContainText('Needs CAD data. Image-only drawings are a model estimate')
   await uploadInput(page).setInputFiles(dxf('huge.dxf', 20 * 1024 * 1024 + 1))
   await expect(page.locator('[data-upload-rejected]')).toContainText('at most 20 MB')
   await uploadInput(page).setInputFiles({ name: 'plan.dwg', mimeType: 'application/acad', buffer: Buffer.alloc(10) })

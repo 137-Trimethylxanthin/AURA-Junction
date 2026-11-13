@@ -136,8 +136,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
         pattern = r.pattern or FIRE_PATTERN
         tr = tools.find_text(d, pattern, subject or "label")
         if tr.text:
-            return A.text(question, lang, d, tr, subject or "label",
-                          _text_boxes(tr), intent_tag=tag)
+            return A.text(question, lang, d, tr, subject or "label", intent_tag=tag)
         n_texts = len(d.drawing.get("texts") or [])
         look = (f"Searched the printed text on this drawing for fire ratings (EI30, 30 MIN, T30): "
                 f"none found{f' among {n_texts} texts' if n_texts else ''}.")
@@ -162,11 +161,6 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
     if tr.kind == "none":
         return A.unclear(question, lang, d, scope, intent_tag=tag)
     return A.area(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf)
-
-
-def _text_boxes(tr) -> list[dict]:
-    """Printed-text boxes, once the contract allows a text subject on Box (pending L3)."""
-    return []
 
 
 async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: Caller,
@@ -209,7 +203,12 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
     stats["check_calls"] = 0 if cached else 1
     stats["check_cost_usd"] = 0.0 if cached else float(full.get("cost_usd") or 0)
     stats["check_tokens"] = 0 if cached else int(full.get("input_tokens") or 0)
-    return sliced
+    return sliced | _check_cost(stats, cached)
+
+
+def _check_cost(stats: dict, cached: bool) -> dict:
+    return {"calls": stats["check_calls"], "cost_usd": round(stats["check_cost_usd"], 6),
+            "tokens": stats["check_tokens"], "cached": cached}
 
 
 def _check_node(check: dict, cached: bool, stats: dict, subject: str) -> dict:
@@ -286,8 +285,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller) -> AsyncIterator[t
         cached_body = out
         if check is not None and stats["check_calls"]:
             node = _check_node(check, True, stats, built.subject or "")
-            cached_body = out | {"trace": [node if n["id"] == "check" else n
-                                           for n in out["trace"]]}
+            cached_body = out | {
+                "trace": [node if n["id"] == "check" else n for n in out["trace"]],
+                "check": out["check"] | {"calls": 0, "cost_usd": 0.0, "tokens": 0, "cached": True}}
         svc.answers.put(key, cached_body)
     yield "answer", {"response": out}
 

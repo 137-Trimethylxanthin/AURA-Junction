@@ -267,9 +267,10 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
 
 
 def text(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, subject: str,
-         text_boxes: list[dict], intent_tag: str = "router") -> Built:
+         intent_tag: str = "router") -> Built:
     """A printed text found on the drawing (contract 1.1 answer kind 'text')."""
     value = tr.text or ""
+    text_boxes = [b.model_dump(exclude_none=True) for b in tr.boxes]
     ids = [b["id"] for b in text_boxes]
     body = _base(question, lang, {"kind": "floor"}) | {
         "answer": {"kind": "text", "value": value, "subject": subject},

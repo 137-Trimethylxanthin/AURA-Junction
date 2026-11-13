@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
-import { CloudOffIcon, FileUpIcon, KeyRoundIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import {
+  CloudOffIcon,
+  FileCheckIcon,
+  FileIcon,
+  FileUpIcon,
+  FileWarningIcon,
+  KeyRoundIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+} from 'lucide-react'
 import { ApiError, deleteDrawing, getDrawingStatus } from '@/api/client'
 import type { DrawingStatus } from '@/api/contract'
 import {
@@ -26,7 +36,20 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+} from '@/components/ui/attachment'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { Spinner } from '@/components/ui/spinner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
 
@@ -142,22 +165,33 @@ const PHASE_LABEL: Record<Row['phase'], string> = {
   expired: 'Expired',
 }
 
+const ATTACHMENT_STATE = {
+  uploading: 'uploading',
+  queued: 'processing',
+  processing: 'processing',
+  ready: 'done',
+  failed: 'error',
+  expired: 'idle',
+} as const
+
+const PhaseIcon = ({ phase }: { phase: Row['phase'] }) =>
+  phase === 'ready' ? <FileCheckIcon /> : phase === 'failed' ? <FileWarningIcon /> : phase === 'uploading' || phase === 'queued' || phase === 'processing' ? <Spinner /> : <FileIcon />
+
 function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
   const pct = r.progress !== undefined ? Math.round(Math.min(1, Math.max(0, r.progress)) * 100) : null
   const busy = r.phase === 'uploading' || r.phase === 'queued' || r.phase === 'processing'
   return (
-    <li className="flex items-center gap-3 py-2" data-upload={r.phase}>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm text-foreground" title={r.name}>
-          {r.name}
-        </p>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
-          <span className={cn(r.phase === 'failed' && 'text-destructive')}>
-            {PHASE_LABEL[r.phase]}
-            {r.phase === 'failed' && r.error ? `: ${r.error}` : ''}
-            {busy && pct !== null ? <span className="num"> · {pct} %</span> : null}
-          </span>
-        </div>
+    <Attachment state={ATTACHMENT_STATE[r.phase]} className="w-full">
+      <AttachmentMedia>
+        <PhaseIcon phase={r.phase} />
+      </AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle title={r.name}>{r.name}</AttachmentTitle>
+        <AttachmentDescription aria-live="polite" className="whitespace-normal">
+          {PHASE_LABEL[r.phase]}
+          {r.phase === 'failed' && r.error ? `: ${r.error}` : ''}
+          {busy && pct !== null ? <span className="num"> · {pct} %</span> : null}
+        </AttachmentDescription>
         {busy ? (
           <Progress
             value={pct ?? 0}
@@ -165,36 +199,43 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
             className={cn('mt-1.5', pct === null && 'opacity-50')}
           />
         ) : null}
-      </div>
-      {r.phase === 'ready' ? (
-        <Button variant="outline" asChild>
-          <Link to={`/d/${encodeURIComponent(r.id)}`}>Open</Link>
-        </Button>
-      ) : null}
-      {r.delete_token ? (
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label={`Delete ${r.name}`} title="Delete from the server">
-              <Trash2Icon />
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete {r.name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                The file and everything computed from it are removed from the server now, instead of after 24 hours.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Keep</AlertDialogCancel>
-              <AlertDialogAction variant="destructive" onClick={() => onDelete(r)}>
-                Delete
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      ) : null}
-    </li>
+      </AttachmentContent>
+      <AttachmentActions className="gap-1">
+        {r.phase === 'ready' ? (
+          <Button variant="outline" asChild>
+            <Link to={`/d/${encodeURIComponent(r.id)}`}>Open</Link>
+          </Button>
+        ) : null}
+        {r.delete_token ? (
+          <AlertDialog>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <AlertDialogTrigger asChild>
+                  <AttachmentAction size="icon" aria-label={`Delete ${r.name}`}>
+                    <Trash2Icon />
+                  </AttachmentAction>
+                </AlertDialogTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Delete from the server</TooltipContent>
+            </Tooltip>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete {r.name}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  The file and everything computed from it are removed from the server now, instead of after 24 hours.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Keep</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" onClick={() => onDelete(r)}>
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        ) : null}
+      </AttachmentActions>
+    </Attachment>
   )
 }
 
@@ -215,31 +256,38 @@ function UsageNote() {
 /** Upload card. `base` is the API base; without one the panel explains why uploads are off. */
 export function UploadPanel({ base }: { base: string | null }) {
   return (
-    <section aria-labelledby="upload-title" className="flex flex-col gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-      <h2 id="upload-title" className="text-sm font-medium">
-        Upload a drawing
-      </h2>
-      {base ? (
-        <Uploader base={base} />
-      ) : (
-        <>
-          <Alert data-uploads-off>
-            <CloudOffIcon />
-            <AlertTitle>Uploads need the AURA server</AlertTitle>
-            <AlertDescription>
-              This build runs without a server, so only the bundled sample drawing is available. Its answers are
-              computed in your browser.
-            </AlertDescription>
-          </Alert>
-          <UsageNote />
-        </>
-      )}
-    </section>
+    <Card size="sm" asChild>
+      <section aria-labelledby="upload-title">
+        <CardHeader>
+          <CardTitle>
+            <h2 id="upload-title">Upload a drawing</h2>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {base ? (
+            <Uploader base={base} />
+          ) : (
+            <>
+              <Alert data-uploads-off>
+                <CloudOffIcon />
+                <AlertTitle>Uploads need the AURA server</AlertTitle>
+                <AlertDescription>
+                  This build runs without a server, so only the bundled sample drawing is available. Its answers are
+                  computed in your browser.
+                </AlertDescription>
+              </Alert>
+              <UsageNote />
+            </>
+          )}
+        </CardContent>
+      </section>
+    </Card>
   )
 }
 
 function Uploader({ base }: { base: string }) {
   const { rows, start, remove } = useUploads(base)
+  const reduce = useReducedMotion()
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
   const [rejection, setRejection] = useState<string | null>(null)
@@ -308,7 +356,7 @@ function Uploader({ base }: { base: string }) {
         {hasPresenter ? (
           <>
             <p className="flex-1">
-              Presenter access is on: PNG and JPG <span className="num">≤ {UPLOAD_CAPS.image.bytes / MB} MB</span> and
+              Presenter access is on: model-estimate uploads of PNG and JPG <span className="num">≤ {UPLOAD_CAPS.image.bytes / MB} MB</span> and
               PDF <span className="num">≤ {UPLOAD_CAPS.pdf.bytes / MB} MB</span> can be uploaded.
             </p>
             <Button
@@ -321,7 +369,9 @@ function Uploader({ base }: { base: string }) {
             </Button>
           </>
         ) : (
-          <p className="flex-1">PNG, JPG and PDF drawings need presenter access, because they are sent to Google Gemini.</p>
+          <p className="flex-1">
+            PNG, JPG and PDF: needs CAD data. Image-only drawings are a model estimate and are not open yet.
+          </p>
         )}
       </div>
 
@@ -336,12 +386,25 @@ function Uploader({ base }: { base: string }) {
       <UsageNote />
 
       {rows.length ? (
-        <div className="flex flex-col gap-1 border-t pt-3">
+        <div className="flex flex-col gap-2">
+          <Separator />
           <h3 className="text-xs font-medium text-muted-foreground">Your uploads</h3>
-          <ul className="flex flex-col divide-y" aria-label="Your uploads">
-            {rows.map((r) => (
-              <UploadRow key={r.id} r={r} onDelete={(x) => void remove(x)} />
-            ))}
+          <ul className="flex flex-col gap-2" aria-label="Your uploads">
+            <AnimatePresence initial={false} mode="popLayout">
+              {rows.map((r) => (
+                <motion.li
+                  key={r.id}
+                  layout={!reduce}
+                  data-upload={r.phase}
+                  initial={reduce ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.98 }}
+                  transition={reduce ? { duration: 0.12 } : { type: 'spring', bounce: 0, duration: 0.3 }}
+                >
+                  <UploadRow r={r} onDelete={(x) => void remove(x)} />
+                </motion.li>
+              ))}
+            </AnimatePresence>
           </ul>
         </div>
       ) : null}

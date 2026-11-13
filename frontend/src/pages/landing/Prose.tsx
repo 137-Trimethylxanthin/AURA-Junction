@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { WRAP } from "./chrome"
 
@@ -17,7 +18,7 @@ export function ProsePage({
   return (
     <div className={cn(WRAP, "py-12 sm:py-16 lg:py-20")}>
       <div className="mx-auto flex max-w-[44rem] flex-col gap-10">
-        <header className="l-enter flex flex-col gap-3 border-b pb-8">
+        <header className="l-enter flex flex-col gap-3">
           <h1 className="text-4xl leading-tight font-semibold tracking-[-0.02em] sm:text-5xl">
             {title}
           </h1>
@@ -28,6 +29,7 @@ export function ProsePage({
             Last updated {updated}
           </p>
         </header>
+        <Separator className="-mt-2" />
         <div
           className="l-enter flex flex-col gap-10"
           style={{ ["--d" as string]: "80ms" }}

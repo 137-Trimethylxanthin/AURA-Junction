@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react"
+import { Suspense, lazy, useRef, useState, type ReactNode } from "react"
 import { Link } from "react-router"
 import {
   MotionConfig,
@@ -24,7 +24,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { bundledDrawing } from "@/data/drawing"
+import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { PAGE_BTN, PageFrame, WRAP, useTitle } from "./chrome"
 import {
@@ -35,10 +35,12 @@ import {
   fmtInt,
   type Fact,
 } from "./facts"
-import { HeroDemo } from "./HeroDemo"
 import { DEMO_ROUTE } from "./links"
 import { CountUp, Reveal, RevealItem } from "./motion"
-import { ScrollStory } from "./ScrollStory"
+
+// The replay and the story pull in the drawing data and the local answer code: load them after the shell.
+const HeroDemo = lazy(() => import("./HeroDemo"))
+const ScrollStory = lazy(() => import("./ScrollStory"))
 
 const NAV = [
   { href: "#how", label: "How it works" },
@@ -187,7 +189,13 @@ function Hero() {
             style={reduce ? undefined : { y, scale, opacity: fade }}
             className="origin-top"
           >
-            <HeroDemo />
+            <Suspense
+              fallback={
+                <Skeleton className="aspect-[4/3] w-full rounded-2xl md:aspect-auto md:h-[min(calc(100dvh-8rem),40rem)]" />
+              }
+            >
+              <HeroDemo />
+            </Suspense>
           </motion.div>
         </div>
       </div>
@@ -268,7 +276,13 @@ function HowItWorks() {
       title="How AURA answers a question"
       lead="Code answers first and shows its work. A model only looks at what the code has drawn, and you have the last word."
     >
-      <ScrollStory />
+      <Suspense
+        fallback={
+          <Skeleton className="h-[min(80dvh,40rem)] w-full rounded-xl" />
+        }
+      >
+        <ScrollStory />
+      </Suspense>
       <Reveal className="grid gap-4 md:grid-cols-3">
         {cells.map((c) => (
           <RevealItem key={c.term}>
@@ -380,7 +394,11 @@ function Measured() {
     >
       <Reveal
         as="ul"
-        className={cn("grid gap-4", RESULTS.length > 1 && "lg:grid-cols-2", RESULTS.length > 2 && "xl:grid-cols-3")}
+        className={cn(
+          "grid gap-4",
+          RESULTS.length > 1 && "lg:grid-cols-2",
+          RESULTS.length > 2 && "xl:grid-cols-3"
+        )}
       >
         {RESULTS.map((f) => (
           <RevealItem as="li" key={f.id}>
@@ -463,8 +481,6 @@ const ROLES: { role: string; task: string; body: string }[] = [
     body: "Sum an apartment, leave the terrace out with one tap, and export the evidence as CSV for the cost plan.",
   },
 ]
-
-const INDOOR = bundledDrawing.rooms.filter((r) => !r.outdoor).length
 
 const LANGS = [
   { code: "EN", q: "How many windows are drawn?", lang: "en" },
@@ -561,7 +577,8 @@ function Use() {
                   Open the sample drawing and ask it something.
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {`Third floor of a Swiss apartment block: ${INDOOR} rooms, ${bundledDrawing.units.length} apartments. No account needed.`}
+                  A floor plan from the Swiss Dwellings dataset, ready to ask.
+                  No account needed.
                 </p>
               </div>
               <Button asChild className={PAGE_BTN}>

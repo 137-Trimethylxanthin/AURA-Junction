@@ -52,6 +52,8 @@ def test_check_is_counted_separately_and_cached(live_client):
     # recorded: basin-04 0.26 lowest; anchors max 0.0836 → all 5 above 0.1336
     assert ch["least_certain_id"] == "basin-04" == ch["ranking"][0]
     assert ch["anchors_max"] == pytest.approx(0.0836) and ch["agreed"] == 5
+    assert ch["calls"] == 1 and ch["cached"] is False and ch["tokens"] == 4784
+    assert ch["cost_usd"] == pytest.approx(0.0004784)
     node = next(n for n in b["trace"] if n["id"] == "check")
     assert "1 model call" in node["body"] and node["confidence"] == pytest.approx(0.2615, abs=1e-3)
     assert c.get("/budget").json()["event_used"] == before + 1
@@ -62,6 +64,7 @@ def test_check_is_counted_separately_and_cached(live_client):
             scope={"kind": "region", "rect": {"x": 47.4, "y": 39.2, "w": 13.6, "h": 15.2},
                    "label": "Area 1"})
     assert r["answer"]["value"] == 3 and r["check"]["total"] == 3
+    assert r["check"]["calls"] == 0 and r["check"]["cached"] is True and r["calls"] == 0
     assert "Cached check: 0 model calls" in next(
         n for n in r["trace"] if n["id"] == "check")["body"]
     assert c.get("/budget").json()["event_used"] == before + 1 and len(c.fake.calls) == 1
@@ -154,7 +157,7 @@ def test_forged_x_forwarded_for_changes_nothing(tmp_path):
 
 def test_budget_and_stats_shapes(client):
     b = client.get("/budget").json()
-    assert b == {"contract_version": "1.1", "models": "on", "event_used": 41, "event_cap": 1000,
+    assert b == {"contract_version": "1.1", "models": "on", "event_used": 94, "event_cap": 1000,
                  "day_used": 0, "day_cap": 350}
     s = client.get("/stats").json()
     assert s == {"contract_version": "1.1", "answers_today": 0, "model_calls_today": 0}
@@ -236,7 +239,7 @@ def test_gemini_network_failure_never_breaks_a_geometry_answer(tmp_path):
         u = ask(c, "tally the lavatory fittings for me")
         assert u["answer"]["reason"] == "unclear_question" and u["calls"] == 0
         assert boom.calls == 2
-        assert c.get("/budget").json()["event_used"] == 43  # sent requests count
+        assert c.get("/budget").json()["event_used"] == 96  # sent requests count
         # Not cached: the next ask tries again.
         ask(c, "How many washbasins are drawn on this floor plan?")
         assert boom.calls == 3
@@ -247,6 +250,7 @@ def test_cached_answer_does_not_replay_live_check_cost(live_client):
     again = ask(live_client, "How many washbasins are drawn on this floor plan?")
     node = next(n for n in again["trace"] if n["id"] == "check")
     assert again["route"] == "cache" and "0 model calls" in node["body"]
+    assert again["check"]["calls"] == 0 and again["check"]["cached"] is True
     assert "1 model call" not in node["body"]
 
 
@@ -286,3 +290,73 @@ def test_every_gold_line_of_the_built_library_through_ask(tmp_path):
                     if not ok:
                         failures.append((d.name, qid, q[:70], got, want, b.get("gold")))
     assert n > 400 and not failures, f"{len(failures)}/{n}: {failures[:8]}"
+
+
+def test_drawing_not_ready_is_409_processing(tmp_path):
+    import json as _json
+
+    from aura import tools
+    from tests.conftest import FRONTEND_DRAWING
+
+    data = _json.loads(FRONTEND_DRAWING.read_text()) | {"id": "up-1", "status": "processing"}
+    d = tools.LoadedDrawing(id="up-1", dir=None, drawing=data,
+                            engine=tools.BundleEngine(data), source="upload")
+    app = make_app(tmp_path)
+    with TestClient(app) as c:
+        c.app.state.svc.registry.add(d)
+        r = c.get("/drawings/up-1")
+        assert r.status_code == 409 and r.json()["code"] == "processing"
+        assert c.get("/drawings/up-1/status").json()["status"] == "processing"
+
+
+def test_fire_rating_found_as_printed_text_with_its_box(tmp_path):
+    import json as _json
+
+    from aura import tools
+    from tests.conftest import FRONTEND_DRAWING
+
+    data = _json.loads(FRONTEND_DRAWING.read_text())
+    data["texts"] = [{"id": "text-01", "text": "EI30", "x": 40.0, "y": 50.0, "w": 2.0, "h": 1.0},
+                     {"id": "text-02", "text": "Cuisine", "x": 10.0, "y": 10.0, "w": 4.0, "h": 1.0}]
+    data["id"] = "fire-demo"
+    d = tools.LoadedDrawing(id="fire-demo", dir=None, drawing=data, engine=tools.BundleEngine(data))
+    with TestClient(make_app(tmp_path)) as c:
+        c.app.state.svc.registry.add(d)
+        r = c.post("/ask", json={"drawing_id": "fire-demo",
+                                 "question": "What is the fire rating of the entrance door?"})
+        b = r.json()
+        no_nulls(b)
+        assert b["answer"] == {"kind": "text", "value": "EI30", "subject": "fire_rating"}
+        assert b["evidence"]["boxes"] == [{"id": "text-01", "x": 40.0, "y": 50.0, "w": 2.0,
+                                           "h": 1.0, "subject": "fire_rating", "note": "EI30"}]
+        assert b["calls"] == 0 and "gold" not in b
+        ids = {n["id"]: n for n in b["trace"]}
+        assert ids["answer"]["evidence_ids"] == ["text-01"]
+
+
+class _Slow:
+    async def post(self, path, body):
+        import asyncio
+
+        await asyncio.sleep(5)
+        raise AssertionError("unreachable")
+
+
+def test_timeout_is_504_timeout(tmp_path):
+    app = make_app(tmp_path, transport=_Slow(), AURA_TURN_DEADLINE_S=0.3)
+    with TestClient(app) as c:
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "tally the lavatory fittings"})
+        assert r.status_code == 504 and r.json()["code"] == "timeout"
+        assert c.get("/budget").json()["event_used"] == 95  # the cancelled request counts
+
+
+@pytest.mark.parametrize("raw", ["http://a.test, http://b.test", '["http://a.test","http://b.test"]'])
+def test_allowed_origins_env_forms(monkeypatch, tmp_path, raw):
+    from aura.config import Settings
+
+    monkeypatch.setenv("ALLOWED_ORIGINS", raw)
+    assert Settings().allowed_origins == ["http://a.test", "http://b.test"]
+    with TestClient(make_app(tmp_path)) as c:  # startup does not crash
+        r = c.options("/ask", headers={"origin": "http://b.test",
+                                       "access-control-request-method": "POST"})
+        assert r.headers.get("access-control-allow-origin") == "http://b.test"

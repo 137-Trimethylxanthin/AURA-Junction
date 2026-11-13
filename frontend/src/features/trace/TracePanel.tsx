@@ -79,7 +79,8 @@ export function TracePanel() {
       initial={reduce ? { opacity: 0 } : { opacity: 0, x: 24 }}
       animate={reduce ? { opacity: 1 } : { opacity: 1, x: 0 }}
       exit={reduce ? { opacity: 0 } : { opacity: 0, x: 24 }}
-      transition={{ duration: reduce ? 0.12 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+      // Critically damped spring: re-targets from the live value, so a quick close after open never jumps.
+      transition={reduce ? { duration: 0.12 } : { type: 'spring', bounce: 0, duration: 0.32 }}
       className="flex min-h-0 flex-1 flex-col"
     >
       <header className="flex items-center gap-2 border-b px-2 py-2">

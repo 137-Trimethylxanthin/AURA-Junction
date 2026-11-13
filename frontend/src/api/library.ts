@@ -112,7 +112,7 @@ export type FileCheck =
 export function checkFile(file: { name: string; size: number }, hasPresenter: boolean): FileCheck {
   const name = file.name.toLowerCase()
   const type = (Object.keys(UPLOAD_CAPS) as UploadType[]).find((k) => UPLOAD_CAPS[k].exts.some((e) => name.endsWith(e)))
-  if (!type) return { ok: false, code: 'unsupported_type', message: 'Only DXF files can be uploaded (PNG, JPG and PDF with presenter access).' }
+  if (!type) return { ok: false, code: 'unsupported_type', message: 'Only DXF files can be uploaded. DWG and zip files are not accepted.' }
   const cap = UPLOAD_CAPS[type]
   if (file.size === 0) return { ok: false, code: 'empty', message: 'This file is empty.' }
   if (file.size > cap.bytes)
@@ -121,7 +121,7 @@ export function checkFile(file: { name: string; size: number }, hasPresenter: bo
     return {
       ok: false,
       code: 'presenter_required',
-      message: `${cap.label} uploads need presenter access, because they are sent to Google Gemini. DXF works for everyone.`,
+      message: 'Needs CAD data. Image-only drawings are a model estimate and are not open yet. DXF works for everyone.',
     }
   return { ok: true, type }
 }

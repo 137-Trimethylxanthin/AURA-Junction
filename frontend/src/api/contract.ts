@@ -53,10 +53,15 @@ export interface PctRect {
   h: Pct
 }
 
+/** 1.1: printed-text boxes found by find_text (ids text-NN, the printed text in `note`). */
+export type TextBoxSubject = 'label' | 'fire_rating'
+export type BoxSubjectAny = Subject | TextBoxSubject
+const BOX_SUBJECTS: readonly BoxSubjectAny[] = [...SUBJECTS, 'label', 'fire_rating']
+
 export interface Box extends PctRect {
-  /** win-01…, door-01…, basin-01…, wc-01…; stable across calls, reading order. */
+  /** win-01…, door-01…, basin-01…, wc-01…, text-01…; stable across calls, reading order. */
   id: string
-  subject: Subject
+  subject: BoxSubjectAny
   room_id?: RoomId
   unit?: string
   /** Free-text remark, e.g. a double door drawn as two leaves at the same spot. */
@@ -72,6 +77,8 @@ export interface RoomPoly {
   outdoor: boolean
   points: [Pct, Pct][]
   label_at: [Pct, Pct]
+  /** 1.1: 'outline' when no area is printed and it comes from the room outline. Absent means printed. */
+  area_source?: 'printed' | 'outline'
   /** Present only for rooms that support what-if resizing. */
   rect?: PctRect & { w_m: number; h_m: number }
 }
@@ -87,6 +94,8 @@ export interface DrawingFacts {
   gold_total: number
   correct: number
   measured_at: string
+  /** Dataset languages the gold rows were counted in, e.g. ["en"] (twins in other languages ask the same fact). */
+  languages?: string[]
 }
 
 export interface Credit {
@@ -388,6 +397,8 @@ export type ErrorCode =
   | 'budget_exhausted'
   | 'presenter_required'
   | 'processing'
+  /** The 60 s chat-turn deadline passed (SSE `error` event; /ask answers 504). */
+  | 'timeout'
 export const ERROR_CODES: readonly ErrorCode[] = [
   'bad_request',
   'unknown_drawing',
@@ -398,6 +409,7 @@ export const ERROR_CODES: readonly ErrorCode[] = [
   'budget_exhausted',
   'presenter_required',
   'processing',
+  'timeout',
 ]
 
 export interface ErrorBody {
@@ -482,7 +494,7 @@ export function isBox(v: unknown): v is Box {
     isObj(v) &&
     isRect(v) &&
     isStr(v.id) &&
-    isOneOf(v.subject, SUBJECTS) &&
+    isOneOf(v.subject, BOX_SUBJECTS) &&
     (v.room_id === undefined || isStr(v.room_id))
   )
 }
@@ -587,6 +599,7 @@ function isRoomPoly(v: unknown): v is RoomPoly {
     Array.isArray(v.points) &&
     v.points.every(isPair) &&
     isPair(v.label_at) &&
+    (v.area_source === undefined || isOneOf(v.area_source, ['printed', 'outline'] as const)) &&
     (v.rect === undefined || (isRect(v.rect) && isNum(v.rect.w_m) && isNum(v.rect.h_m)))
   )
 }
@@ -635,7 +648,13 @@ function isCredit(v: unknown): v is Credit {
 }
 
 function isFacts(v: unknown): v is DrawingFacts {
-  return isObj(v) && isNum(v.gold_total) && isNum(v.correct) && isStr(v.measured_at)
+  return (
+    isObj(v) &&
+    isNum(v.gold_total) &&
+    isNum(v.correct) &&
+    isStr(v.measured_at) &&
+    (v.languages === undefined || (Array.isArray(v.languages) && v.languages.every(isStr)))
+  )
 }
 
 export function isDrawingSummary(v: unknown): v is DrawingSummary {

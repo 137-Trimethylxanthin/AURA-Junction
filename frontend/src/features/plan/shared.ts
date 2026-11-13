@@ -1,5 +1,5 @@
 import type { RefObject } from 'react'
-import type { Lang, RoomPoly, Subject } from '@/api/contract'
+import type { BoxSubjectAny, Lang, RoomPoly } from '@/api/contract'
 import { noun } from '@/lib/format'
 
 /** Rendered drawing aspect (width / height of drawing.images.rebuilt). */
@@ -18,7 +18,7 @@ export type StageRef = RefObject<HTMLDivElement | null>
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
 /** "Window", "Door" … in the given language, singular. */
-export const subjectLabel = (subject: Subject, lang: Lang) => cap(noun(subject, 1, lang))
+export const subjectLabel = (subject: BoxSubjectAny, lang: Lang) => cap(noun(subject, 1, lang))
 
 export const roomTitle = (r: Pick<RoomPoly, 'name' | 'num'>) => `${r.name} ${r.num}`
 

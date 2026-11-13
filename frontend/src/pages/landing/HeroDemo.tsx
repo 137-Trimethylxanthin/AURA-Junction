@@ -345,3 +345,5 @@ export function HeroDemo() {
     </div>
   )
 }
+
+export default HeroDemo

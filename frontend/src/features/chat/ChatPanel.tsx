@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
-import { useReducedMotion } from 'motion/react'
+import { motion, useReducedMotion } from 'motion/react'
 import { toast } from 'sonner'
 import { Toaster } from '@/components/ui/sonner'
 import { useMediaQuery } from '@/hooks/use-media-query'
@@ -203,10 +203,19 @@ export function ChatPanel() {
       ) : (
         <ol className="flex flex-col gap-5 p-4" aria-label="Conversation">
           {pairs.map(({ user, reply }) => (
-            <li key={user.id} data-pair={user.id} className="flex scroll-mt-3 flex-col gap-3">
+            // A new question rises in from the composer below (same path as the text it came from); fade only
+            // with reduced motion. Transform/opacity only, so the scroll measurement above is unaffected.
+            <motion.li
+              key={user.id}
+              data-pair={user.id}
+              className="flex scroll-mt-3 flex-col gap-3"
+              initial={reduce ? { opacity: 0 } : { opacity: 0, y: 12 }}
+              animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
+              transition={reduce ? { duration: 0.15 } : { type: 'spring', bounce: 0, duration: 0.35 }}
+            >
               <UserBubble turn={user} reply={reply} />
               {reply ? <AgentCard turn={reply} lang={user.lang} /> : null}
-            </li>
+            </motion.li>
           ))}
         </ol>
       )}

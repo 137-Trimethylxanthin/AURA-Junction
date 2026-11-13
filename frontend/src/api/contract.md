@@ -489,8 +489,21 @@ Each SSE message is `event: <name>\ndata: <json>\n\n`. Order: `turn`, `understoo
 | `budget_exhausted` | 429 | Event or daily model budget used up; deterministic answers still work. |
 | `presenter_required` | 403 | Raster/PDF upload without a valid `X-AURA-Presenter`. |
 | `processing` | 409 | The drawing is not `ready` yet. |
+| `timeout` | SSE only (`/ask`: 504) | The 60 s turn deadline passed. |
 
-All of these are 4xx, so the frontend shows an error card and never falls back.
+All of these except `timeout` are 4xx, so the frontend shows an error card and never falls back.
+
+
+### More 1.1 additions (agreed with L1/L2)
+
+| Where | Field | Meaning |
+|---|---|---|
+| `Box.subject` | adds `"label"` and `"fire_rating"` | Printed-text boxes from `find_text`; ids `text-01…`; the printed text is in `note`. A `text` answer's box uses these. |
+| `RoomPoly` | `area_source?: "printed" \| "outline"` | Sent only as `"outline"` for rooms with no printed area (area from the room outline). Absent means printed. |
+| `Drawing.facts` / `DrawingSummary.facts` | `languages?: string[]` | Languages the gold rows were counted in, e.g. `["en"]`. |
+| `ErrorCode` | adds `"timeout"` | The 60 s chat-turn deadline: SSE `error` event. `/ask` answers `504` (5xx, so the bundled drawing falls back to local answers). |
+
+`detected_lang` stays `en | fr | fi | de`; Italian questions report `"en"` (`canonical_en` is English anyway). A check's own model calls and cost are not added to the answer's `calls`/`cost_usd`; they appear in the check's trace node and in `/stats`.
 
 ### Conformance JSON
 

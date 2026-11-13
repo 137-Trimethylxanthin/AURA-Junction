@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
 import { Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
+import { motion, useReducedMotion } from 'motion/react'
 import { toast } from 'sonner'
 import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { presenter } from '@/api/library'
 
@@ -27,15 +29,35 @@ function usePresenterLink() {
   }, [pathname, search, hash, navigate])
 }
 
+/**
+ * Each top-level section (landing, library, workspace, …) settles in with a short critically damped rise.
+ * Entrance only: the old page is gone at once, so nothing ever blocks input. Reduced motion: a quick fade.
+ */
+function PageTransition() {
+  const section = useLocation().pathname.split('/')[1] ?? ''
+  const reduce = useReducedMotion()
+  return (
+    <motion.div
+      key={section}
+      className="min-h-dvh"
+      initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
+      animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      transition={reduce ? { duration: 0.12 } : { type: 'spring', bounce: 0, duration: 0.35 }}
+    >
+      <Outlet />
+    </motion.div>
+  )
+}
+
 export function RootLayout() {
   const narrow = useMediaQuery('(max-width: 899px)')
   usePresenterLink()
   return (
-    <>
-      <Outlet />
+    <TooltipProvider delayDuration={400}>
+      <PageTransition />
       <Toaster position={narrow ? 'bottom-center' : 'bottom-right'} />
       <ScrollRestoration />
-    </>
+    </TooltipProvider>
   )
 }
 

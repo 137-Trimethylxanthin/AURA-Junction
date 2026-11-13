@@ -11,15 +11,21 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, SecretStr
+import json
+
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 def _split_csv(v: object) -> object:
+    """ALLOWED_ORIGINS: a comma-separated string or a JSON list."""
     if isinstance(v, str):
-        return [s.strip() for s in v.split(",") if s.strip()]
+        t = v.strip()
+        if t.startswith("["):
+            return [str(x).strip() for x in json.loads(t) if str(x).strip()]
+        return [s.strip() for s in t.split(",") if s.strip()]
     return v
 
 
@@ -51,11 +57,11 @@ class Settings(BaseSettings):
 
     # Budget (plan: "Gemini request budget").
     event_cap: int = Field(default=1000, alias="AURA_EVENT_CAP")
-    event_seed: int = Field(default=41, alias="AURA_BUDGET_SEED")
+    event_seed: int = Field(default=94, alias="AURA_BUDGET_SEED")
     daily_cap: int = Field(default=350, alias="AURA_DAILY_CAP")
     dev_cap: int = Field(default=100, alias="AURA_DEV_CAP")
     measurement_cap: int = Field(default=120, alias="AURA_MEASUREMENT_CAP")
-    ip_agent_per_hour: int = Field(default=15, alias="AURA_IP_AGENT_PER_HOUR")
+    ip_agent_per_hour: int = Field(default=40, alias="AURA_IP_AGENT_PER_HOUR")
     raster_public_cap: int = Field(default=0, alias="AURA_RASTER_PUBLIC_CAP")
     budget_tz: str = Field(default="Europe/Helsinki", alias="AURA_BUDGET_TZ")
 
@@ -67,8 +73,10 @@ class Settings(BaseSettings):
     cleanup_every_s: float = Field(default=3600.0, alias="AURA_CLEANUP_S")
     upload_ttl_s: float = Field(default=24 * 3600.0, alias="AURA_UPLOAD_TTL_S")
 
-    def model_post_init(self, _ctx: object) -> None:
-        self.allowed_origins = _split_csv(self.allowed_origins)  # type: ignore[assignment]
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def _origins(cls, v: object) -> object:
+        return _split_csv(v)
 
     @property
     def db_path(self) -> Path:

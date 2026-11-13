@@ -30,8 +30,9 @@ export default function PrivacyPage() {
               once when you delete it with its delete token in the app.
             </li>
             <li>
-              DXF files are answered by code on our server. Nothing from them is
-              sent to Google.
+              DXF files are answered by code on our server, with no model and no
+              image check. Only a question our routing cannot match sends its
+              text, with no image of your drawing, to Google.
             </li>
             <li>
               Image and PDF uploads are open only with a presenter link. Those
@@ -49,7 +50,9 @@ export default function PrivacyPage() {
             </li>
             <li>
               Only when our routing cannot match a question is its text sent to
-              the Google Gemini API to work out what you asked.
+              the Google Gemini API to work out what you asked. For library
+              drawings a low-resolution copy of the public dataset image goes
+              with it; for your own DXF uploads, the text alone.
             </li>
             <li>
               Answers and conversations, including the question text, are

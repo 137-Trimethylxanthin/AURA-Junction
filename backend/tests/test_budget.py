@@ -15,10 +15,11 @@ def make(clock=None, **kw) -> Budget:
     return Budget(s, clock=clock) if clock else Budget(s)
 
 
-def test_seed_event_total_starts_at_41():
+def test_seed_event_total_starts_at_94():
+    # 41 requests before the build + 53 for the held-out CubiCasa eval.
     b = make()
-    assert b.event_used() == 41
-    assert b.snapshot()["event"] == {"used": 41, "cap": 1000, "seed": 41}
+    assert b.event_used() == 94
+    assert b.snapshot()["event"] == {"used": 94, "cap": 1000, "seed": 94}
 
 
 def test_seed_is_configurable_and_not_persisted_twice():
@@ -30,7 +31,7 @@ def test_seed_is_configurable_and_not_persisted_twice():
 
 
 def test_event_total_never_exceeds_cap_even_with_presenter():
-    b = Budget(Settings(AURA_EVENT_CAP=1000, AURA_DAILY_CAP=10_000), persisted_total=1000 - 41 - 2)
+    b = Budget(Settings(AURA_EVENT_CAP=1000, AURA_DAILY_CAP=10_000), persisted_total=1000 - 94 - 2)
     r1 = b.reserve("check", presenter=True)
     r2 = b.reserve("agent", presenter=True)
     assert b.event_used() == 1000
@@ -48,7 +49,7 @@ def test_event_total_never_exceeds_cap_even_with_presenter():
 def test_concurrent_reservations_do_not_overshoot():
     import threading
 
-    b = Budget(Settings(AURA_EVENT_CAP=60, AURA_DAILY_CAP=10_000))
+    b = Budget(Settings(AURA_EVENT_CAP=60, AURA_BUDGET_SEED=10, AURA_DAILY_CAP=10_000))
     ok, refused = [], []
 
     def worker():
@@ -57,10 +58,10 @@ def test_concurrent_reservations_do_not_overshoot():
         except BudgetError:
             refused.append(1)
 
-    ts = [threading.Thread(target=worker) for _ in range(50)]
+    ts = [threading.Thread(target=worker) for _ in range(80)]
     [t.start() for t in ts]
     [t.join() for t in ts]
-    assert len(ok) == 60 - 41 and b.event_used() == 60
+    assert len(ok) == 50 and len(refused) == 30 and b.event_used() == 60
 
 
 def test_daily_cap_holds_and_resets_next_eet_day():
@@ -87,6 +88,7 @@ def test_daily_cap_uses_helsinki_day():
 
 
 def test_per_ip_limit_applies_to_agent_bucket_only():
+    assert Settings().ip_agent_per_hour == 40  # the venue shares one IP
     b = Budget(Settings(AURA_IP_AGENT_PER_HOUR=15))
     for _ in range(15):
         b.commit(b.reserve("agent", ip_hash="ip1"), model="gemini-3.1-flash-lite")
@@ -163,4 +165,4 @@ def test_commit_records_cost_and_calls_sink():
     assert rows == [rec]
     assert rec.cost_usd == pytest.approx(0.0025854)
     assert rec.as_dict()["tokens"] == 25854
-    assert b.event_used() == 42
+    assert b.event_used() == 95

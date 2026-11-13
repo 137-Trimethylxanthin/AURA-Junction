@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react"
 import { Link } from "react-router"
 import { ArrowRightIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { APP_ROUTE, ISSUES_URL, REPO_URL } from "./links"
 import "./landing.css"
@@ -142,7 +143,8 @@ export function SiteFooter() {
             ))}
           </nav>
         </div>
-        <p className="border-t pt-4 text-xs text-muted-foreground">
+        <Separator />
+        <p className="-mt-2 text-xs text-muted-foreground">
           Sample drawing from{" "}
           <Link
             to="/credits"

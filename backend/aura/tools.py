@@ -218,7 +218,8 @@ class BundleEngine:
     def find_text(self, pattern: str) -> dict:
         rx = re.compile(pattern, re.IGNORECASE)
         hits = [t for t in self.texts if rx.search(t.get("text", ""))]
-        boxes = [{k: t[k] for k in ("id", "x", "y", "w", "h")} | {"subject": "label"} for t in hits]
+        boxes = [{k: t[k] for k in ("id", "x", "y", "w", "h")} | {"subject": "label", "note": t["text"]}
+                 for t in hits]
         return {
             "answer": ({"kind": "text", "value": hits[0]["text"], "subject": "label"} if hits
                        else {"kind": "abstain", "reason": "not_on_drawing"}),
@@ -378,8 +379,11 @@ def _to_result(d: LoadedDrawing, tool: str, args: dict, raw: dict, ms: int,
                kind: str, subject: str | None, supported: bool = True) -> ToolResult:
     ans = raw.get("answer") or {}
     ev = raw.get("evidence") or {}
-    boxes = [Box(**{k: v for k, v in b.items() if k in Box.model_fields})
-             for b in ev.get("boxes", []) if b.get("subject") in NOUN]
+    text_subject = subject if kind == "text" else None
+    boxes = [Box(**{k: v for k, v in b.items() if k in Box.model_fields}
+                 | ({"subject": text_subject} if text_subject else {}))
+             for b in ev.get("boxes", [])
+             if b.get("subject") in NOUN or (text_subject and b.get("subject") == "label")]
     rooms = [EvidenceRoom(**{k: v for k, v in r.items() if k in EvidenceRoom.model_fields})
              for r in ev.get("rooms", [])]
     is_abstain = ans.get("kind") == "abstain"
@@ -399,8 +403,7 @@ def _to_result(d: LoadedDrawing, tool: str, args: dict, raw: dict, ms: int,
         supported=supported,
         ms=ms,
         meta={"abstain": ans.get("reason")} if is_abstain else
-             ({"texts": raw.get("texts", []), "text_boxes": ev.get("boxes", [])}
-              if kind == "text" else {}),
+             ({"texts": raw.get("texts", [])} if kind == "text" else {}),
     )
 
 
