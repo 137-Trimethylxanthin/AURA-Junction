@@ -1,8 +1,8 @@
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { AskResponse, Drawing, Lang, Override, PctRect, Scope } from '@/api/contract'
-import { ApiError } from '@/api/client'
+import { ApiError, TransportError } from '@/api/client'
 import { createSource, type Source, type SourceStatus } from '@/api/source'
-import { bundledDrawing } from '@/data/drawing'
+import { BUNDLED_DRAWING_ID, bundledDrawing } from '@/data/drawing'
 import { emptyToggles, isRoomEvidenceId, roomIdOfEvidence, type Toggles } from '@/lib/answer'
 import { detect } from '@/lib/detect'
 import { clampRect } from '@/lib/geometry'
@@ -59,8 +59,21 @@ export interface AskOptions {
   overrides?: Override[]
 }
 
+/** Loading state of the drawing named in the URL. `session.drawing` changes only once a load is `ready`. */
+export interface DrawingLoad {
+  id: string
+  state: 'loading' | 'processing' | 'ready' | 'failed' | 'not_found' | 'unavailable' | 'error'
+  /** 0–1 while processing. */
+  progress?: number
+  /** Reason shown to the user (failed / error). */
+  message?: string
+}
+
+/** How often a drawing that is still processing is polled. */
+export const POLL_MS = 1500
+
 export interface AppState {
-  session: { source: SourceStatus; drawing: Drawing; lang: Lang }
+  session: { source: SourceStatus; drawing: Drawing; lang: Lang; load: DrawingLoad }
   turns: Turn[]
   ui: {
     activeTurnId: string | null
@@ -80,6 +93,10 @@ export interface AppState {
   // session
   initSource(): Promise<void>
   retrySource(): Promise<void>
+  /** Show drawing `id`: the bundled one instantly, others from the API (polling while processing). */
+  loadDrawing(id: string): Promise<void>
+  /** Stop polling (route left). */
+  stopLoading(): void
   // turns
   ask(text: string, opts?: AskOptions): Promise<string>
   setActive(turnId: string | null): void
@@ -116,6 +133,7 @@ export interface AppState {
 export interface StoreDeps {
   source?: Source
   drawing?: Drawing
+  pollMs?: number
 }
 
 export type AppStore = StoreApi<AppState>
@@ -127,7 +145,8 @@ const clampZoom = (i: number) => Math.min(ZOOM_STEPS.length - 1, Math.max(0, Mat
 
 export function createAppStore(deps: StoreDeps = {}): AppStore {
   const source = deps.source ?? createSource()
-  const drawing = deps.drawing ?? bundledDrawing
+  const initial = deps.drawing ?? bundledDrawing
+  const pollMs = deps.pollMs ?? POLL_MS
 
   return createStore<AppState>()((set, get) => {
     const patchAgent = (turnId: string, patch: (t: AgentTurn) => Partial<AgentTurn>) =>
@@ -152,10 +171,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
 
     source.subscribe((st) => set((s) => ({ session: { ...s.session, source: st } })))
 
-    return {
-      session: { source: source.status(), drawing, lang: 'en' },
-      turns: [],
-      ui: {
+    const freshUi = (): AppState['ui'] => ({
         activeTurnId: null,
         selectedEvidenceId: null,
         hoveredEvidenceIds: [],
@@ -167,7 +183,30 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         traceOpen: false,
         pluginsOpen: false,
         whatIf: { roomId: null, w: 0, h: 0 },
-      },
+      })
+
+    /** Each loadDrawing call takes a ticket; results of an older ticket are ignored. */
+    let ticket = 0
+    let pollTimer: ReturnType<typeof setTimeout> | undefined
+    const setLoad = (load: DrawingLoad) => set((s) => ({ session: { ...s.session, load } }))
+    /** Swap in a ready drawing; a different drawing starts a clean conversation. */
+    const showDrawing = (d: Drawing) =>
+      set((s) => {
+        const session = { ...s.session, drawing: d, load: { id: d.id, state: 'ready' } as DrawingLoad }
+        if (s.session.drawing.id === d.id) return { session }
+        return { session, turns: [], undoStack: [], ui: freshUi() }
+      })
+    const loadError = (id: string, e: unknown): DrawingLoad => {
+      if (e instanceof ApiError && e.code === 'unknown_drawing') return { id, state: 'not_found' }
+      if (e instanceof ApiError && e.status === 404) return { id, state: 'not_found' }
+      if (e instanceof TransportError) return { id, state: 'unavailable', message: e.message }
+      return { id, state: 'error', message: e instanceof Error ? e.message : 'The drawing could not be loaded' }
+    }
+
+    return {
+      session: { source: source.status(), drawing: initial, lang: 'en', load: { id: initial.id, state: 'ready' } },
+      turns: [],
+      ui: freshUi(),
       undoStack: [],
 
       async initSource() {
@@ -175,6 +214,49 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
       async retrySource() {
         await source.retry()
+      },
+
+      async loadDrawing(id) {
+        const my = ++ticket
+        clearTimeout(pollTimer)
+        const live = () => my === ticket
+        if (id === BUNDLED_DRAWING_ID || id === get().session.drawing.id) {
+          showDrawing(id === BUNDLED_DRAWING_ID ? bundledDrawing : get().session.drawing)
+          return
+        }
+        if (!source.hasApi()) {
+          setLoad({ id, state: 'unavailable' })
+          return
+        }
+        setLoad({ id, state: 'loading' })
+        const fetchFull = async () => {
+          const d = await source.drawing(id)
+          if (live()) showDrawing(d)
+        }
+        const poll = async (): Promise<void> => {
+          try {
+            const st = await source.drawingStatus(id)
+            if (!live()) return
+            if (st.status === 'ready') return await fetchFull()
+            if (st.status === 'failed') return setLoad({ id, state: 'failed', message: st.error })
+            setLoad({ id, state: 'processing', ...(st.progress !== undefined ? { progress: st.progress } : {}) })
+            await new Promise<void>((r) => (pollTimer = setTimeout(r, pollMs)))
+            if (live()) return await poll()
+          } catch (e) {
+            if (live()) setLoad(loadError(id, e))
+          }
+        }
+        try {
+          await fetchFull()
+        } catch (e) {
+          if (!live()) return
+          if (e instanceof ApiError && e.code === 'processing') return poll()
+          setLoad(loadError(id, e))
+        }
+      },
+      stopLoading() {
+        ticket++
+        clearTimeout(pollTimer)
       },
 
       async ask(text, opts = {}) {
@@ -207,7 +289,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         }))
         try {
           const { response, fellBack } = await source.ask({
-            drawing_id: drawing.id,
+            drawing_id: get().session.drawing.id,
             question: text,
             ...(scope ? { scope } : {}),
             ...(opts.overrides?.length ? { overrides: opts.overrides } : {}),
@@ -326,7 +408,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
 
       startWhatIf(roomId) {
-        const room = drawing.rooms.find((r) => r.room_id === roomId)
+        const room = get().session.drawing.rooms.find((r) => r.room_id === roomId)
         if (!room?.rect) return
         ui({ tool: 'whatif', whatIf: { roomId, w: room.rect.w_m, h: room.rect.h_m } })
       },
@@ -340,7 +422,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
       async applyWhatIf() {
         const { whatIf } = get().ui
-        const room = drawing.rooms.find((r) => r.room_id === whatIf.roomId)
+        const room = get().session.drawing.rooms.find((r) => r.room_id === whatIf.roomId)
         if (!room || !(whatIf.w > 0 && whatIf.h > 0)) return null
         const lang = get().session.lang
         const text = room.unit

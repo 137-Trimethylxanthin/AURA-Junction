@@ -2,6 +2,8 @@ import {
   CONTRACT_VERSION,
   isAskResponse,
   isDrawing,
+  isDrawingList,
+  isDrawingStatusBody,
   isErrorBody,
   isFastApiDetail,
   isHealth,
@@ -9,6 +11,8 @@ import {
   type AskRequest,
   type AskResponse,
   type Drawing,
+  type DrawingList,
+  type DrawingStatusBody,
   type ErrorCode,
   type Health,
 } from './contract'
@@ -60,7 +64,7 @@ function dropNulls(v: unknown): unknown {
 
 const join = (base: string, path: string) => base.replace(/\/+$/, '') + path
 
-function checkVersion(v: string, body: unknown) {
+export function checkVersion(v: string, body: unknown) {
   if (majorOf(v) !== majorOf(CONTRACT_VERSION))
     throw new ApiError(`Contract ${v} does not match the app's ${CONTRACT_VERSION}`, 200, 'contract_mismatch', body)
 }
@@ -69,7 +73,7 @@ function checkVersion(v: string, body: unknown) {
  * Fetch JSON with a hard timeout. The AbortController cancels the request; the race with our own timer
  * also guarantees that a response arriving after the timeout is ignored even if fetch ignores the signal.
  */
-async function request(opts: ClientOptions, path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
+export async function request(opts: ClientOptions, path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
   const doFetch: FetchLike = opts.fetch ?? ((i, n) => globalThis.fetch(i, n))
   const ctrl = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -132,4 +136,27 @@ export async function getDrawing(opts: ClientOptions, id: string, timeoutMs = 15
   if (!isDrawing(body)) throw new ApiError('The drawing does not match the contract', 200, 'invalid_response', body)
   checkVersion(body.contract_version, body)
   return body
+}
+
+export async function listDrawings(opts: ClientOptions, timeoutMs = 15_000): Promise<DrawingList> {
+  const body = await request(opts, '/drawings', { method: 'GET' }, timeoutMs)
+  if (!isDrawingList(body)) throw new ApiError('The drawing list does not match the contract', 200, 'invalid_response', body)
+  checkVersion(body.contract_version, body)
+  return body
+}
+
+export async function getDrawingStatus(opts: ClientOptions, id: string, timeoutMs = 15_000): Promise<DrawingStatusBody> {
+  const body = await request(opts, `/drawings/${encodeURIComponent(id)}/status`, { method: 'GET' }, timeoutMs)
+  if (!isDrawingStatusBody(body)) throw new ApiError('The drawing status does not match the contract', 200, 'invalid_response', body)
+  checkVersion(body.contract_version, body)
+  return body
+}
+
+export async function deleteDrawing(opts: ClientOptions, id: string, deleteToken: string, timeoutMs = 15_000): Promise<void> {
+  await request(
+    opts,
+    `/drawings/${encodeURIComponent(id)}`,
+    { method: 'DELETE', headers: { 'X-Delete-Token': deleteToken } },
+    timeoutMs,
+  )
 }

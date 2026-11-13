@@ -25,7 +25,7 @@ export interface GoldChip {
 }
 
 export interface Derived {
-  kind: 'count' | 'area' | 'abstain'
+  kind: AskResponse['answer']['kind']
   /** Value to display after the user's toggles; null for an abstain. */
   value: number | null
   /** Value the source returned. */
@@ -87,7 +87,7 @@ export function deriveAnswer(resp: AskResponse, t: Toggles, drawing?: Drawing): 
 
 export function goldChip(resp: AskResponse, changed: boolean): GoldChip {
   const g = resp.gold
-  if (!g || resp.answer.kind === 'abstain') return { state: 'none' }
+  if (!g || resp.answer.kind === 'abstain' || resp.answer.kind === 'text') return { state: 'none' }
   const base = { dataset: g.value, dataset_qid: g.dataset_qid }
   if (changed) return { state: 'user_changed', ...base }
   if (!g.match) return { state: 'mismatch', ...base }

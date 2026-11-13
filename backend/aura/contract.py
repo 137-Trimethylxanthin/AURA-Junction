@@ -1,0 +1,363 @@
+"""Pydantic mirror of frontend/src/api/contract.ts (the source of truth), plus ToolResult.
+
+Rules from contract.md: optional fields are omitted, never null (serialise with
+`exclude_none=True`); minor versions only add optional fields.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+CONTRACT_VERSION = "1.1"
+
+Lang = Literal["en", "fr", "fi", "de"]
+LANGS: tuple[str, ...] = ("en", "fr", "fi", "de")
+Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "room", "apartment"]
+BOX_SUBJECTS: tuple[str, ...] = ("window", "door", "washbasin", "wc", "bathtub", "shower")
+Method = Literal["cad_geometry", "ocr", "detector", "vision", "none"]
+TraceKind = Literal["exact", "model", "warn", "info"]
+AbstainReason = Literal["not_on_drawing", "not_supported_yet", "unclear_question"]
+ErrorCode = Literal[
+    "bad_request",
+    "unknown_drawing",
+    "internal",
+    "too_large",
+    "unsupported_type",
+    "rate_limited",
+    "budget_exhausted",
+    "presenter_required",
+    "processing",
+    "timeout",
+]
+ToolName = Literal[
+    "count_objects",
+    "room_areas",
+    "list_rooms",
+    "locate",
+    "scope_to_region",
+    "compare_with_original",
+    "check_boxes_with_decisions",
+    "what_if",
+    "find_text",
+]
+Route = Literal["template", "choice", "agent", "cache"]
+
+
+class _M(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _Open(BaseModel):
+    """Inbound bodies and drawing files: tolerate extra keys."""
+
+    model_config = ConfigDict(extra="ignore")
+
+
+# ---- shared -----------------------------------------------------------------------------
+
+
+class PctRect(_M):
+    x: float
+    y: float
+    w: float
+    h: float
+
+
+class Box(_M):
+    id: str
+    x: float
+    y: float
+    w: float
+    h: float
+    subject: Subject
+    room_id: str | None = None
+    unit: str | None = None
+    note: str | None = None
+
+
+class ScopeFloor(_M):
+    kind: Literal["floor"] = "floor"
+
+
+class ScopeUnit(_M):
+    kind: Literal["unit"] = "unit"
+    unit: str
+
+
+class ScopeRoom(_M):
+    kind: Literal["room"] = "room"
+    room_id: str
+
+
+class ScopeLabel(_M):
+    kind: Literal["label"] = "label"
+    label: str
+
+
+class ScopeRegion(_M):
+    kind: Literal["region"] = "region"
+    rect: PctRect
+    label: str
+
+
+Scope = Annotated[
+    ScopeFloor | ScopeUnit | ScopeRoom | ScopeLabel | ScopeRegion, Field(discriminator="kind")
+]
+
+
+class Override(_M):
+    room_id: str
+    w_m: float
+    h_m: float
+
+
+class AskRequest(_Open):
+    drawing_id: str = Field(min_length=1, max_length=200)
+    question: str = Field(max_length=2000)
+    scope: Scope | None = None
+    overrides: list[Override] | None = Field(default=None, max_length=50)
+    lang_hint: Lang | None = None
+
+
+# ---- answer -----------------------------------------------------------------------------
+
+
+class AnswerCount(_M):
+    kind: Literal["count"] = "count"
+    value: int
+    subject: Subject
+
+
+class AnswerArea(_M):
+    kind: Literal["area"] = "area"
+    value: float
+    unit: Literal["m2"] = "m2"
+
+
+class AnswerAbstain(_M):
+    kind: Literal["abstain"] = "abstain"
+    reason: AbstainReason
+    where_to_find: str | None = None
+
+
+class AnswerText(_M):
+    kind: Literal["text"] = "text"
+    value: str
+    subject: Literal["fire_rating", "label"]
+
+
+Answer = Annotated[
+    AnswerCount | AnswerArea | AnswerAbstain | AnswerText, Field(discriminator="kind")
+]
+
+
+class EvidenceRoom(_M):
+    room_id: str
+    included: bool
+    area_m2: float
+    edited: bool | None = None
+
+
+class Evidence(_M):
+    boxes: list[Box] = Field(default_factory=list)
+    rooms: list[EvidenceRoom] = Field(default_factory=list)
+
+
+class Recall(_M):
+    value: float
+    n: int
+    source: str
+
+
+class Check(_M):
+    method: Literal["decisions_api"] = "decisions_api"
+    status: Literal["sample", "live"]
+    agreed: int | None = None
+    total: int | None = None
+    per_box: dict[str, float] | None = None
+    # 1.1
+    scope: Literal["drawn_boxes"] | None = None
+    ranking: list[str] | None = None
+    least_certain_id: str | None = None
+    anchors_max: float | None = None
+    image: Literal["dataset_png", "upload", "none"] | None = None
+    recall: Recall | None = None
+
+
+class Gold(_M):
+    dataset_qid: str
+    value: float
+    tolerance: Literal["exact", "2pct"]
+    match: bool
+
+
+class TraceTool(_M):
+    name: ToolName
+    args: dict[str, Any]
+    result_id: str
+    ms: int
+
+
+class TraceNode(_M):
+    id: str
+    parent: str | None = None
+    title: str
+    tag: str
+    body: str
+    kind: TraceKind
+    evidence_ids: list[str] | None = None
+    confidence: float | Literal["sample"] | None = None
+    tool: TraceTool | None = None
+
+
+class AskResponse(_M):
+    contract_version: str = CONTRACT_VERSION
+    answer: Answer
+    evidence: Evidence
+    detected_lang: Lang
+    canonical_en: str
+    scope: Scope
+    method: Method
+    check: Check | None = None
+    gold: Gold | None = None
+    trace: list[TraceNode]
+    calls: int
+    cost_usd: float
+    latency_ms: int
+    source: Literal["api", "local"] = "api"
+    # 1.1
+    answer_id: str | None = None
+    conversation_id: str | None = None
+    turn_id: str | None = None
+    route: Route | None = None
+    explanation: str | None = None
+
+
+class ErrorBody(_M):
+    contract_version: str = CONTRACT_VERSION
+    error: str
+    code: ErrorCode
+
+
+# ---- drawings ---------------------------------------------------------------------------
+
+
+class Frame(_Open):
+    dxf_min: tuple[float, float]
+    dxf_max: tuple[float, float]
+    margin_m: float
+    m_per_unit: float
+    y_flip: Literal[True]
+    px: tuple[int, int]
+
+
+class RoomRect(_Open):
+    x: float
+    y: float
+    w: float
+    h: float
+    w_m: float
+    h_m: float
+
+
+class RoomPoly(_Open):
+    room_id: str
+    num: str
+    name: str
+    unit: str | None = None
+    area_m2: float
+    outdoor: bool
+    points: list[tuple[float, float]]
+    label_at: tuple[float, float]
+    rect: RoomRect | None = None
+
+
+class Credit(_Open):
+    text: str
+    license: str
+    url: str | None = None
+
+
+class Facts(BaseModel):
+    gold_total: int
+    correct: int
+    measured_at: str
+
+
+class Drawing(_Open):
+    contract_version: str
+    id: str
+    title: str
+    subtitle: str | None = None
+    frame: Frame
+    m_per_pct_x: float
+    m_per_pct_y: float
+    images: dict[str, str]
+    rooms: list[RoomPoly]
+    units: list[dict[str, str]]
+    credit: Credit
+    # 1.1
+    kind: Literal["cad_dxf", "raster", "ifc"] | None = None
+    status: Literal["queued", "processing", "ready", "failed"] | None = None
+    progress: float | None = None
+    error: str | None = None
+    capabilities: list[Subject] | None = None
+    source: Literal["library", "upload"] | None = None
+    thumbnail: str | None = None
+    created_at: str | None = None
+    expires_at: str | None = None
+    facts: Facts | None = None
+
+
+class DrawingSummary(_M):
+    id: str
+    title: str
+    kind: Literal["cad_dxf", "raster", "ifc"]
+    status: Literal["queued", "processing", "ready", "failed"]
+    thumbnail: str
+    facts: Facts | None = None
+    credit: Credit
+    subtitle: str | None = None
+    source: Literal["library", "upload"] | None = None
+    progress: float | None = None
+    error: str | None = None
+    created_at: str | None = None
+    expires_at: str | None = None
+
+
+class Health(_M):
+    ok: bool
+    contract_version: str = CONTRACT_VERSION
+
+
+# ---- tool results (shared with L1's solvers) --------------------------------------------
+
+
+class ToolResult(BaseModel):
+    """What every tool returns. Answer values are set ONLY from a ToolResult (answer.py).
+
+    `numbers` lists every number the result exposes, so the provenance filter can keep
+    model prose honest. `value` is the headline number (count or m²) or None.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    result_id: str
+    tool: ToolName
+    args: dict[str, Any] = Field(default_factory=dict)
+    kind: Literal["count", "area", "text", "rooms", "boxes", "check", "none"]
+    subject: str | None = None
+    value: float | None = None
+    text: str | None = None
+    numbers: list[float] = Field(default_factory=list)
+    boxes: list[Box] = Field(default_factory=list)
+    rooms: list[EvidenceRoom] = Field(default_factory=list)
+    summary: str = ""
+    method: Method = "cad_geometry"
+    supported: bool = True  # False: the drawing has no layer for this subject
+    ms: int = 0
+    calls: int = 0
+    cost_usd: float = 0.0
+    meta: dict[str, Any] = Field(default_factory=dict)

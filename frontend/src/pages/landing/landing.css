@@ -1,0 +1,99 @@
+/* Landing, credits and privacy: CSS-side motion. Owned by L4. Token colours only.
+   JS motion (springs, scroll-linked story, reveals) lives in motion.tsx and ScrollStory.tsx. */
+
+:root {
+  --l-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+html:has(.l-page) {
+  scroll-padding-top: 5rem;
+}
+
+/* The pages scroll the document; the app shell's fixed-height root does not apply here. */
+#root:has(.l-page) {
+  height: auto;
+  min-height: 100dvh;
+}
+
+/* Translucent header: content scrolls under it. The hairline fades in only once something is
+   under it (CSS scroll-driven animation; without support it simply stays visible). */
+.l-header {
+  background: color-mix(in oklch, var(--background), transparent 22%);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  box-shadow: 0 1px 0 var(--border);
+}
+@supports (animation-timeline: scroll()) {
+  .l-header {
+    animation: l-header-edge linear both;
+    animation-timeline: scroll(root);
+    animation-range: 0 48px;
+  }
+  @keyframes l-header-edge {
+    from {
+      box-shadow: 0 1px 0 transparent;
+    }
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .l-header {
+    background: var(--background);
+  }
+}
+
+/* Hero entrance: once, on load. */
+@keyframes l-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+@keyframes l-fade {
+  from {
+    opacity: 0;
+  }
+}
+.l-enter {
+  animation: l-rise 560ms var(--l-ease-out) both;
+  animation-delay: var(--d, 0ms);
+}
+.l-fade {
+  animation: l-fade 420ms ease-out both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* A count changes: the new number settles in from above. */
+@keyframes l-tick {
+  from {
+    opacity: 0.3;
+    transform: translateY(-6px);
+  }
+}
+.l-tick {
+  display: inline-block;
+  animation: l-tick 240ms var(--l-ease-out);
+}
+
+/* Press feedback on pointer-down (apple-motion: respond on press, not on release). */
+.l-press {
+  transition-property:
+    color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 150ms;
+  transition-timing-function: var(--l-ease-out);
+}
+.l-press:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 80ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .l-enter {
+    animation-name: l-fade;
+  }
+  .l-tick {
+    animation: none;
+  }
+  .l-press:active:not(:disabled) {
+    transform: none;
+  }
+}

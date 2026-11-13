@@ -1,0 +1,118 @@
+{
+ "source": "derived",
+ "note": "intent/subject copied from the recorded E3 batched response (q13); scope and on_drawing synthetic (E3 asked a text-only 'answerable from the drawing alone' question: q13_needs_image). The request carries the plan image at 'low' (bytes stripped); usage tokens are an estimate.",
+ "question": "Which sanitary fixtures are available in this building?",
+ "path": "/decisions",
+ "request": {
+  "model": "gemini-decision-1",
+  "input": [
+   {
+    "type": "text",
+    "text": "A user asked this question about the construction floor plan below:\nWhich sanitary fixtures are available in this building?\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:ae54295b10a24586",
+    "mime_type": "image/png",
+    "resolution": "low"
+   }
+  ],
+  "questions": {
+   "intent": {
+    "type": "choice",
+    "instructions": "What does the question ask for?",
+    "criteria": {
+     "count": "Asks how many items there are (a number of objects, rooms or apartments).",
+     "area": "Asks for a surface or floor area, or how big a room or apartment is.",
+     "length": "Asks for a length, width, height, distance or volume.",
+     "text": "Asks for a name, type, material, rating, list or other non-numeric fact.",
+     "other": "Not a question about a building or its drawing."
+    }
+   },
+   "subject": {
+    "type": "choice",
+    "instructions": "If the question asks for a count, what is being counted?",
+    "criteria": {
+     "window": "windows",
+     "door": "doors",
+     "washbasin": "washbasins or sinks",
+     "wc": "toilets or WC seats",
+     "bathtub": "bathtubs",
+     "shower": "showers",
+     "room": "rooms of some kind (bedrooms, bathrooms, kitchens...)",
+     "apartment": "apartments or dwelling units",
+     "other": "none of these, or not a count"
+    }
+   },
+   "scope": {
+    "type": "choice",
+    "instructions": "Which part of the floor plan is the question about?",
+    "criteria": {
+     "floor": "the whole floor plan, or no particular part of it",
+     "unit_A": "apartment A",
+     "unit_B": "apartment B",
+     "label_00": "the rooms labelled 'Terrasse'",
+     "label_01": "the rooms labelled 'Séjour/repas'",
+     "label_02": "the rooms labelled 'Cuisine'",
+     "label_03": "the rooms labelled 'Chambre à coucher'",
+     "label_04": "the rooms labelled 'Bain'",
+     "label_05": "the rooms labelled 'Couloir'",
+     "label_06": "the rooms labelled 'Réduit'"
+    }
+   },
+   "on_drawing": {
+    "type": "noul",
+    "instructions": "Is the information needed to answer the question shown on this drawing?"
+   }
+  }
+ },
+ "status": 200,
+ "response": {
+  "answers": {
+   "intent": {
+    "confidence": 0.9647792224163491,
+    "choice": "text",
+    "probabilities": {
+     "text": 0.9647792224163491,
+     "length": 0.0016892893010826407,
+     "count": 0.03270302135263862,
+     "area": 0.000828466929929712
+    },
+    "type": "choice"
+   },
+   "subject": {
+    "confidence": 0.8709889720620427,
+    "choice": "other",
+    "probabilities": {
+     "window": 0.0033286310096501182,
+     "washbasin": 0.04620167848818651,
+     "room": 0.00794016799252711,
+     "door": 0.0018001952408225122,
+     "bathtub": 0.02220890120868589,
+     "other": 0.8709889720620427,
+     "apartment": 0.004128980282827741,
+     "shower": 0.019703749439317263,
+     "wc": 0.023698724275940098
+    },
+    "type": "choice"
+   },
+   "scope": {
+    "type": "choice",
+    "choice": "floor",
+    "confidence": 0.9,
+    "probabilities": {
+     "floor": 0.9
+    }
+   },
+   "on_drawing": {
+    "type": "noul",
+    "noul": 0.7581212980928929,
+    "confidence": 0.7581212980928929
+   }
+  },
+  "usage": {
+   "total_input_tokens": 460,
+   "total_output_tokens": 0
+  }
+ }
+}

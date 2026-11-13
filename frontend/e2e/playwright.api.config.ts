@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 /**
- * Runs only api.spec.ts against a build that has VITE_API_URL baked in (the app reads it at build time).
+ * Runs only api.spec.ts and api.library.spec.ts against a build that has VITE_API_URL baked in (the app reads it at build time).
  *   npx playwright test -c e2e/playwright.api.config.ts
  * The API base is on the preview's own origin (/__api), so there is no CORS; page.route fakes every call.
  */
@@ -11,7 +11,7 @@ const OUT = 'node_modules/.aura-e2e-api'
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'api.spec.ts',
+  testMatch: ['api.spec.ts', 'api.library.spec.ts'],
   fullyParallel: true,
   reporter: 'list',
   outputDir: '../test-results/api-run',

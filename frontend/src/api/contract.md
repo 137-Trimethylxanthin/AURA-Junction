@@ -1,10 +1,10 @@
-# AURA API contract, version 1.0
+# AURA API contract, version 1.1
 
 AURA stands for Automated Understanding of Rooms & Areas.
 
 This file is for the backend team. The source of truth is `contract.ts`, which sits next to this file. If the two ever disagree, `contract.ts` wins; please tell the frontend team when that happens.
 
-**Versioning.** Every body carries `contract_version: "1.0"`.
+**Versioning.** Every body carries `contract_version`. The current version is `"1.1"` (see §1.1); `"1.0"` bodies stay valid.
 - The frontend rejects any body whose **major** version differs from its own. It shows an error card and does not fall back.
 - A minor bump, such as `1.1`, may only add optional fields.
 
@@ -354,6 +354,147 @@ Response, with status `404`:
 ```json
 { "contract_version": "1.0", "error": "Unknown drawing 'swiss-1'", "code": "unknown_drawing" }
 ```
+
+## 1.1 (additive)
+
+Everything in 1.1 is **optional or new**. A 1.0 body still validates, and the frontend accepts any `1.x` body. `/ask` keeps its 1.0 shape. Rules 5 and 7 above apply to every new field: omit, never `null`; never a number you did not derive.
+
+### New optional fields on `Drawing` (`GET /drawings/:id`)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | `"cad_dxf" \| "raster" \| "ifc"` | How the drawing was read. |
+| `status` | `"queued" \| "processing" \| "ready" \| "failed"` | Absent means ready. |
+| `progress` | number 0–1 | While `processing`. |
+| `error` | string | Human-readable reason, when `failed`. |
+| `capabilities` | `Subject[]` | Subjects this drawing can answer. Drives suggestions and context menus. |
+| `source` | `"library" \| "upload"` | |
+| `thumbnail` | string (URL) | Small preview image. |
+| `created_at`, `expires_at` | ISO 8601 strings | Uploads expire after 24 h. |
+| `facts` | `{ gold_total, correct, measured_at }` | **Library only**, from the eval. Never estimated. |
+
+`GET /drawings/:id` returns a **full** `Drawing` only once the drawing is `ready`. Before that it answers `409` with `ErrorBody` code `processing`; a `failed` drawing answers the same `409` `processing` (the client reads the reason from `GET /drawings/:id/status`). The frontend polls `GET /drawings/:id/status` until `ready` or `failed`, then fetches the full drawing once.
+
+### New endpoints
+
+| Method and path | Request | Response | Notes |
+|---|---|---|---|
+| `GET /drawings` | | `{ contract_version, drawings: DrawingSummary[] }` | Library first, then live uploads. |
+| `GET /drawings/:id/status` | | `{ contract_version, id, status, progress?, error? }` | Polled every ~1.5 s by the frontend until `ready` or `failed`. |
+| `POST /uploads` | `multipart/form-data`, field `file`; optional header `X-AURA-Presenter` | `UploadResult`, status `202` | DXF for everyone; PNG/JPG/PDF need the presenter token (`presenter_required`, 403). |
+| `DELETE /drawings/:id` | header `X-Delete-Token` | `204` | Only uploads. Wrong token: 403 `bad_request`. |
+| `POST /chat` | `ChatRequest` (JSON) | `text/event-stream` | Events below. Read with a `fetch` reader (not `EventSource`). 60 s turn deadline. |
+| `GET /conversations/:id` | | `{ contract_version, id, drawing_id, turns: [{ turn_id, message, response?, error? }] }` | Restores a chat after a reload; the id is kept in localStorage. |
+| `GET /answers/:id/evidence.csv` | | `text/csv` | Evidence rows of one answer. |
+| `GET /budget` | | `{ contract_version, models: "on"\|"off", event_used, event_cap, day_used, day_cap }` | `models: "off"` shows the "geometry only" badge. |
+| `GET /stats` | | `{ contract_version, answers_today, model_calls_today, geometry_only_share?: {value, n}, median_cost_per_checked_answer_usd?: {value, n} }` | Public counters, each ratio with its n. |
+| `POST /rewrite` | (T3) | (T3) | Not specified yet. |
+
+**URLs.** `images.*` and `thumbnail` may be absolute or root-relative (`/drawings/<id>/plan.svg`); root-relative URLs are resolved against the API base. The bundled `swiss-46639` keeps its own copies.
+
+**CORS** additionally allows `DELETE` and the headers `X-AURA-Presenter` and `X-Delete-Token`.
+
+```ts
+interface DrawingSummary {
+  id: string; title: string; kind: DrawingKind; status: DrawingStatus; thumbnail: string
+  facts?: { gold_total: number; correct: number; measured_at: string }
+  credit: { text: string; license: string; url?: string }
+  subtitle?: string; source?: 'library' | 'upload'; progress?: number; error?: string
+  created_at?: string; expires_at?: string
+}
+interface UploadResult { drawing_id: string; delete_token: string; status: 'queued'; contract_version?: string }
+interface ChatRequest {
+  conversation_id?: string; drawing_id: string; message: string
+  scope?: Scope; overrides?: Override[]; lang_hint?: Lang
+}
+```
+
+Example `GET /drawings` item:
+
+```json
+{
+  "id": "swiss-46639",
+  "title": "Swiss Dwellings · plan 46639",
+  "kind": "cad_dxf",
+  "status": "ready",
+  "thumbnail": "/drawings/swiss-46639/thumb.png",
+  "source": "library",
+  "facts": { "gold_total": 38, "correct": 38, "measured_at": "2026-11-14T03:00:00Z" },
+  "credit": { "text": "Swiss Dwellings dataset", "license": "CC BY 4.0" }
+}
+```
+
+(The `facts` numbers above illustrate the shape only; serve the eval's real values.)
+
+### New optional fields on `AskResponse`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `answer_id` | string | For `GET /answers/:id/evidence.csv`. |
+| `conversation_id`, `turn_id` | string | Set on answers produced through `/chat`. |
+| `route` | `"template" \| "choice" \| "agent" \| "cache"` | Which path answered. |
+| `explanation` | string | Model prose **after** the provenance filter (no number that is not in a tool result). |
+| `check` | `Check` plus the ranked fields below | |
+
+Ranked check fields (all optional on `AskResponse.check`; `scope` and `ranking` are required in the `check` chat event):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `scope` | `"drawn_boxes"` | The check never covers objects the geometry missed. |
+| `ranking` | `string[]` | Evidence ids, least certain first. |
+| `least_certain_id` | string | The UI always shows this box. |
+| `anchors_max` | number 0–1 | Highest known-negative anchor score in the same request. |
+| `agreed`, `total` | number | Agreed means `p > anchors_max + 0.05`. |
+| `image` | `"dataset_png" \| "upload" \| "none"` | What the boxes were checked against. DXF uploads: `"none"` ("No independent image to check against"). |
+| `recall` | `{ value, n, source }` | Raster only, from the measured eval. |
+
+### New answer kind
+
+```ts
+{ kind: 'text'; value: string; subject: 'fire_rating' | 'label' }
+```
+
+Printed text found on the drawing, e.g. a fire rating. Its box is in `evidence.boxes`. No `gold`.
+
+### Trace nodes: tool calls
+
+`TraceNode.tool?: { name: ToolName; args: Record<string, unknown>; result_id: string; ms: number }`
+
+`ToolName` is one of `count_objects`, `room_areas`, `list_rooms`, `locate`, `scope_to_region`, `compare_with_original`, `check_boxes_with_decisions`, `what_if`, `find_text`.
+
+### `POST /chat` events
+
+Each SSE message is `event: <name>\ndata: <json>\n\n`. Order: `turn`, `understood`, then any number of `tool_call`/`tool_result` pairs, then `check` (optional), then `answer` **or** `error`, then always `done`.
+
+| Event | `data` |
+|---|---|
+| `turn` | `{ conversation_id, turn_id }` |
+| `understood` | `{ detected_lang, canonical_en, route }` |
+| `tool_call` | `{ node: TraceNode }` (with `tool`) |
+| `tool_result` | `{ node_id, evidence: { boxes, rooms }, summary }` |
+| `check` | `{ check: RankedCheck }` |
+| `answer` | `{ response: AskResponse }`: the same body `/ask` would return |
+| `error` | `{ error, code: ErrorCode }` |
+| `done` | `{}` |
+
+### New error codes
+
+`ErrorCode` adds:
+
+| Code | Status | When |
+|---|---|---|
+| `too_large` | 413 | Upload above the size cap. |
+| `unsupported_type` | 415 | Upload type not accepted. |
+| `rate_limited` | 429 | Per-IP limit hit (agent and raster buckets only). |
+| `budget_exhausted` | 429 | Event or daily model budget used up; deterministic answers still work. |
+| `presenter_required` | 403 | Raster/PDF upload without a valid `X-AURA-Presenter`. |
+| `processing` | 409 | The drawing is not `ready` yet. |
+
+All of these are 4xx, so the frontend shows an error card and never falls back.
+
+### Conformance JSON
+
+`src/api/conformance.fixtures.json` is generated from `conformance.fixtures.ts` (`npm run fixtures:export`) and a unit test keeps the two in sync. `backend/tests/test_contract.py` reads the JSON.
 
 ## Conformance
 

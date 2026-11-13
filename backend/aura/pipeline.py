@@ -1,0 +1,315 @@
+"""One pipeline for /ask and /chat: understand → tools → answer → check.
+
+`run(...)` is an async generator of (event, data) pairs in the /chat order:
+understood, (tool_call, tool_result)*, check?, answer | error. /ask collects it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+
+from aura import answer as A
+from aura import tools
+from aura.budget import Budget, BudgetError
+from aura.cache import AnswerCache, CheckCache, answer_key
+from aura.config import Settings, models_enabled
+from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse
+from aura.gemini.check import check_key, default_anchors, run_check, slice_check
+from aura.gemini.client import GeminiClient, GeminiError
+from aura.gemini.understand import understand
+from aura.router import FIRE_PATTERN, route
+from aura.store import Store
+from aura.writer import Writer
+
+log = logging.getLogger("aura.pipeline")
+
+MODEL_STEP_TIMEOUT_S = 8.0  # a model step never holds a geometry answer past the 15 s client abort
+
+
+class PipelineError(Exception):
+    def __init__(self, code: str, message: str, status: int = 400):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+@dataclass
+class Services:
+    settings: Settings
+    budget: Budget
+    client: GeminiClient | None
+    registry: tools.Registry
+    store: Store | None
+    writer: Writer | None
+    answers: AnswerCache
+    checks: CheckCache
+    check_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+
+    def models_usable(self) -> bool:
+        return (self.client is not None and self.client.available() and models_enabled()
+                and self.budget.can_spend())
+
+
+@dataclass
+class Caller:
+    ip_hash: str | None = None
+    presenter: bool = False
+
+
+def _tool_events(built: A.Built) -> list[tuple[str, dict]]:
+    """tool_call / tool_result pairs for the trace nodes that carry a tool."""
+    out: list[tuple[str, dict]] = []
+    by_id = {r.result_id: r for r in built.results}
+    for node in built.body["trace"]:
+        tool = node.get("tool")
+        if not tool:
+            continue
+        r = by_id.get(tool["result_id"])
+        out.append(("tool_call", {"node": node}))
+        out.append(("tool_result", {
+            "node_id": node["id"],
+            "evidence": {"boxes": [b.model_dump(exclude_none=True) for b in r.boxes] if r else [],
+                         "rooms": [x.model_dump(exclude_none=True) for x in r.rooms] if r else []},
+            "summary": r.summary if r else "",
+        }))
+    return out
+
+
+async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller: Caller,
+                  stats: dict) -> A.Built:
+    question = req.question.strip()
+    r = route(question, d.ctx)
+    lang = r.lang if r.lang_signal else (req.lang_hint or "en")
+    overrides = [o.model_dump() for o in req.overrides or []]
+    req_scope = req.scope.model_dump(exclude_none=True) if req.scope else None
+    intent, subject, text_scope, tag, conf = r.intent, r.subject, r.scope, "router", None
+
+    if intent == "unknown":
+        if svc.models_usable():
+            try:
+                async with asyncio.timeout(MODEL_STEP_TIMEOUT_S):
+                    u = await understand(
+                        svc.client, question,  # type: ignore[arg-type]
+                        units=d.ctx.units, labels=d.ctx.labels, image_path=d.image_path(),
+                        ip_hash=caller.ip_hash, presenter=caller.presenter)
+            except (BudgetError, GeminiError, TimeoutError) as e:
+                stats["no_cache"] = True  # a temporary refusal must not stick
+                look = ("The question matched no template, and the model step was skipped: "
+                        f"{e or 'timeout'}.")
+                return A.unclear(question, lang, d, intent_tag="router", look=look)
+            stats["calls"] += u.calls
+            stats["cost_usd"] += u.cost_usd
+            stats["route"] = "choice"
+            tag, conf = f"Decisions API · {u.intent_conf:.2f}", u.intent_conf
+            if u.off_drawing:
+                return A.abstain(
+                    question, lang, {"kind": "floor"}, "not_on_drawing", "(off the drawing)",
+                    f"The model judged this information is not shown on the drawing "
+                    f"(p = {u.on_drawing:.2f}).", intent_body="abstain · not on drawing",
+                    intent_tag=tag)
+            if not u.confident:
+                return A.unclear(question, lang, d, intent_tag=tag)
+            if u.intent == "count" and u.subject:
+                intent, subject = "count", u.subject
+            elif u.intent == "area":
+                intent = "area"
+            elif u.intent == "length":
+                return A.abstain_topic(question, lang, "length", intent_tag=tag)
+            elif u.intent == "text":
+                return A.abstain(
+                    question, lang, {"kind": "floor"}, "not_supported_yet", "(a list or text fact)",
+                    "Lists and other non-numeric facts are not extracted from this drawing yet.",
+                    intent_body="text · not extracted yet", intent_tag=tag)
+            else:
+                return A.unclear(question, lang, d, intent_tag=tag)
+            if text_scope is None and u.scope and u.scope_conf >= 0.6:
+                text_scope = u.scope
+        else:
+            return A.unclear(question, lang, d)
+
+    if intent == "find_text":
+        pattern = r.pattern or FIRE_PATTERN
+        tr = tools.find_text(d, pattern, subject or "label")
+        if tr.text:
+            return A.text(question, lang, d, tr, subject or "label",
+                          _text_boxes(tr), intent_tag=tag)
+        n_texts = len(d.drawing.get("texts") or [])
+        look = (f"Searched the printed text on this drawing for fire ratings (EI30, 30 MIN, T30): "
+                f"none found{f' among {n_texts} texts' if n_texts else ''}.")
+        return A.abstain_topic(question, lang, r.topic or "fire", intent_tag=tag, results=[tr],
+                               look=look)
+
+    if intent == "abstain":
+        return A.abstain_topic(question, lang, r.topic or "material", intent_tag=tag)
+
+    scope = req_scope or text_scope or {"kind": "floor"}
+
+    if intent == "count":
+        subj = subject or "room"
+        tr = tools.count_objects(d, subj, scope)
+        if not tr.supported:
+            return A.not_supported(question, lang, scope, tr, intent_tag=tag)
+        if tr.kind == "none":
+            return A.unclear(question, lang, d, scope, intent_tag=tag)
+        return A.count(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf)
+
+    tr = tools.room_areas(d, scope, overrides or None)
+    if tr.kind == "none":
+        return A.unclear(question, lang, d, scope, intent_tag=tag)
+    return A.area(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf)
+
+
+def _text_boxes(tr) -> list[dict]:
+    """Printed-text boxes, once the contract allows a text subject on Box (pending L3)."""
+    return []
+
+
+async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: Caller,
+                 stats: dict) -> dict | None:
+    subject = built.subject
+    if not built.check_ids or subject not in BOX_SUBJECTS:
+        return None
+    layer = tools.count_objects(d, subject, {"kind": "floor"})
+    boxes = [b.model_dump() for b in layer.boxes]
+    ids = [b["id"] for b in boxes]
+    key = check_key(d.id, subject, ids)
+    full = svc.checks.get(key, d.dir, subject)
+    cached = full is not None
+    if full is None:
+        image = d.image_path()
+        if image is None or not svc.models_usable():
+            return None
+        lock = svc.check_locks.setdefault(key, asyncio.Lock())
+        async with lock:  # concurrent first asks share one request
+            full = svc.checks.get(key, d.dir, subject)
+            cached = full is not None
+            if full is None:
+                anchors = d.anchors or default_anchors(d.drawing.get("rooms", []), boxes)
+                try:
+                    async with asyncio.timeout(MODEL_STEP_TIMEOUT_S):
+                        full = await run_check(
+                            svc.client,  # type: ignore[arg-type]
+                            drawing_id=d.id, image_path=image, subject=subject, boxes=boxes,
+                            anchors=anchors, ip_hash=caller.ip_hash, presenter=caller.presenter)
+                except (BudgetError, GeminiError, TimeoutError) as e:
+                    log.warning("check skipped: %s", e or "timeout")
+                    stats["check_note"] = str(e) or "timeout"
+                    stats["no_cache"] = True
+                    return None
+                full["key"] = key
+                svc.checks.put(key, d.id, subject, full)
+    sliced = slice_check(full, built.check_ids)
+    if sliced is None:
+        return None
+    stats["check_calls"] = 0 if cached else 1
+    stats["check_cost_usd"] = 0.0 if cached else float(full.get("cost_usd") or 0)
+    stats["check_tokens"] = 0 if cached else int(full.get("input_tokens") or 0)
+    return sliced
+
+
+def _check_node(check: dict, cached: bool, stats: dict, subject: str) -> dict:
+    lc = check["least_certain_id"]
+    p_lc = check["per_box"][lc]
+    agreed = check.get("agreed")
+    total = check["total"]
+    parts = [(f"Gemini Decisions looked at {total} drawn {A.noun(subject, total)} as zoomed tiles "
+              "of the dataset image.")]
+    if agreed is not None:
+        parts.append(f"{agreed} of {total} agreed (score above the known-negative anchors, "
+                     f"{check['anchors_max']:.2f}, by 0.05).")
+    parts.append(f"Least certain: {lc} at {p_lc:.2f}; check that one first.")
+    parts.append("The check covers drawn boxes only; it cannot find missed objects.")
+    if cached:
+        parts.append("Cached check: 0 model calls for this answer.")
+    else:
+        parts.append(f"1 model call, {stats['check_tokens']} tokens, ${stats['check_cost_usd']:.4f}.")
+    return {"id": "check", "parent": "q", "title": "Cross-check on the image",
+            "tag": "Decisions API · " + ("cached" if cached else "live"),
+            "body": " ".join(parts), "kind": "model", "confidence": round(p_lc, 3),
+            "evidence_ids": check["ranking"]}
+
+
+async def run(svc: Services, req: AskRequest, caller: Caller) -> AsyncIterator[tuple[str, dict]]:
+    t0 = time.perf_counter()
+    d = svc.registry.get(req.drawing_id)
+    if d is None:
+        raise PipelineError("unknown_drawing", f"Unknown drawing '{req.drawing_id}'", 404)
+    scope_dump = req.scope.model_dump(exclude_none=True) if req.scope else None
+    ov_dump = [o.model_dump() for o in req.overrides] if req.overrides else None
+    key = answer_key(d.id, req.question, scope_dump, ov_dump, req.lang_hint, models_enabled())
+    hit = svc.answers.get(key)
+    if hit is not None:
+        body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
+                            "latency_ms": int((time.perf_counter() - t0) * 1000)}
+        yield "understood", {"detected_lang": body["detected_lang"],
+                             "canonical_en": body["canonical_en"], "route": "cache"}
+        if "check" in body:
+            yield "check", {"check": body["check"]}
+        yield "answer", {"response": body}
+        return
+
+    stats = {"calls": 0, "cost_usd": 0.0, "route": "template", "check_calls": 0,
+             "check_cost_usd": 0.0, "check_tokens": 0}
+    built = await _decide(svc, req, d, caller, stats)
+    yield "understood", {"detected_lang": built.body["detected_lang"],
+                         "canonical_en": built.body["canonical_en"], "route": stats["route"]}
+    for ev in _tool_events(built):
+        yield ev
+
+    check = await _check(svc, d, built, caller, stats)
+    body = built.body
+    if check is not None:
+        body["check"] = check
+        node = _check_node(check, stats["check_calls"] == 0, stats, built.subject or "")
+        body["trace"] = [node if n["id"] == "check" else n for n in body["trace"]]
+        yield "check", {"check": check}
+    elif stats.get("check_note"):
+        for n in body["trace"]:
+            if n["id"] == "check":
+                n["body"] = f"The image check was skipped: {stats['check_note']}."
+                n["tag"] = "Decisions API · skipped"
+
+    body["calls"] = stats["calls"]
+    body["cost_usd"] = round(stats["cost_usd"], 6)
+    body["route"] = stats["route"]
+    body["answer_id"] = "a-" + uuid.uuid4().hex[:16]
+    body["latency_ms"] = int((time.perf_counter() - t0) * 1000)
+    resp = AskResponse.model_validate(body)  # contract gate: fails loudly on a bad body
+    out = resp.model_dump(exclude_none=True)
+    _persist(svc, d.id, req.question, out, stats)
+    if not stats.get("no_cache"):
+        cached_body = out
+        if check is not None and stats["check_calls"]:
+            node = _check_node(check, True, stats, built.subject or "")
+            cached_body = out | {"trace": [node if n["id"] == "check" else n
+                                           for n in out["trace"]]}
+        svc.answers.put(key, cached_body)
+    yield "answer", {"response": out}
+
+
+def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: dict) -> None:
+    if svc.writer is None:
+        return
+    import json
+
+    now = time.time()
+    svc.writer.submit(
+        "INSERT INTO answers(id, t, day, drawing_id, question, route, method, calls, cost_usd, "
+        "check_calls, check_cost_usd, response) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (body["answer_id"], now, svc.budget.day(now), drawing_id, question, body.get("route"),
+         body["method"], body["calls"], body["cost_usd"], stats["check_calls"],
+         stats["check_cost_usd"], json.dumps(body, ensure_ascii=False)),
+    )
+
+
+async def ask(svc: Services, req: AskRequest, caller: Caller) -> dict:
+    async for event, data in run(svc, req, caller):
+        if event == "answer":
+            return data["response"]
+    raise PipelineError("internal", "The pipeline ended without an answer.", 500)
+

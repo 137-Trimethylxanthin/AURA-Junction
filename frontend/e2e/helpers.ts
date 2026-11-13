@@ -39,7 +39,7 @@ export const planBoxes = (page: Page) => stageOf(page).locator('button[data-evid
 export const planRooms = (page: Page) => stageOf(page).locator('polygon[data-evidence-id]')
 
 export async function open(page: Page) {
-  await page.goto('/')
+  await page.goto('/d/swiss-46639')
   await expect(composerOf(page)).toBeVisible()
   // The plan image must be in before geometry-dependent interactions.
   await expect(stageOf(page).locator('img').first()).toHaveJSProperty('complete', true)
@@ -93,3 +93,37 @@ export function watchConsole(page: Page): string[] {
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`))
   return errors
 }
+
+/** Visible text below 12 px. */
+export async function smallText(page: Page) {
+  return page.evaluate(() => {
+    const out: string[] = []
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const el = n.parentElement
+      if (!n.textContent?.trim() || !el) continue
+      if (!el.checkVisibility?.({ checkVisibilityCSS: true } as never)) continue
+      const r = el.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) continue
+      const size = parseFloat(getComputedStyle(el).fontSize)
+      if (size < 12) out.push(`${size}px "${n.textContent.trim().slice(0, 30)}"`)
+    }
+    return out
+  })
+}
+
+/** Buttons and stand-alone links must be 40 px; links inside running text (p) are exempt. */
+export async function smallTargets(page: Page) {
+  return page.evaluate(() => {
+    const out: string[] = []
+    for (const el of Array.from(document.querySelectorAll('button, a[href], [role=radio]'))) {
+      if (!(el as HTMLElement).checkVisibility?.({ checkVisibilityCSS: true } as never)) continue
+      if (el.tagName === 'A' && el.closest('p')) continue
+      const r = el.getBoundingClientRect()
+      if (r.width === 0 || r.height === 0) continue
+      if (r.width < 39.5 || r.height < 39.5) out.push(`${el.tagName} "${el.textContent?.trim().slice(0, 24)}" ${r.width}x${r.height}`)
+    }
+    return out
+  })
+}
+

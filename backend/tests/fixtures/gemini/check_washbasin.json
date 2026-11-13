@@ -1,0 +1,189 @@
+{
+ "source": "recorded",
+ "note": "Live tile check, swiss-46639 washbasin layer, 5 boxes + 3 room-text anchors, tiles cut from design/assets/original-crop.png (384 px, medium). Image bytes stripped.",
+ "recorded_at": "2026-11-14T01:34:08+0200",
+ "path": "/decisions",
+ "request": {
+  "model": "gemini-decision-1",
+  "input": [
+   {
+    "type": "text",
+    "text": "Zoomed tiles cut from one architectural floor plan. Each tile has one magenta rectangle marking a candidate object.\n"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 1:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:6352eadb2bdf7514",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 2:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:f14d004260ff1ecb",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 3:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:03e356543264937f",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 4:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:f8ad6c2d61792a15",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 5:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:763276c465c85596",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 6:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:c4b5770e43e2d2e3",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 7:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:5500c86d48ec3c88",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 8:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:f5fd91a0c19edf8e",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   }
+  ],
+  "questions": {
+   "b01": {
+    "type": "noul",
+    "instructions": "In tile 1, does the magenta rectangle mark a washbasin?"
+   },
+   "b02": {
+    "type": "noul",
+    "instructions": "In tile 2, does the magenta rectangle mark a washbasin?"
+   },
+   "b03": {
+    "type": "noul",
+    "instructions": "In tile 3, does the magenta rectangle mark a washbasin?"
+   },
+   "b04": {
+    "type": "noul",
+    "instructions": "In tile 4, does the magenta rectangle mark a washbasin?"
+   },
+   "b05": {
+    "type": "noul",
+    "instructions": "In tile 5, does the magenta rectangle mark a washbasin?"
+   },
+   "a06": {
+    "type": "noul",
+    "instructions": "In tile 6, does the magenta rectangle mark a washbasin?"
+   },
+   "a07": {
+    "type": "noul",
+    "instructions": "In tile 7, does the magenta rectangle mark a washbasin?"
+   },
+   "a08": {
+    "type": "noul",
+    "instructions": "In tile 8, does the magenta rectangle mark a washbasin?"
+   }
+  }
+ },
+ "status": 200,
+ "response": {
+  "answers": {
+   "b01": {
+    "confidence": 0.6461336895087199,
+    "noul": 0.6461336895087199,
+    "type": "noul"
+   },
+   "b04": {
+    "confidence": 0.7384625119964017,
+    "noul": 0.2615374880035984,
+    "type": "noul"
+   },
+   "a08": {
+    "confidence": 0.9163608570752919,
+    "noul": 0.08363914292470806,
+    "type": "noul"
+   },
+   "b02": {
+    "confidence": 0.5604831644601254,
+    "noul": 0.5604831644601254,
+    "type": "noul"
+   },
+   "b05": {
+    "confidence": 0.5200583061702828,
+    "noul": 0.47994169382971713,
+    "type": "noul"
+   },
+   "a06": {
+    "confidence": 0.917598590962035,
+    "noul": 0.08240140903796499,
+    "type": "noul"
+   },
+   "a07": {
+    "confidence": 0.9257262564021456,
+    "noul": 0.07427374359785438,
+    "type": "noul"
+   },
+   "b03": {
+    "confidence": 0.6962610338806534,
+    "noul": 0.6962610338806534,
+    "type": "noul"
+   }
+  },
+  "usage": {
+   "total_tokens": 4784,
+   "total_input_tokens": 4784,
+   "input_tokens_by_modality": [
+    {
+     "modality": "text",
+     "tokens": 552
+    },
+    {
+     "modality": "image",
+     "tokens": 4232
+    }
+   ],
+   "total_output_tokens": 0
+  }
+ }
+}

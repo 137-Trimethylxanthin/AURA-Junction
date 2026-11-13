@@ -1,0 +1,1569 @@
+{
+ "dataset": "swiss_dwellings",
+ "solver": "aura.solvers.swiss",
+ "calls": 0,
+ "cost_usd": 0,
+ "files": 1040,
+ "questions": 18792,
+ "languages": [
+  "en"
+ ],
+ "coverage": "English (How/What) swiss_dwellings questions only, one per gold fact; the de/fr/it twin lines ask the same facts and are not scored here",
+ "dataset_swiss_lines": 37584,
+ "solver_deviations_from_probe": [
+  "An apartment label lying outside every unit outline is attached to the nearest unit without a label (2 of 1,040 drawings: site1124_bldg2267_floor10438, site744_bldg18013_floor48161), so the rooms carry the letter and the UI apartment count equals the answer. No score changes.",
+  "Area values are the sum of per-room areas rounded to 2 dp (what the UI recomputes)."
+ ],
+ "correct": 18606,
+ "pct": 99.01,
+ "probe_reference": {
+  "correct": 18606,
+  "questions": 18792,
+  "pct": 99.01
+ },
+ "runtime_s": 40.7,
+ "jobs": 16,
+ "measured_at": "2026-11-13T23:44:58+00:00",
+ "families": {
+  "apartments": {
+   "correct": 1040,
+   "n": 1040
+  },
+  "apt_area": {
+   "correct": 1800,
+   "n": 1875
+  },
+  "bathtub": {
+   "correct": 894,
+   "n": 897
+  },
+  "count_label": {
+   "correct": 6360,
+   "n": 6365
+  },
+  "doors": {
+   "correct": 1040,
+   "n": 1040
+  },
+  "floor_area": {
+   "correct": 964,
+   "n": 1040
+  },
+  "label_area": {
+   "correct": 1015,
+   "n": 1017
+  },
+  "room_area": {
+   "correct": 2066,
+   "n": 2076
+  },
+  "shower": {
+   "correct": 320,
+   "n": 322
+  },
+  "washbasin": {
+   "correct": 1030,
+   "n": 1040
+  },
+  "wc": {
+   "correct": 1037,
+   "n": 1040
+  },
+  "windows": {
+   "correct": 1040,
+   "n": 1040
+  }
+ },
+ "evidence_ui_mismatches": 0,
+ "evidence_ui_mismatch_rows": [],
+ "misses": [
+  {
+   "line": 91543,
+   "file": "site1005_bldg2087_floor9545.dxf",
+   "family": "apt_area",
+   "gold": 52.17,
+   "pred": 55.53,
+   "q": "What is the net floor area of apartment H in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 90177,
+   "file": "site1008_bldg2090_floor46975.dxf",
+   "family": "floor_area",
+   "gold": 303.64,
+   "pred": 326.32,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 115975,
+   "file": "site1009_bldg2091_floor9508.dxf",
+   "family": "floor_area",
+   "gold": 221.05,
+   "pred": 247.43,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 101883,
+   "file": "site102_bldg66_floor248.dxf",
+   "family": "floor_area",
+   "gold": 406.7,
+   "pred": 424.74,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 91715,
+   "file": "site10346_bldg14965_floor39285.dxf",
+   "family": "apt_area",
+   "gold": 81.87,
+   "pred": 94.46,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 91717,
+   "file": "site10346_bldg14965_floor39285.dxf",
+   "family": "apt_area",
+   "gold": 82.09,
+   "pred": 94.69,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 113735,
+   "file": "site10377_bldg15002_floor39313.dxf",
+   "family": "apt_area",
+   "gold": 115.75,
+   "pred": 125.8,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 111295,
+   "file": "site1049_bldg2174_floor50837.dxf",
+   "family": "room_area",
+   "gold": 16.8,
+   "pred": 17.31,
+   "q": "What is the net floor area of room 4.16 ('Korridor') in m²?"
+  },
+  {
+   "line": 104377,
+   "file": "site1052_bldg2158_floor9753.dxf",
+   "family": "floor_area",
+   "gold": 458.51,
+   "pred": 477.9,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 97897,
+   "file": "site1054_bldg2164_floor9776.dxf",
+   "family": "apt_area",
+   "gold": 179.37,
+   "pred": 193.54,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 114061,
+   "file": "site1063_bldg2181_floor9927.dxf",
+   "family": "apt_area",
+   "gold": 86.22,
+   "pred": 88.09,
+   "q": "What is the net floor area of apartment C in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 97997,
+   "file": "site1069_bldg2192_floor10003.dxf",
+   "family": "apt_area",
+   "gold": 59.17,
+   "pred": 62.6,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 97999,
+   "file": "site1069_bldg2192_floor10003.dxf",
+   "family": "apt_area",
+   "gold": 57.45,
+   "pred": 62.15,
+   "q": "What is the net floor area of apartment E in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 98003,
+   "file": "site1069_bldg2192_floor10003.dxf",
+   "family": "floor_area",
+   "gold": 349.96,
+   "pred": 370.07,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 121721,
+   "file": "site1098_bldg2234_floor10334.dxf",
+   "family": "apt_area",
+   "gold": 63.67,
+   "pred": 70.01,
+   "q": "What is the net floor area of apartment C in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 121723,
+   "file": "site1098_bldg2234_floor10334.dxf",
+   "family": "apt_area",
+   "gold": 33.3,
+   "pred": 37.95,
+   "q": "What is the net floor area of apartment E in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 121727,
+   "file": "site1098_bldg2234_floor10334.dxf",
+   "family": "floor_area",
+   "gold": 396.52,
+   "pred": 421.85,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 113331,
+   "file": "site1120_bldg2263_floor10420.dxf",
+   "family": "apt_area",
+   "gold": 112.89,
+   "pred": 123.06,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 124061,
+   "file": "site11433_bldg17964_floor47077.dxf",
+   "family": "room_area",
+   "gold": 1.35,
+   "pred": 1.6,
+   "q": "What is the net floor area of room 4.26 ('Reduit') in m²?"
+  },
+  {
+   "line": 114133,
+   "file": "site11680_bldg18228_floor48799.dxf",
+   "family": "apt_area",
+   "gold": 63.71,
+   "pred": 77.16,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 114135,
+   "file": "site11680_bldg18228_floor48799.dxf",
+   "family": "apt_area",
+   "gold": 64.5,
+   "pred": 77.83,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 114139,
+   "file": "site11680_bldg18228_floor48799.dxf",
+   "family": "floor_area",
+   "gold": 139.94,
+   "pred": 167.07,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 100251,
+   "file": "site11690_bldg18238_floor48812.dxf",
+   "family": "floor_area",
+   "gold": 408.18,
+   "pred": 431.89,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 91785,
+   "file": "site11706_bldg18263_floor48980.dxf",
+   "family": "room_area",
+   "gold": 11.36,
+   "pred": 12.03,
+   "q": "What is the net floor area of room 1.09 ('Treppenhaus') in m²?"
+  },
+  {
+   "line": 104685,
+   "file": "site11710_bldg18267_floor48988.dxf",
+   "family": "apt_area",
+   "gold": 88.3,
+   "pred": 90.33,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 104687,
+   "file": "site11710_bldg18267_floor48988.dxf",
+   "family": "apt_area",
+   "gold": 73.22,
+   "pred": 75.25,
+   "q": "What is the net floor area of apartment C in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 104689,
+   "file": "site11710_bldg18267_floor48988.dxf",
+   "family": "floor_area",
+   "gold": 346.39,
+   "pred": 354.75,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 103407,
+   "file": "site11733_bldg18301_floor49303.dxf",
+   "family": "floor_area",
+   "gold": 324.39,
+   "pred": 353.57,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 114287,
+   "file": "site11739_bldg18326_floor49484.dxf",
+   "family": "floor_area",
+   "gold": 236.16,
+   "pred": 244.62,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 103503,
+   "file": "site1173_bldg2338_floor10813.dxf",
+   "family": "room_area",
+   "gold": 38.35,
+   "pred": 44.64,
+   "q": "What is the net floor area of room 3.46 ('Corridoio') in m²?"
+  },
+  {
+   "line": 103511,
+   "file": "site1173_bldg2338_floor10813.dxf",
+   "family": "floor_area",
+   "gold": 619.11,
+   "pred": 690.77,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 117587,
+   "file": "site11749_bldg18339_floor49606.dxf",
+   "family": "floor_area",
+   "gold": 151.16,
+   "pred": 199.86,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 93087,
+   "file": "site11876_bldg18543_floor50596.dxf",
+   "family": "floor_area",
+   "gold": 367.25,
+   "pred": 392.37,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 120121,
+   "file": "site11888_bldg18555_floor50661.dxf",
+   "family": "floor_area",
+   "gold": 185.09,
+   "pred": 201.08,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 123397,
+   "file": "site11892_bldg18566_floor50778.dxf",
+   "family": "floor_area",
+   "gold": 288.85,
+   "pred": 305.37,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 100507,
+   "file": "site1209_bldg2378_floor11025.dxf",
+   "family": "count_label",
+   "gold": 6,
+   "pred": 7,
+   "q": "How many rooms labelled 'Bad' are there on this floor?"
+  },
+  {
+   "line": 116621,
+   "file": "site1220_bldg2393_floor11132.dxf",
+   "family": "apt_area",
+   "gold": 35.46,
+   "pred": 39.24,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 115805,
+   "file": "site1273_bldg2474_floor11569.dxf",
+   "family": "apt_area",
+   "gold": 344.56,
+   "pred": 365.04,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 115807,
+   "file": "site1273_bldg2474_floor11569.dxf",
+   "family": "apt_area",
+   "gold": 261.05,
+   "pred": 231.93,
+   "q": "What is the net floor area of apartment C in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 98253,
+   "file": "site1280_bldg2497_floor11675.dxf",
+   "family": "apt_area",
+   "gold": 99.14,
+   "pred": 102.22,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 98259,
+   "file": "site1280_bldg2497_floor11675.dxf",
+   "family": "floor_area",
+   "gold": 267.95,
+   "pred": 275.09,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 101543,
+   "file": "site132_bldg81_floor387.dxf",
+   "family": "floor_area",
+   "gold": 265.15,
+   "pred": 295.46,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 114313,
+   "file": "site145_bldg312_floor1257.dxf",
+   "family": "room_area",
+   "gold": 12.45,
+   "pred": 13.0,
+   "q": "What is the net floor area of room U1.08 ('Cage d'escalier') in m²?"
+  },
+  {
+   "line": 102245,
+   "file": "site157_bldg323_floor1313.dxf",
+   "family": "apt_area",
+   "gold": 72.5,
+   "pred": 77.1,
+   "q": "What is the net floor area of apartment D in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 102247,
+   "file": "site157_bldg323_floor1313.dxf",
+   "family": "apt_area",
+   "gold": 72.66,
+   "pred": 76.26,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 102251,
+   "file": "site157_bldg323_floor1313.dxf",
+   "family": "floor_area",
+   "gold": 537.68,
+   "pred": 565.38,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 109119,
+   "file": "site1603_bldg2796_floor50802.dxf",
+   "family": "apt_area",
+   "gold": 98.11,
+   "pred": 103.57,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 92123,
+   "file": "site1684_bldg2836_floor13085.dxf",
+   "family": "floor_area",
+   "gold": 700.17,
+   "pred": 1098.45,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 119361,
+   "file": "site171_bldg350_floor1442.dxf",
+   "family": "apt_area",
+   "gold": 119.14,
+   "pred": 123.12,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 99961,
+   "file": "site173_bldg357_floor1469.dxf",
+   "family": "apt_area",
+   "gold": 156.58,
+   "pred": 191.55,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 99965,
+   "file": "site173_bldg357_floor1469.dxf",
+   "family": "floor_area",
+   "gold": 394.84,
+   "pred": 429.81,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 126039,
+   "file": "site185_bldg372_floor1497.dxf",
+   "family": "apt_area",
+   "gold": 165.36,
+   "pred": 183.19,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 110345,
+   "file": "site1876_bldg2908_floor13321.dxf",
+   "family": "apt_area",
+   "gold": 77.28,
+   "pred": 81.12,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 110349,
+   "file": "site1876_bldg2908_floor13321.dxf",
+   "family": "floor_area",
+   "gold": 858.52,
+   "pred": 894.34,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 117307,
+   "file": "site189_bldg376_floor11867.dxf",
+   "family": "apt_area",
+   "gold": 59.63,
+   "pred": 66.18,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 100405,
+   "file": "site194_bldg383_floor1527.dxf",
+   "family": "wc",
+   "gold": 3,
+   "pred": 4,
+   "q": "How many toilets (WC) are drawn on this floor plan?"
+  },
+  {
+   "line": 100407,
+   "file": "site194_bldg383_floor1527.dxf",
+   "family": "washbasin",
+   "gold": 5,
+   "pred": 4,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 100419,
+   "file": "site194_bldg383_floor1527.dxf",
+   "family": "apt_area",
+   "gold": 107.98,
+   "pred": 111.41,
+   "q": "What is the net floor area of apartment D in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 100997,
+   "file": "site2135_bldg2978_floor13581.dxf",
+   "family": "floor_area",
+   "gold": 84.14,
+   "pred": 86.5,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 105897,
+   "file": "site213_bldg402_floor1599.dxf",
+   "family": "apt_area",
+   "gold": 115.35,
+   "pred": 118.32,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 105901,
+   "file": "site213_bldg402_floor1599.dxf",
+   "family": "floor_area",
+   "gold": 246.09,
+   "pred": 251.11,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 113661,
+   "file": "site2149_bldg2996_floor13656.dxf",
+   "family": "apt_area",
+   "gold": 77.78,
+   "pred": 79.55,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 97857,
+   "file": "site2150_bldg3001_floor13690.dxf",
+   "family": "apt_area",
+   "gold": 37.6,
+   "pred": 39.85,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 97861,
+   "file": "site2150_bldg3001_floor13690.dxf",
+   "family": "floor_area",
+   "gold": 220.29,
+   "pred": 225.67,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 124103,
+   "file": "site2155_bldg3005_floor13704.dxf",
+   "family": "floor_area",
+   "gold": 172.19,
+   "pred": 176.32,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 103869,
+   "file": "site221_bldg410_floor1634.dxf",
+   "family": "apt_area",
+   "gold": 72.97,
+   "pred": 75.17,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 111855,
+   "file": "site2257_bldg3195_floor14336.dxf",
+   "family": "floor_area",
+   "gold": 351.46,
+   "pred": 385.16,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 103545,
+   "file": "site2258_bldg3196_floor14349.dxf",
+   "family": "apt_area",
+   "gold": 46.24,
+   "pred": 47.81,
+   "q": "What is the net floor area of apartment C in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 113475,
+   "file": "site2263_bldg3257_floor14384.dxf",
+   "family": "apt_area",
+   "gold": 93.89,
+   "pred": 58.51,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 94245,
+   "file": "site2271_bldg3279_floor14525.dxf",
+   "family": "floor_area",
+   "gold": 358.13,
+   "pred": 384.0,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 110241,
+   "file": "site2289_bldg3374_floor15034.dxf",
+   "family": "floor_area",
+   "gold": 200.04,
+   "pred": 228.42,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 123609,
+   "file": "site246_bldg452_floor1776.dxf",
+   "family": "apt_area",
+   "gold": 71.38,
+   "pred": 75.32,
+   "q": "What is the net floor area of apartment F in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 123615,
+   "file": "site246_bldg452_floor1776.dxf",
+   "family": "floor_area",
+   "gold": 369.48,
+   "pred": 385.94,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 98883,
+   "file": "site248_bldg456_floor1800.dxf",
+   "family": "count_label",
+   "gold": 5,
+   "pred": 6,
+   "q": "How many rooms labelled 'Bad' are there on this floor?"
+  },
+  {
+   "line": 106763,
+   "file": "site251_bldg460_floor1821.dxf",
+   "family": "apt_area",
+   "gold": 86.22,
+   "pred": 88.07,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 106765,
+   "file": "site251_bldg460_floor1821.dxf",
+   "family": "apt_area",
+   "gold": 75.8,
+   "pred": 77.68,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 106769,
+   "file": "site251_bldg460_floor1821.dxf",
+   "family": "floor_area",
+   "gold": 162.02,
+   "pred": 165.75,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 113895,
+   "file": "site253_bldg462_floor1823.dxf",
+   "family": "count_label",
+   "gold": 2,
+   "pred": 3,
+   "q": "How many rooms labelled 'Cage d'escalier' are there on this floor?"
+  },
+  {
+   "line": 113919,
+   "file": "site253_bldg462_floor1823.dxf",
+   "family": "floor_area",
+   "gold": 579.6,
+   "pred": 620.56,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 122967,
+   "file": "site256_bldg465_floor1839.dxf",
+   "family": "floor_area",
+   "gold": 255.73,
+   "pred": 277.37,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 112817,
+   "file": "site273_bldg495_floor4161.dxf",
+   "family": "room_area",
+   "gold": 18.2,
+   "pred": 19.01,
+   "q": "What is the net floor area of room 2.50 ('Treppenhaus') in m²?"
+  },
+  {
+   "line": 123179,
+   "file": "site288_bldg533_floor15119.dxf",
+   "family": "floor_area",
+   "gold": 164.42,
+   "pred": 171.15,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 91441,
+   "file": "site30_bldg262_floor1025.dxf",
+   "family": "floor_area",
+   "gold": 233.1,
+   "pred": 245.87,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 102279,
+   "file": "site317_bldg647_floor2745.dxf",
+   "family": "bathtub",
+   "gold": 6,
+   "pred": 5,
+   "q": "How many bathtubs are drawn on this floor plan?"
+  },
+  {
+   "line": 102281,
+   "file": "site317_bldg647_floor2745.dxf",
+   "family": "shower",
+   "gold": 2,
+   "pred": 3,
+   "q": "How many showers are drawn on this floor plan?"
+  },
+  {
+   "line": 125285,
+   "file": "site3229_bldg4912_floor22503.dxf",
+   "family": "apt_area",
+   "gold": 49.68,
+   "pred": 58.75,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 125289,
+   "file": "site3229_bldg4912_floor22503.dxf",
+   "family": "floor_area",
+   "gold": 51.5,
+   "pred": 58.75,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 120559,
+   "file": "site329_bldg669_floor2845.dxf",
+   "family": "floor_area",
+   "gold": 218.04,
+   "pred": 238.06,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 119073,
+   "file": "site333_bldg692_floor3958.dxf",
+   "family": "apt_area",
+   "gold": 73.52,
+   "pred": 77.72,
+   "q": "What is the net floor area of apartment E in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 119075,
+   "file": "site333_bldg692_floor3958.dxf",
+   "family": "apt_area",
+   "gold": 81.74,
+   "pred": 88.32,
+   "q": "What is the net floor area of apartment D in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 119079,
+   "file": "site333_bldg692_floor3958.dxf",
+   "family": "floor_area",
+   "gold": 517.18,
+   "pred": 560.35,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 117935,
+   "file": "site3418_bldg5292_floor23599.dxf",
+   "family": "room_area",
+   "gold": 7.56,
+   "pred": 210.4,
+   "q": "What is the net floor area of room 2.12 ('Treppenhaus') in m²?"
+  },
+  {
+   "line": 117939,
+   "file": "site3418_bldg5292_floor23599.dxf",
+   "family": "apt_area",
+   "gold": 105.83,
+   "pred": 898.9,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 117941,
+   "file": "site3418_bldg5292_floor23599.dxf",
+   "family": "label_area",
+   "gold": 44.02,
+   "pred": 244.46,
+   "q": "What is the total net area in m² of all rooms labelled 'Schlafzimmer' on this floor?"
+  },
+  {
+   "line": 117943,
+   "file": "site3418_bldg5292_floor23599.dxf",
+   "family": "floor_area",
+   "gold": 113.39,
+   "pred": 898.9,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 94999,
+   "file": "site3540_bldg5422_floor23773.dxf",
+   "family": "apt_area",
+   "gold": 36.36,
+   "pred": 37.82,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 104403,
+   "file": "site3565_bldg5449_floor23802.dxf",
+   "family": "room_area",
+   "gold": 13.99,
+   "pred": 17.23,
+   "q": "What is the net floor area of room 4.15 ('Korridor') in m²?"
+  },
+  {
+   "line": 104411,
+   "file": "site3565_bldg5449_floor23802.dxf",
+   "family": "floor_area",
+   "gold": 159.84,
+   "pred": 178.21,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 113805,
+   "file": "site3621_bldg5569_floor24131.dxf",
+   "family": "apt_area",
+   "gold": 65.64,
+   "pred": 69.88,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 113807,
+   "file": "site3621_bldg5569_floor24131.dxf",
+   "family": "apt_area",
+   "gold": 78.57,
+   "pred": 82.87,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 113811,
+   "file": "site3621_bldg5569_floor24131.dxf",
+   "family": "floor_area",
+   "gold": 153.66,
+   "pred": 162.19,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 107995,
+   "file": "site372_bldg827_floor3651.dxf",
+   "family": "apt_area",
+   "gold": 37.23,
+   "pred": 41.46,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 93007,
+   "file": "site3779_bldg5809_floor24634.dxf",
+   "family": "apt_area",
+   "gold": 186.3,
+   "pred": 205.61,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 93011,
+   "file": "site3779_bldg5809_floor24634.dxf",
+   "family": "floor_area",
+   "gold": 198.86,
+   "pred": 218.16,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 99707,
+   "file": "site3783_bldg5813_floor24640.dxf",
+   "family": "apt_area",
+   "gold": 113.01,
+   "pred": 128.41,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 99711,
+   "file": "site3783_bldg5813_floor24640.dxf",
+   "family": "floor_area",
+   "gold": 113.01,
+   "pred": 128.41,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 122749,
+   "file": "site386_bldg906_floor47709.dxf",
+   "family": "apt_area",
+   "gold": 63.09,
+   "pred": 69.14,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 122755,
+   "file": "site386_bldg906_floor47709.dxf",
+   "family": "floor_area",
+   "gold": 153.07,
+   "pred": 159.11,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 99173,
+   "file": "site390_bldg946_floor14426.dxf",
+   "family": "floor_area",
+   "gold": 187.47,
+   "pred": 208.06,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 95511,
+   "file": "site392_bldg959_floor4117.dxf",
+   "family": "floor_area",
+   "gold": 70.8,
+   "pred": 72.66,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 114647,
+   "file": "site3999_bldg6289_floor25930.dxf",
+   "family": "apt_area",
+   "gold": 56.45,
+   "pred": 59.25,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 114653,
+   "file": "site3999_bldg6289_floor25930.dxf",
+   "family": "floor_area",
+   "gold": 125.79,
+   "pred": 128.58,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 117023,
+   "file": "site403_bldg1023_floor4397.dxf",
+   "family": "floor_area",
+   "gold": 563.11,
+   "pred": 584.36,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 120449,
+   "file": "site417_bldg1060_floor4636.dxf",
+   "family": "apt_area",
+   "gold": 62.47,
+   "pred": 69.55,
+   "q": "What is the net floor area of apartment E in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 120453,
+   "file": "site417_bldg1060_floor4636.dxf",
+   "family": "floor_area",
+   "gold": 548.78,
+   "pred": 565.17,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 99669,
+   "file": "site455_bldg1104_floor11946.dxf",
+   "family": "apt_area",
+   "gold": 51.87,
+   "pred": 53.46,
+   "q": "What is the net floor area of apartment C in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 92921,
+   "file": "site492_bldg1175_floor5187.dxf",
+   "family": "bathtub",
+   "gold": 7,
+   "pred": 6,
+   "q": "How many bathtubs are drawn on this floor plan?"
+  },
+  {
+   "line": 92923,
+   "file": "site492_bldg1175_floor5187.dxf",
+   "family": "shower",
+   "gold": 2,
+   "pred": 3,
+   "q": "How many showers are drawn on this floor plan?"
+  },
+  {
+   "line": 92929,
+   "file": "site492_bldg1175_floor5187.dxf",
+   "family": "apt_area",
+   "gold": 78.6,
+   "pred": 85.48,
+   "q": "What is the net floor area of apartment F in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 92931,
+   "file": "site492_bldg1175_floor5187.dxf",
+   "family": "apt_area",
+   "gold": 78.76,
+   "pred": 85.35,
+   "q": "What is the net floor area of apartment C in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 92935,
+   "file": "site492_bldg1175_floor5187.dxf",
+   "family": "floor_area",
+   "gold": 507.84,
+   "pred": 553.4,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 123003,
+   "file": "site495_bldg1180_floor5214.dxf",
+   "family": "floor_area",
+   "gold": 209.01,
+   "pred": 236.03,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 98977,
+   "file": "site496_bldg1181_floor5221.dxf",
+   "family": "apt_area",
+   "gold": 60.21,
+   "pred": 61.48,
+   "q": "What is the net floor area of apartment C in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 119049,
+   "file": "site543_bldg1241_floor51691.dxf",
+   "family": "floor_area",
+   "gold": 261.44,
+   "pred": 284.93,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 122379,
+   "file": "site544_bldg1242_floor5523.dxf",
+   "family": "washbasin",
+   "gold": 18,
+   "pred": 21,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 124123,
+   "file": "site560_bldg1265_floor7316.dxf",
+   "family": "wc",
+   "gold": 6,
+   "pred": 7,
+   "q": "How many toilets (WC) are drawn on this floor plan?"
+  },
+  {
+   "line": 124125,
+   "file": "site560_bldg1265_floor7316.dxf",
+   "family": "washbasin",
+   "gold": 6,
+   "pred": 5,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 99317,
+   "file": "site571_bldg1280_floor5680.dxf",
+   "family": "floor_area",
+   "gold": 308.42,
+   "pred": 334.59,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 114495,
+   "file": "site573_bldg1288_floor50441.dxf",
+   "family": "room_area",
+   "gold": 11.36,
+   "pred": 12.18,
+   "q": "What is the net floor area of room 3.11 ('Cage d'escalier') in m²?"
+  },
+  {
+   "line": 111481,
+   "file": "site580_bldg1294_floor50409.dxf",
+   "family": "floor_area",
+   "gold": 325.22,
+   "pred": 332.39,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 97395,
+   "file": "site582_bldg1295_floor7098.dxf",
+   "family": "washbasin",
+   "gold": 2,
+   "pred": 4,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 107439,
+   "file": "site583_bldg1296_floor7325.dxf",
+   "family": "apt_area",
+   "gold": 105.75,
+   "pred": 130.17,
+   "q": "What is the net floor area of apartment E in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 107445,
+   "file": "site583_bldg1296_floor7325.dxf",
+   "family": "floor_area",
+   "gold": 464.17,
+   "pred": 488.6,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 104227,
+   "file": "site593_bldg1307_floor5757.dxf",
+   "family": "label_area",
+   "gold": 123.14,
+   "pred": 131.57,
+   "q": "What is the total net area in m² of all rooms labelled 'Zimmer' on this floor?"
+  },
+  {
+   "line": 104229,
+   "file": "site593_bldg1307_floor5757.dxf",
+   "family": "floor_area",
+   "gold": 359.94,
+   "pred": 368.37,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 110871,
+   "file": "site607_bldg1322_floor5782.dxf",
+   "family": "washbasin",
+   "gold": 1,
+   "pred": 2,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 117449,
+   "file": "site609_bldg1323_floor50796.dxf",
+   "family": "apt_area",
+   "gold": 100.1,
+   "pred": 106.45,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 122447,
+   "file": "site615_bldg1329_floor5794.dxf",
+   "family": "wc",
+   "gold": 2,
+   "pred": 3,
+   "q": "How many toilets (WC) are drawn on this floor plan?"
+  },
+  {
+   "line": 122449,
+   "file": "site615_bldg1329_floor5794.dxf",
+   "family": "washbasin",
+   "gold": 4,
+   "pred": 3,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 122457,
+   "file": "site615_bldg1329_floor5794.dxf",
+   "family": "apt_area",
+   "gold": 72.4,
+   "pred": 78.09,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 106635,
+   "file": "site648_bldg1405_floor6131.dxf",
+   "family": "floor_area",
+   "gold": 303.37,
+   "pred": 326.83,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 110903,
+   "file": "site675_bldg1433_floor6276.dxf",
+   "family": "washbasin",
+   "gold": 2,
+   "pred": 4,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 112221,
+   "file": "site677_bldg1440_floor6296.dxf",
+   "family": "washbasin",
+   "gold": 10,
+   "pred": 15,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 102747,
+   "file": "site679_bldg1443_floor6305.dxf",
+   "family": "floor_area",
+   "gold": 210.88,
+   "pred": 238.54,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 121361,
+   "file": "site700_bldg1479_floor6471.dxf",
+   "family": "apt_area",
+   "gold": 63.11,
+   "pred": 65.95,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 92817,
+   "file": "site702_bldg18650_floor51499.dxf",
+   "family": "apt_area",
+   "gold": 94.81,
+   "pred": 120.16,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 92821,
+   "file": "site702_bldg18650_floor51499.dxf",
+   "family": "floor_area",
+   "gold": 189.42,
+   "pred": 214.99,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 113079,
+   "file": "site713_bldg1530_floor6650.dxf",
+   "family": "floor_area",
+   "gold": 214.18,
+   "pred": 236.93,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 115217,
+   "file": "site724_bldg1554_floor6748.dxf",
+   "family": "washbasin",
+   "gold": 4,
+   "pred": 6,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 115639,
+   "file": "site728_bldg1571_floor6809.dxf",
+   "family": "apt_area",
+   "gold": 44.27,
+   "pred": 52.32,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 115641,
+   "file": "site728_bldg1571_floor6809.dxf",
+   "family": "apt_area",
+   "gold": 107.47,
+   "pred": 130.14,
+   "q": "What is the net floor area of apartment D in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 115645,
+   "file": "site728_bldg1571_floor6809.dxf",
+   "family": "floor_area",
+   "gold": 343.27,
+   "pred": 406.15,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 116233,
+   "file": "site738_bldg1597_floor6864.dxf",
+   "family": "apt_area",
+   "gold": 119.07,
+   "pred": 123.74,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 116237,
+   "file": "site738_bldg1597_floor6864.dxf",
+   "family": "floor_area",
+   "gold": 356.44,
+   "pred": 365.73,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 97331,
+   "file": "site753_bldg1637_floor7293.dxf",
+   "family": "apt_area",
+   "gold": 65.06,
+   "pred": 76.17,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 97333,
+   "file": "site753_bldg1637_floor7293.dxf",
+   "family": "apt_area",
+   "gold": 67.88,
+   "pred": 79.03,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 97337,
+   "file": "site753_bldg1637_floor7293.dxf",
+   "family": "floor_area",
+   "gold": 313.54,
+   "pred": 363.5,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 94121,
+   "file": "site778_bldg1682_floor7553.dxf",
+   "family": "washbasin",
+   "gold": 3,
+   "pred": 6,
+   "q": "How many washbasins are drawn on this floor plan?"
+  },
+  {
+   "line": 118931,
+   "file": "site784_bldg1694_floor7843.dxf",
+   "family": "floor_area",
+   "gold": 600.84,
+   "pred": 663.91,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 117379,
+   "file": "site790_bldg1731_floor7704.dxf",
+   "family": "apt_area",
+   "gold": 102.63,
+   "pred": 105.78,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 117381,
+   "file": "site790_bldg1731_floor7704.dxf",
+   "family": "apt_area",
+   "gold": 94.82,
+   "pred": 98.24,
+   "q": "What is the net floor area of apartment E in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 117385,
+   "file": "site790_bldg1731_floor7704.dxf",
+   "family": "floor_area",
+   "gold": 503.86,
+   "pred": 543.88,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 116437,
+   "file": "site79_bldg8_floor24.dxf",
+   "family": "floor_area",
+   "gold": 961.84,
+   "pred": 1355.24,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 108373,
+   "file": "site833_bldg1762_floor7827.dxf",
+   "family": "count_label",
+   "gold": 3,
+   "pred": 4,
+   "q": "How many rooms labelled 'Corridoio' are there on this floor?"
+  },
+  {
+   "line": 108397,
+   "file": "site833_bldg1762_floor7827.dxf",
+   "family": "floor_area",
+   "gold": 181.19,
+   "pred": 198.15,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 113947,
+   "file": "site853_bldg1815_floor8055.dxf",
+   "family": "room_area",
+   "gold": 14.04,
+   "pred": 16.87,
+   "q": "What is the net floor area of room 2.42 ('Treppenhaus') in m²?"
+  },
+  {
+   "line": 113957,
+   "file": "site853_bldg1815_floor8055.dxf",
+   "family": "floor_area",
+   "gold": 320.47,
+   "pred": 341.0,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 98779,
+   "file": "site867_bldg1831_floor51604.dxf",
+   "family": "count_label",
+   "gold": 2,
+   "pred": 3,
+   "q": "How many rooms labelled 'Vano scala' are there on this floor?"
+  },
+  {
+   "line": 98803,
+   "file": "site867_bldg1831_floor51604.dxf",
+   "family": "floor_area",
+   "gold": 513.69,
+   "pred": 552.01,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 90569,
+   "file": "site86_bldg72_floor267.dxf",
+   "family": "bathtub",
+   "gold": 6,
+   "pred": 5,
+   "q": "How many bathtubs are drawn on this floor plan?"
+  },
+  {
+   "line": 126643,
+   "file": "site879_bldg1872_floor8316.dxf",
+   "family": "apt_area",
+   "gold": 70.54,
+   "pred": 72.14,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 124249,
+   "file": "site886_bldg1894_floor8386.dxf",
+   "family": "apt_area",
+   "gold": 65.01,
+   "pred": 66.43,
+   "q": "What is the net floor area of apartment D in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 115839,
+   "file": "site892_bldg1902_floor8415.dxf",
+   "family": "apt_area",
+   "gold": 25.54,
+   "pred": 34.08,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 109709,
+   "file": "site915_bldg1939_floor51626.dxf",
+   "family": "apt_area",
+   "gold": 49.04,
+   "pred": 50.37,
+   "q": "What is the net floor area of apartment E in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 105453,
+   "file": "site91_bldg157_floor690.dxf",
+   "family": "apt_area",
+   "gold": 80.01,
+   "pred": 82.41,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 105455,
+   "file": "site91_bldg157_floor690.dxf",
+   "family": "apt_area",
+   "gold": 79.5,
+   "pred": 81.95,
+   "q": "What is the net floor area of apartment B in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 105459,
+   "file": "site91_bldg157_floor690.dxf",
+   "family": "floor_area",
+   "gold": 170.92,
+   "pred": 177.81,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 112967,
+   "file": "site942_bldg1982_floor8747.dxf",
+   "family": "floor_area",
+   "gold": 450.98,
+   "pred": 469.14,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 98611,
+   "file": "site961_bldg2019_floor8945.dxf",
+   "family": "floor_area",
+   "gold": 1104.34,
+   "pred": 1172.36,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 121215,
+   "file": "site983_bldg2062_floor9222.dxf",
+   "family": "apt_area",
+   "gold": 92.84,
+   "pred": 99.82,
+   "q": "What is the net floor area of apartment A in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 109945,
+   "file": "site990_bldg2071_floor9290.dxf",
+   "family": "apt_area",
+   "gold": 53.43,
+   "pred": 58.73,
+   "q": "What is the net floor area of apartment E in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 109951,
+   "file": "site990_bldg2071_floor9290.dxf",
+   "family": "floor_area",
+   "gold": 755.3,
+   "pred": 784.21,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 98327,
+   "file": "site992_bldg2073_floor9296.dxf",
+   "family": "floor_area",
+   "gold": 590.47,
+   "pred": 606.12,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 127043,
+   "file": "site996_bldg2077_floor9546.dxf",
+   "family": "floor_area",
+   "gold": 452.88,
+   "pred": 468.88,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  },
+  {
+   "line": 116799,
+   "file": "site998_bldg2079_floor9341.dxf",
+   "family": "apt_area",
+   "gold": 34.15,
+   "pred": 38.03,
+   "q": "What is the net floor area of apartment G in m², summing all its rooms except balconies, l"
+  },
+  {
+   "line": 116803,
+   "file": "site998_bldg2079_floor9341.dxf",
+   "family": "floor_area",
+   "gold": 488.98,
+   "pred": 529.44,
+   "q": "What is the total net floor area in m² of all numbered indoor rooms on this floor (excludi"
+  }
+ ]
+}

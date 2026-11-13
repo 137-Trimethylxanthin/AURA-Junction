@@ -1,0 +1,18 @@
+{
+  "note": "Facts measured outside backend/eval (research request log). Not overwritten by eval/export_facts.py.",
+  "facts": [
+    {
+      "id": "tile-check-cost",
+      "label": "Cost of one Gemini check of every evidence box on a drawing",
+      "value": "$0.0026",
+      "cost_usd": 0.00259,
+      "n": 1,
+      "n_unit": "request",
+      "model_calls": 1,
+      "scope": "37 zoomed evidence tiles of drawing swiss-46639, each asked as window, door and washbasin",
+      "method": "One Gemini Decisions API request: 25,854 tokens, 1.3 s",
+      "measured": "2026-11-14",
+      "caveat": "A single measured call (n=1). Within that request every class separated; scores for the same tile drift between requests."
+    }
+  ]
+}

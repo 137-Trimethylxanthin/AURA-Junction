@@ -1,7 +1,7 @@
-import { ApiError, TransportError, getHealth, postAsk, type FetchLike } from './client'
-import type { AskRequest, AskResponse } from './contract'
+import { ApiError, TransportError, getDrawing, getDrawingStatus, getHealth, postAsk, type FetchLike } from './client'
+import type { AskRequest, AskResponse, Drawing, DrawingStatusBody } from './contract'
 import { ask as askLocal } from './local'
-import { BUNDLED_DRAWING_ID } from '@/data/drawing'
+import { BUNDLED_DRAWING_ID } from '@/data/ids'
 
 export type SourceKind = 'api' | 'local'
 export type SourceState = 'waking' | 'ready'
@@ -27,6 +27,12 @@ export interface Source {
   retry(): Promise<SourceStatus>
   ask(req: AskRequest): Promise<AskResult>
   subscribe(fn: (s: SourceStatus) => void): () => void
+  /** True when an API URL is configured (drawings other than the bundled one need it). */
+  hasApi(): boolean
+  /** GET /drawings/:id (full drawing; 409 `processing` while not ready). */
+  drawing(id: string): Promise<Drawing>
+  /** GET /drawings/:id/status. */
+  drawingStatus(id: string): Promise<DrawingStatusBody>
 }
 
 export interface SourceOptions {
@@ -87,13 +93,37 @@ export function createSource(opts: SourceOptions = {}): Source {
     status: () => status,
     init,
     retry: probe,
+    hasApi: () => !!baseUrl,
+    drawing(id) {
+      if (!baseUrl) return Promise.reject(new TransportError('No API configured', 'network'))
+      // Image URLs are root-relative to the API (contract §1.1); resolve them against the API base.
+      const abs = (u: string) => (u.startsWith('/') && !u.startsWith('//') ? baseUrl.replace(/\/+$/, '') + u : u)
+      return getDrawing({ baseUrl, fetch: opts.fetch }, id).then((d) => ({
+        ...d,
+        images: {
+          ...d.images,
+          rebuilt: abs(d.images.rebuilt),
+          ...(d.images.original ? { original: abs(d.images.original) } : {}),
+        },
+        ...(d.thumbnail ? { thumbnail: abs(d.thumbnail) } : {}),
+      }))
+    },
+    drawingStatus(id) {
+      if (!baseUrl) return Promise.reject(new TransportError('No API configured', 'network'))
+      return getDrawingStatus({ baseUrl, fetch: opts.fetch }, id)
+    },
     subscribe(fn) {
       listeners.add(fn)
       return () => listeners.delete(fn)
     },
     async ask(req) {
       await init()
-      if (status.kind === 'local' || !baseUrl) return { response: local(req), fellBack: false }
+      if (status.kind === 'local' || !baseUrl) {
+        // Only the bundled drawing has local answers; any other drawing must never be answered from it.
+        if (req.drawing_id !== BUNDLED_DRAWING_ID)
+          throw new TransportError('This drawing needs the AURA server, which is not reachable right now', 'network')
+        return { response: local(req), fellBack: false }
+      }
       try {
         return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
       } catch (e) {

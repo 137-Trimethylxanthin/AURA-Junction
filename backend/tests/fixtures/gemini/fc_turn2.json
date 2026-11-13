@@ -1,0 +1,193 @@
+{
+ "source": "recorded",
+ "note": "Live function-calling verification on gemini-3.1-flash-lite with the AURA tool declarations.",
+ "recorded_at": "2026-11-14T01:34:14+0200",
+ "path": "/models/gemini-3.1-flash-lite:generateContent",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "how many doors does apartment B have?"
+     }
+    ]
+   },
+   {
+    "parts": [
+     {
+      "functionCall": {
+       "name": "count_objects",
+       "args": {
+        "subject": "door",
+        "scope": "unit:B"
+       },
+       "id": "call_4723717323665727922"
+      },
+      "thoughtSignature": "EnMKcQFpFH0TH16KHSlrn1Iph6vxtfzU154gQJJzCJPhWHmtHdicsdk8Zn3SJKUcqotB0XuSSmNyHCUadEcEfg0p9vEBX0UDD+Y6Rt3X7B+J/JhLbhW5G0uIFbn9wFnZZWK+eBStU6KYmCYeLnyhSTjv4dLF"
+     }
+    ],
+    "role": "model"
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "count_objects",
+       "response": {
+        "result_id": "r-90f67fb0c166",
+        "value": 9.0,
+        "summary": "22 doors on the DXF door layer. 2 double doors are drawn as two leaves each, and each leaf counts. 9 in apartment B."
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "You answer questions about one floor plan by calling tools. Never write a number yourself; every number must come from a tool result. Finish with final_answer."
+    }
+   ]
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "count_objects",
+      "description": "Count drawn objects of one kind in a scope, from the CAD layers.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "subject": {
+         "type": "string",
+         "enum": [
+          "window",
+          "door",
+          "washbasin",
+          "wc",
+          "bathtub",
+          "shower",
+          "room",
+          "apartment"
+         ]
+        },
+        "scope": {
+         "type": "string",
+         "description": "floor | unit:<letter> | room:<id> | label:<printed label>"
+        }
+       },
+       "required": [
+        "subject"
+       ]
+      }
+     },
+     {
+      "name": "room_areas",
+      "description": "Net floor area (m²) of a scope, summed room by room from printed areas.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "scope": {
+         "type": "string",
+         "description": "floor | unit:<letter> | room:<id> | label:<label>"
+        }
+       }
+      }
+     },
+     {
+      "name": "list_rooms",
+      "description": "List rooms (id, printed label, apartment, area) in a scope.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "scope": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "find_text",
+      "description": "Find printed text on the drawing (e.g. fire ratings like EI30) by regex.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "pattern": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "pattern"
+       ]
+      }
+     },
+     {
+      "name": "final_answer",
+      "description": "Finish: name the tool result that answers the question and explain briefly. Never write a number that is not in a tool result.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "result_id": {
+         "type": "string"
+        },
+        "explanation": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "result_id",
+        "explanation"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "temperature": 0
+  }
+ },
+ "status": 200,
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "name": "final_answer",
+        "args": {
+         "result_id": "r-90f67fb0c166",
+         "explanation": "There are 9 doors in apartment B."
+        },
+        "id": "call_11062866888478978480"
+       },
+       "thoughtSignature": "EnMKcQFpFH0Tc22RC7ddoq+hdQaKGRdsu8f782pz+kjv3nGKTkNRwjF5OLFRHf5Mbc9CjhKtMVVltdpWYkhjbrCMWvmu3H/OpWRBGnI+vlOWsx5Fs8MHpRXOuAjtP9QvedVwcxZvtbewD7QHsnIPSCsLYHq4"
+      }
+     ],
+     "role": "model"
+    },
+    "finishReason": "STOP",
+    "index": 0,
+    "finishMessage": "Model generated function call(s)."
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 505,
+   "candidatesTokenCount": 44,
+   "totalTokenCount": 549,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 505
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "dp73aq7cG-nNvdIP1bOU2As"
+ }
+}

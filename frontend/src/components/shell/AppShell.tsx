@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react"
 import { ChevronsDownIcon, ChevronsUpIcon } from "lucide-react"
+import { Link } from "react-router"
 
 import { Button } from "@/components/ui/button"
 
@@ -38,7 +39,9 @@ export const SPLIT_QUERY = "(min-width: 900px)"
 function Header({ title, headerActions }: Pick<AppShellSlots, "title" | "headerActions">) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4 pt-[env(safe-area-inset-top)]">
-      <Wordmark />
+      <Link to="/app" aria-label="AURA: all drawings" className="-mx-1 flex h-10 shrink-0 items-center rounded-md px-1">
+        <Wordmark />
+      </Link>
       <div className="h-5 w-px shrink-0 bg-border" aria-hidden />
       <div className="min-w-0 flex-1 truncate text-sm text-muted-foreground" data-slot="title">
         {title}

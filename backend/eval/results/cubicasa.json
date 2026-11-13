@@ -1,0 +1,202 @@
+{
+ "dataset": "cubicasa5k",
+ "run": "CC30 held-out evaluation, frozen protocol",
+ "measured_at": "2026-11-14",
+ "source": ".omc/research/gemini/gemini-usecases.md section 'CubiCasa evaluation (n=30, held-out)'; raw data and request log in .omc/research/gemini/experiments/ (cc30/, request_log.jsonl, purpose prefix CC30). Copied by L1; not re-run.",
+ "selection": {
+  "seed": 2026,
+  "n": 30,
+  "stratified": {
+   "colorful": 10,
+   "high_quality": 10,
+   "high_quality_architectural": 10
+  },
+  "eligible": 3516,
+  "eligible_by_style": {
+   "colorful": 186,
+   "high_quality": 667,
+   "high_quality_architectural": 2663
+  },
+  "rule": "images with both a door and a window count question; the 3 images used earlier excluded"
+ },
+ "requests": {
+  "total": 53,
+  "allowed": 70,
+  "detection": 30,
+  "check": 8,
+  "score": 15,
+  "http_200": 53
+ },
+ "detection": {
+  "model": "gemini-4-hydrogen",
+  "request": "experiments/e2g_req.json, temperature 0, JSON, default resolution, one call per image",
+  "door": {
+   "exact": 18,
+   "n": 30,
+   "exact_rate": 0.6,
+   "wilson95": [
+    0.423,
+    0.754
+   ],
+   "mae": 0.93,
+   "over": 10,
+   "under": 2,
+   "within_1": 25,
+   "sum_pred": 285,
+   "sum_gold": 261,
+   "exact_reweighted_to_pool": 0.486
+  },
+  "window": {
+   "exact": 17,
+   "n": 30,
+   "exact_rate": 0.5667,
+   "wilson95": [
+    0.392,
+    0.726
+   ],
+   "mae": 1.13,
+   "over": 5,
+   "under": 8,
+   "within_1": 23,
+   "sum_pred": 203,
+   "sum_gold": 223,
+   "exact_reweighted_to_pool": 0.44
+  },
+  "both_exact_same_image": 10,
+  "per_style": {
+   "colorful": {
+    "door_exact": 6,
+    "door_mae": 0.4,
+    "window_exact": 8,
+    "window_mae": 1.0
+   },
+   "high_quality": {
+    "door_exact": 8,
+    "door_mae": 0.3,
+    "window_exact": 5,
+    "window_mae": 1.2
+   },
+   "high_quality_architectural": {
+    "door_exact": 4,
+    "door_mae": 2.1,
+    "window_exact": 4,
+    "window_mae": 1.2
+   }
+  },
+  "precision": "not measurable: no box-level gold",
+  "recall": "not measurable: no box-level gold",
+  "cost_usd_per_image_mean": 0.033,
+  "cost_usd_total": 0.98,
+  "latency_s": {
+   "median": 16.0,
+   "mean": 19.0,
+   "max": 56.7
+  },
+  "thinking_tokens_range": [
+   755,
+   12218
+  ]
+ },
+ "tile_check_as_filter": {
+  "model": "gemini-decision-1",
+  "requests": 8,
+  "boxes": 488,
+  "anchors_per_request": 8,
+  "frozen_rule_p_gt_anchor_max_plus_0.05": {
+   "door_exact": 12,
+   "door_wilson95": [
+    0.25,
+    0.58
+   ],
+   "door_mae": 1.03,
+   "window_exact": 12,
+   "window_wilson95": [
+    0.25,
+    0.58
+   ],
+   "window_mae": 2.13,
+   "boxes_removed": 65
+  },
+  "comparison_rule_p_ge_0.4": {
+   "door_exact": 14,
+   "door_wilson95": [
+    0.3,
+    0.64
+   ],
+   "door_mae": 0.9,
+   "window_exact": 12,
+   "window_wilson95": [
+    0.25,
+    0.58
+   ],
+   "window_mae": 1.73,
+   "boxes_removed": 45
+  },
+  "anchor_max_range": {
+   "door": [
+    0.25,
+    0.53
+   ],
+   "window": [
+    0.25,
+    0.7
+   ]
+  },
+  "removals_judged_by_eye": {
+   "n": 40,
+   "images": 6,
+   "real_objects_removed": 32,
+   "wrong_boxes_removed": 8
+  },
+  "cost_usd_per_image": 0.0011,
+  "latency_s_per_batch": 1.9,
+  "verdict": "made exact counts worse (12/30 under the frozen rule); NOT used as a filter on raster"
+ },
+ "score_prior": {
+  "model": "Decisions score",
+  "images": 15,
+  "rule": "round(score), accept if confidence >= 0.6",
+  "room_and_fixture_families": {
+   "n": 115,
+   "exact": 87,
+   "exact_wilson95": [
+    0.67,
+    0.83
+   ],
+   "accepted": 74,
+   "coverage": 0.64,
+   "accepted_correct": 68,
+   "accepted_correct_rate": 0.919,
+   "accepted_correct_wilson95": [
+    0.83,
+    0.96
+   ]
+  },
+  "all_families": {
+   "n": 145,
+   "exact": 92,
+   "accepted": 75,
+   "accepted_correct": 69
+  },
+  "door": {
+   "n": 15,
+   "exact": 2
+  },
+  "window": {
+   "n": 15,
+   "exact": 3
+  },
+  "cost_usd_per_image": 0.00054,
+  "latency_s": 1.1
+ },
+ "gate_G1": {
+  "rule": "door and window recall >= 0.8 and exact >= 60 % (n=30)",
+  "outcome": "not met: windows 56.7 % exact, both below 60 % once reweighted; recall not measurable",
+  "decision": "raster UI not built; raster answers are API-only behind the presenter token, labelled a model estimate; no tile-check filter on raster"
+ },
+ "tiled_detection_paired": {
+  "status": "in progress",
+  "n": 12,
+  "note": "paired exploration on 12 CC30 images (2x2 tiles, 20 % overlap); not a new held-out estimate. Fill from gemini-usecases.md section 'Tiled detection, paired test (n=12)' when complete."
+ }
+}
