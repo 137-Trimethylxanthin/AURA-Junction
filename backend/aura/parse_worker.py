@@ -173,6 +173,10 @@ def _child(kind: str, src: str, out: str, drawing_id: str, meta: dict, conn) -> 
         conn.send({"ok": False, "error": (f"This drawing has more than {MAX_ITEMS:,} objects or "
                                           f"{MAX_TEXTS:,} texts; uploads are limited to one floor plan.")})
     except Exception as e:  # noqa: BLE001 - report any parse failure to the parent
+        if type(e).__name__ == "NoPlanGeometry":
+            conn.send({"ok": False, "error": "This DXF has no room outlines to read: it looks like a detail or "
+                                             "profile sheet, not a floor plan."})
+            return
         conn.send({"ok": False, "error": f"Could not read this file ({type(e).__name__})."})
     finally:
         conn.close()
