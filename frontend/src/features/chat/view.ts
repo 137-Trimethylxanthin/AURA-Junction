@@ -1,6 +1,7 @@
 import type { AgentFailure, AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
 import { LOCALE, fmtArea, fmtCount, noun } from '@/lib/format'
+import { convertTo, METRIC_SYMBOL } from '@/lib/units'
 import { t, type StringKey, type UiKey } from '@/i18n/strings'
 
 /** Pure view-model helpers for the answer card. Every number comes from the response or Derived. */
@@ -80,7 +81,32 @@ export function scopeChipText(scope: Scope | ProjectScopeLike, lang: Lang): stri
 }
 
 /** Formatted value with the unit/noun, e.g. ["12", "windows"] or ["139,34", "m²"]. */
+/** The metric value and unit of a numeric answer (after user edits), or null. */
+function metricOf(resp: AskResponse, d: Derived): [number, string] | null {
+  const a = resp.answer
+  if (a.kind === 'note') return a.number !== undefined && a.unit && METRIC_SYMBOL[a.unit] ? [a.number, a.unit] : null
+  if (d.value === null) return null
+  if (a.kind === 'area') return [d.value, 'm2']
+  if (a.kind === 'quantity') return [d.value, a.unit]
+  return null
+}
+
+/**
+ * The answer in the unit the question asked for ("in square feet"), recomputed from the current metric value,
+ * plus the metric value to show beside it. Null when the question asked for no other unit.
+ */
+export function convertedParts(resp: AskResponse, d: Derived, lang: Lang): { value: [string, string]; metric: string } | null {
+  if (!resp.converted) return null
+  const m = metricOf(resp, d)
+  if (!m) return null
+  const v = convertTo(m[0], m[1], resp.converted.unit)
+  if (v === null) return null
+  return { value: [fmtArea(v, lang), resp.converted.unit], metric: `${fmtArea(m[0], lang)} ${METRIC_SYMBOL[m[1]] ?? m[1]}` }
+}
+
 export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, string] | null {
+  const conv = convertedParts(resp, d, lang)
+  if (conv) return conv.value
   if (resp.answer.kind === 'text') return [resp.answer.value, t(lang, resp.answer.subject === 'fire_rating' ? 'text_fire_rating' : 'text_label')]
   if (resp.answer.kind === 'note') {
     if (resp.answer.number !== undefined) {

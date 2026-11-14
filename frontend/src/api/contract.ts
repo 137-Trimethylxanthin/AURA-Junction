@@ -639,6 +639,16 @@ export interface AskResponse {
   agent_failure?: AgentFailure
   /** 1.2: per-sheet shares of a whole-building answer (`scope` is then the project scope of the sheets asked). */
   breakdown?: BreakdownItem[]
+  /** The answer in the unit the question asked for ("in square feet"); `answer` stays metric. Computed by code. */
+  converted?: Converted
+}
+
+export interface Converted {
+  value: number
+  /** Display symbol: "sq ft", "ft", "m²" … */
+  unit: string
+  /** "124 m² = 1,334.72 sq ft" */
+  text: string
 }
 
 /** One sheet's share of a whole-building answer ("ground floor 14"); evidence items carry their sheet in `drawing_id`. */
@@ -1027,6 +1037,8 @@ export function isAskResponse(v: unknown): v is AskResponse {
     optStr(v.turn_id) &&
     (v.route === undefined || isOneOf(v.route, ['template', 'choice', 'agent', 'cache'] as const)) &&
     optStr(v.explanation) &&
+    (v.converted === undefined ||
+      (isObj(v.converted) && isNum(v.converted.value) && isStr(v.converted.unit) && isStr(v.converted.text))) &&
     (v.agent_failure === undefined || isOneOf(v.agent_failure, ['unavailable', 'timeout', 'error'] as const))
   )
 }

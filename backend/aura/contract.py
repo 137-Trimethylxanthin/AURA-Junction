@@ -359,6 +359,12 @@ class BreakdownItem(_M):
     unit: str | None = None
 
 
+class Converted(_M):
+    value: float
+    unit: str  # display symbol: "sq ft", "ft", "m²", ...
+    text: str  # "124 m² = 1,334.72 sq ft"
+
+
 class AskResponse(_M):
     contract_version: str = CONTRACT_VERSION
     # 1.2 additive: set only when the deep agent failed (the answer is then an abstain); the
@@ -387,6 +393,9 @@ class AskResponse(_M):
     # 1.2 additive: per-sheet shares of a whole-building answer; evidence items carry their sheet's
     # `drawing_id`, `scope` is the project scope of the sheets that were asked.
     breakdown: list[BreakdownItem] | None = None
+    # additive: the answer shown in the unit the question asked for ("in square feet"); `answer`
+    # stays metric. Converted by code from `answer`, never by a model.
+    converted: Converted | None = None
 
 
 class ErrorBody(_M):

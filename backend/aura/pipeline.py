@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from aura import answer as A
 from aura import tools
+from aura import units
 from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agent
 from aura.budget import Budget, BudgetError
 from aura.cache import AnswerCache, CheckCache, answer_key
@@ -1360,6 +1361,80 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         yield ev
 
 
+
+def _conversion_body(question: str, lang: str, conv: units.Conversion, t0: float) -> dict:
+    """A pure unit conversion ("convert 12 m² to sq ft"): answered by code, 0 model calls."""
+    body = A._base(question, lang, {"kind": "floor"}) | {
+        "answer": {"kind": "note", "value": conv.text(), "number": round(conv.result, 6),
+                   "unit": units.SYMBOL[conv.target]},
+        "evidence": {"boxes": [], "rooms": []},
+        "canonical_en": f"convert {units.fmt(conv.value)} {units.SYMBOL[conv.unit]} to {units.SYMBOL[conv.target]}",
+        "method": "none",
+        "trace": [
+            A.question_node(question, lang),
+            A.intent_node(f"unit conversion · {units.SYMBOL[conv.unit]} → {units.SYMBOL[conv.target]}"),
+            {"id": "convert", "parent": "q", "title": "Convert units", "tag": "code",
+             "body": f"{conv.text()} (exact factors: 1 in = 2.54 cm, 1 ft = 0.3048 m)", "kind": "exact"},
+            {"id": "answer", "parent": "q", "title": "Answer", "tag": "note", "body": conv.text(),
+             "kind": "exact"},
+        ],
+        "answer_id": "a-" + uuid.uuid4().hex,
+        "route": "template",
+        "latency_ms": int((time.perf_counter() - t0) * 1000),
+    }
+    return body
+
+
+def _with_converted(body: dict, requested: str) -> dict:
+    """Adds `converted` (and a trace step) when the answer is a metric number in another dimension's unit."""
+    ans = body.get("answer") or {}
+    kind = ans.get("kind")
+    unit = {"area": "m2"}.get(kind) or (ans.get("unit") if kind == "quantity" else None)
+    if unit is None and kind == "note" and isinstance(ans.get("number"), (int, float)):
+        unit = {"m²": "m2", "m2": "m2", "m": "m", "m³": "m3", "m3": "m3"}.get(str(ans.get("unit", "")).strip())
+    if unit not in units.UNITS or not isinstance(ans.get("value" if kind != "note" else "number"), (int, float)):
+        return body
+    value = float(ans["value"] if kind != "note" else ans["number"])
+    target = units.target_for(requested, units.UNITS[unit][0])
+    if target is None or target == unit:
+        return body
+    conv = units.Conversion(value, unit, target, units.convert(value, unit, target))
+    trace = list(body.get("trace") or [])
+    trace.append({"id": "convert", "parent": "q", "title": "Convert units", "tag": "code",
+                  "body": conv.text(), "kind": "exact"})
+    return body | {"converted": {"value": round(conv.result, 6), "unit": units.SYMBOL[target],
+                                 "text": conv.text()}, "trace": trace}
+
+
+def with_units(inner):
+    """Unit handling around a `run`-shaped answerer: a pure conversion question is answered by code;
+    a drawing question asking for a unit ("... in square feet") is answered in metric and the
+    answer gets a `converted` value. Metric is the default and needs nothing."""
+
+    async def wrapped(svc: Services, req: AskRequest, caller: Caller, context: dict | None = None,
+                      history: list[dict] | None = None, meters: dict[str, Meter] | None = None,
+                      **kw: Any) -> AsyncIterator[tuple[str, dict]]:
+        t0 = time.perf_counter()
+        question = (req.question or "").strip()
+        conv = units.parse_conversion(question)
+        if conv is not None:
+            ensure_ready(svc, req.drawing_id)
+            body = _conversion_body(question, req.lang_hint or "en", conv, t0)
+            yield "understood", {"detected_lang": body["detected_lang"],
+                                 "canonical_en": body["canonical_en"], "route": "template"}
+            _persist(svc, req.drawing_id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
+            yield "answer", {"response": body}
+            return
+        requested, cleaned = units.requested_unit(question)
+        if requested is not None and cleaned.strip():
+            req = req.model_copy(update={"question": cleaned})
+        async for ev, data in inner(svc, req, caller, context, history, meters, **kw):
+            if requested is not None and ev == "answer" and isinstance(data.get("response"), dict):
+                data = data | {"response": _with_converted(data["response"], requested)}
+            yield ev, data
+
+    return wrapped
+
 def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: dict) -> None:
     if svc.writer is None:
         return
@@ -1376,8 +1451,8 @@ def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: d
 async def ask(svc: Services, req: AskRequest, caller: Caller,
               meters: dict[str, Meter] | None = None, run_fn=None) -> dict:
     # `run_fn`: a drop-in for `run` (whole-building answers, aura/building.py); default `run`.
-    async for event, data in (run_fn or run)(svc, req, caller, meters=meters,
-                                             deadline_s=float(svc.settings.turn_deadline_s)):
+    async for event, data in with_units(run_fn or run)(svc, req, caller, meters=meters,
+                                                       deadline_s=float(svc.settings.turn_deadline_s)):
         if event == "answer":
             return data["response"]
     raise PipelineError("internal", "The pipeline ended without an answer.", 500)
@@ -1413,7 +1488,7 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
 
     async def produce() -> None:
         try:
-            async for item in (run_fn or run)(svc, req, caller, context, history, meters,
+            async for item in with_units(run_fn or run)(svc, req, caller, context, history, meters,
                                               deadline_s=deadline_s,
                                               agent_deadline_s=svc.settings.agent_deadline_s):
                 await queue.put(item)

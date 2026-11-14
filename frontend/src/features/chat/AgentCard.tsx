@@ -47,6 +47,7 @@ import {
   sentence,
   triedText,
   valueParts,
+  convertedParts,
   type AgentFailure,
   type Chip,
   type EvidenceGroupItem,
@@ -874,6 +875,7 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
   }
 
   const parts = valueParts(resp, derived, lang)
+  const converted = convertedParts(resp, derived, lang)
   const chipList = chips(resp, derived, lang)
   const isProseNote = resp.answer.kind === 'note' && resp.answer.number === undefined
   const numericNoteProse =
@@ -901,6 +903,11 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
               {parts[0]}
             </span>
             {parts[1] ? <span className="text-lg font-medium">{parts[1]}</span> : null}
+            {converted ? (
+              <span className="text-sm text-muted-foreground tabular-nums" data-converted-metric>
+                = {converted.metric}
+              </span>
+            ) : null}
             <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="ml-auto self-center" />
           </p>
         ) : null}
