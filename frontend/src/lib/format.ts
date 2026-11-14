@@ -1,4 +1,4 @@
-import type { BoxSubjectAny, Lang } from '@/api/contract'
+import type { BoxSubjectAny, Display, Lang } from '@/api/contract'
 
 export const LOCALE: Record<Lang, string> = { en: 'en-GB', fr: 'fr-FR', fi: 'fi-FI', de: 'de-DE' }
 
@@ -20,6 +20,40 @@ export function fmtArea(n: number, lang: Lang): string {
   return cached(areaFmt, lang, () =>
     new Intl.NumberFormat(LOCALE[lang], { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
   ).format(n)
+}
+
+/** 12' 6" (whole inches). */
+export function fmtFtIn(feet: number): string {
+  const total = Math.round(Math.abs(feet) * 12)
+  return `${feet < 0 ? '-' : ''}${Math.floor(total / 12)}' ${total % 12}"`
+}
+
+/** About four significant figures, at most 2 decimals (4 below 1): 3,675 / 41.01 / 0.0843. */
+export function fmtConverted(n: number, lang: Lang): string {
+  const mag = n === 0 ? 0 : Math.floor(Math.log10(Math.abs(n)))
+  const digits = Math.max(0, Math.min(3 - mag, Math.abs(n) >= 1 ? 2 : 4))
+  return new Intl.NumberFormat(LOCALE[lang], {
+    minimumFractionDigits: Math.min(digits, 2),
+    maximumFractionDigits: digits,
+  }).format(n)
+}
+
+/**
+ * A metric number of a response in the unit its question asked for: ["3,675", "sq ft"], or null when
+ * the response has no display unit for that dimension (the caller then shows the metric value).
+ */
+export function displayParts(
+  metric: number,
+  metricUnit: 'm' | 'm2' | 'm3',
+  display: Display | undefined,
+  lang: Lang,
+): [string, string] | null {
+  const factor = display?.factors?.[metricUnit]
+  const label = display?.labels?.[metricUnit]
+  if (!display || typeof factor !== 'number' || !label) return null
+  const v = metric * factor
+  if (display.style === 'ft_in' && metricUnit === 'm') return [fmtFtIn(v), '']
+  return [fmtConverted(v, lang), label]
 }
 
 export function fmtCount(n: number, lang: Lang): string {

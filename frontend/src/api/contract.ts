@@ -639,6 +639,32 @@ export interface AskResponse {
   agent_failure?: AgentFailure
   /** 1.2: per-sheet shares of a whole-building answer (`scope` is then the project scope of the sheets asked). */
   breakdown?: BreakdownItem[]
+  /** 1.2: set only when the question asked for a non-default unit ("in square feet"); `answer` stays metric. */
+  display?: Display
+}
+
+/** The answer in the unit the question asked for; `factors` are display units per m / m2 / m3. */
+export interface Display {
+  unit: string
+  label: string
+  style?: 'decimal' | 'ft_in'
+  factors: Partial<Record<'m' | 'm2' | 'm3', number>>
+  labels: Partial<Record<'m' | 'm2' | 'm3', string>>
+  value?: number
+  /** "3,675 sq ft" */
+  text?: string
+  /** "341.42 m²" */
+  metric_text?: string
+  metric_explanation?: string
+  metric_note?: string
+}
+
+/** Guard: a malformed `display` is ignored (the metric answer is shown), never a failed response. */
+export function usableDisplay(v: unknown): Display | undefined {
+  if (!isObj(v) || !isStr(v.unit) || !isStr(v.label) || !isObj(v.factors) || !isObj(v.labels)) return undefined
+  if (!Object.values(v.factors).every((f) => isNum(f) && f > 0)) return undefined
+  if (!Object.values(v.labels).every(isStr)) return undefined
+  return v as unknown as Display
 }
 
 /** One sheet's share of a whole-building answer ("ground floor 14"); evidence items carry their sheet in `drawing_id`. */
