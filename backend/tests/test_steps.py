@@ -216,6 +216,8 @@ async def test_no_internal_set_refs_in_user_text(d):
 
 @pytest.mark.parametrize(("question", "strict"), [
     ("which of them are wider than 0.95 m", True), ("doors over 0.95 m", True),
+    ("which rooms have a door wider than 0.95 m", True),  # 'door wider' is not 'or wider'
+    ("which rooms have a door of 0.95 m or wider", False),
     ("doors at least 0.95 m wide", False), ("doors of 0.95 m or more", False),
     ("doors 0.95 m", False)])
 def test_width_bound_strictness_follows_the_words(d, question, strict):
@@ -343,3 +345,28 @@ def test_no_code_execution_tool():
     names = set(steps.TOOL_NAMES)
     assert names == {"list_rooms", "rooms_containing", "list_openings", "connected_rooms",
                      "rooms_on_side", "find_text", "judge", "finish"}
+
+
+def store_doc(d, **extra):
+    data = {**d.drawing, "evidence_method": {"door": "vision", "window": "vision", "wc": "vision",
+                                             "room": "pdf_vector"}, **extra}
+    return tools.LoadedDrawing(id=d.id, dir=None, drawing=data, engine=tools.BundleEngine(data), source="upload")
+
+
+async def test_store_estimates_label_the_answer_never_cad_geometry(d):
+    sd = store_doc(d)
+    rooms, st1, _ = await ask(sd, [[("list_rooms", {"min_area_m2": 15, "finish_as": "list"})]])
+    assert validated(rooms, st1)["method"] == "pdf_vector"
+    doors, st2, _ = await ask(sd, [[("list_rooms", {"room_type": "bathroom"}),
+                                    ("list_openings", {"kind": "door", "rooms": "s1", "min_width_m": 0.9,
+                                                       "finish_as": "count"})]])
+    body = validated(doors, st2)
+    assert body["method"] == "vision" and "estimate" in body["explanation"]
+
+
+async def test_no_metric_scale_skips_the_geometric_tools(d, monkeypatch):
+    built, _, client = await ask(store_doc(d, m_per_pct_x=0), [[("list_rooms", {"finish_as": "list"})]])
+    assert built is None and client.sent == []  # returned before any model call or toolbox
+    flagged = tools.LoadedDrawing(id=d.id, dir=None, drawing={**d.drawing, "toolbox": False},
+                                  engine=d.engine, source="upload")
+    assert not steps.has_scale(flagged) and steps.has_scale(d)

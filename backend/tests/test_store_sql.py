@@ -273,3 +273,12 @@ async def test_finish_on_an_sql_set_reads_its_cell(d, store_on):
     built, stats, _ = await ask(d, turns)
     body = validated(built, stats)
     assert body["answer"]["number"] == 30 and stats["meter"].calls == 2
+
+
+async def test_no_scale_offers_only_sql_and_finish(d, store_on):
+    store_on.rows = [{"n": 3}]
+    nd = tools.LoadedDrawing(id=d.id, dir=None, drawing={**d.drawing, "toolbox": False}, engine=d.engine,
+                             source="upload")
+    built, _, client = await ask(nd, [[("sql", {"query": "select count(*) as n from q.texts", "finish_as": "cell"})]])
+    assert built is not None
+    assert {x["name"] for x in client.sent[0]["tools"][0]["functionDeclarations"]} == {"finish", "sql"}
