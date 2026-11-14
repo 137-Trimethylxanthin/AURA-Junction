@@ -28,7 +28,7 @@ from aura.contract import (
     EvidenceRoom,
     ToolResult,
 )
-from aura.router import LABEL_CONCEPTS, DrawingCtx
+from aura.router import LABEL_CONCEPTS, DrawingCtx, label_hit
 
 log = logging.getLogger("aura.tools")
 
@@ -161,7 +161,7 @@ class BundleEngine:
         if k == "room":
             return any(r["room_id"] == scope.get("room_id") for r in self.rooms)
         if k == "label":
-            return any(r["name"] == scope.get("label") for r in self.rooms)
+            return any(label_hit(r["name"], scope.get("label") or "") for r in self.rooms)
         return True
 
     def _rooms(self, scope: dict) -> list[dict]:
@@ -173,7 +173,7 @@ class BundleEngine:
         if k == "room":
             return [r for r in self.rooms if r["room_id"] == scope["room_id"]]
         if k == "label":
-            return [r for r in self.rooms if r["name"] == scope["label"]]
+            return [r for r in self.rooms if label_hit(r["name"], scope["label"])]
         return [r for r in self.rooms if _in_rect(r["label_at"][0], r["label_at"][1], scope["rect"])]
 
     def _boxes(self, subject: str, scope: dict) -> list[dict]:
@@ -186,7 +186,7 @@ class BundleEngine:
         if k == "room":
             return [b for b in allb if b.get("room_id") == scope["room_id"]]
         if k == "label":
-            ids = {r["room_id"] for r in self.rooms if r["name"] == scope["label"]}
+            ids = {r["room_id"] for r in self.rooms if label_hit(r["name"], scope["label"])}
             return [b for b in allb if b.get("room_id") in ids]
         rect = scope["rect"]
         return [b for b in allb if _in_rect(b["x"] + b["w"] / 2, b["y"] + b["h"] / 2, rect)]
@@ -713,7 +713,12 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
         if fd is None:
             missing.append(fid)
             continue
-        tr = count_objects(fd, subject, {"kind": "floor"})
+        # A room-type filter named in the question ("how many bedrooms" → label BEDROOM) applies on every floor.
+        within = scope.get("within") if isinstance(scope.get("within"), dict) else None
+        tr = count_objects(fd, subject, within or {"kind": "floor"})
+        if (within and within.get("kind") == "label" and (tr.value is None or not tr.supported)
+                and subject == "room" and fd.drawing.get("rooms")):
+            tr = tr.model_copy(update={"kind": "count", "value": 0.0, "supported": True, "boxes": [], "rooms": []})
         if not tr.supported or tr.kind == "none" or tr.value is None:
             missing.append(fd.drawing.get("floor_label") or fd.drawing.get("title") or fid)
             continue

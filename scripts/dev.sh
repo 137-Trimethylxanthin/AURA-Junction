@@ -14,6 +14,10 @@ PG_PORT="${AURA_PG_PORT:-54329}"
 IMAGE="aura-pg:17"
 export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "${DATA}"
+# Container engine: podman when installed, else docker (same commands for what we use).
+CTR="${AURA_CONTAINER:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
+ctr_image_exists() { if [ "${CTR}" = podman ]; then podman image exists "$1"; else docker image inspect "$1" >/dev/null 2>&1; fi; }
+ctr_exists() { if [ "${CTR}" = podman ]; then podman container exists "$1"; else docker container inspect "$1" >/dev/null 2>&1; fi; }
 
 # value of KEY in store/.env, or empty (never printed)
 store_env() { [ -f "${ROOT}/store/.env" ] && sed -n "s/^$1=//p" "${ROOT}/store/.env" | tail -n1 || true; }
@@ -44,18 +48,18 @@ if [ "${AURA_QUICK:-0}" != "1" ]; then
   if pg_ok "${DSN}"; then
     echo "Postgres already answers on 127.0.0.1:${PG_PORT}; reusing it"
   else
-    if ! podman image exists "${IMAGE}"; then
-      if podman image exists localhost/jstore-db:17; then
-        podman tag localhost/jstore-db:17 "${IMAGE}"          # same store/db Dockerfile: no second build
+    if ! ctr_image_exists "${IMAGE}"; then
+      if ctr_image_exists localhost/jstore-db:17; then
+        "${CTR}" tag localhost/jstore-db:17 "${IMAGE}"          # same store/db Dockerfile: no second build
       else
-        echo "Building ${IMAGE} from store/db (PostGIS + pgvector)..."
-        podman build -t "${IMAGE}" "${ROOT}/store/db"
+        echo "Building ${IMAGE} from store/db (PostGIS + pgvector) with ${CTR}..."
+        "${CTR}" build -t "${IMAGE}" "${ROOT}/store/db"
       fi
     fi
-    if podman container exists aura-pg; then
-      podman start aura-pg >/dev/null
+    if ctr_exists aura-pg; then
+      "${CTR}" start aura-pg >/dev/null
     else
-      podman run -d --name aura-pg -p "127.0.0.1:${PG_PORT}:5432" -v aura-pgdata:/var/lib/postgresql/data \
+      "${CTR}" run -d --name aura-pg -p "127.0.0.1:${PG_PORT}:5432" -v aura-pgdata:/var/lib/postgresql/data \
         -e POSTGRES_PASSWORD="${PG_PW}" "${IMAGE}" >/dev/null
     fi
     echo -n "Waiting for Postgres on 127.0.0.1:${PG_PORT}"

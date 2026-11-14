@@ -353,6 +353,21 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s)
 
 
+_NUMBERING = re.compile(r"(?:\s*(?:#|no\.?|nr\.?|№)?\s*\d+[a-z]?|\s+[a-z])$", re.IGNORECASE)
+
+
+def label_base(name: str) -> str:
+    """A printed room label without its numbering: 'BEDROOM #2' → 'bedroom', 'Bath 1' → 'bath'."""
+    n = _norm(name)
+    return _NUMBERING.sub("", n).strip() or n
+
+
+def label_hit(name: str, label: str) -> bool:
+    """True when a room named `name` belongs to the label scope `label` (exact, or the same label family:
+    'BEDROOM #1' is in 'BEDROOM')."""
+    return name == label or (bool(name) and label_base(name) == _norm(label))
+
+
 def unit_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]:
     """(unit letter, raw mention). The letter is returned even if the drawing lacks it."""
     for rx in (_UNIT_APOS_RE, _UNIT_RE):
@@ -411,11 +426,18 @@ def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]
             return lab, lab
     # Synonyms → a printed label the drawing has.
     probe = " ".join(quoted) + " " + text if quoted else text
+    by_base: dict[str, str] = {}
+    for lab in labels:
+        by_base.setdefault(label_base(lab), re.sub(r"[\s#№.-]*\d+[a-z]?$|\s+#\s*$", "", lab.strip(), flags=re.I))
     for _concept, rx, printed in LABEL_CONCEPTS:
         if rx.search(probe):
             for p in printed:
                 if _norm(p) in by_norm:
                     return by_norm[_norm(p)], p
+            # Numbered labels of one room type ("BEDROOM #1", "BEDROOM #2"): the family label "BEDROOM".
+            for p in printed:
+                if _norm(p) in by_base:
+                    return by_base[_norm(p)], p
             if quoted:
                 return quoted[0], quoted[0]
             return (printed[0] if not labels else None), None

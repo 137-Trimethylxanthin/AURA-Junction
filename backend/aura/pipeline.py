@@ -949,6 +949,26 @@ async def _finalize_and_emit(
     yield "answer", {"response": out}
 
 
+
+def _project_ctx(d: tools.LoadedDrawing, scope: dict | None):
+    """Router context for a question: across a project ("All N floors") it holds the labels, room ids and
+    units of every floor in the scope, so "how many kitchens" finds the kitchen on another floor."""
+    ctx = d.ctx
+    if not scope or scope.get("kind") != "project" or d.registry is None:
+        return ctx
+    from aura.router import DrawingCtx
+
+    labels, rooms, units_ = list(ctx.labels), list(ctx.room_ids), list(ctx.units)
+    for fid in scope.get("drawing_ids") or []:
+        fd = d if fid == d.id else d.registry.get(fid)
+        if fd is None or fd is d:
+            continue
+        labels += fd.ctx.labels
+        rooms += fd.ctx.room_ids
+        units_ += fd.ctx.units
+    return DrawingCtx(labels=list(dict.fromkeys(labels)), room_ids=list(dict.fromkeys(rooms)),
+                      units=list(dict.fromkeys(units_)), kind=ctx.kind)
+
 async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | None = None,
               history: list[dict] | None = None,
               meters: dict[str, Meter] | None = None,
@@ -1037,7 +1057,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             return
 
         # Short exact context inheritance (e.g. "how many doors?" -> "and in apartment B?")
-        r = route(question, d.ctx)
+        r = route(question, _project_ctx(d, scope_dump))
         if context and not has_followup_semantics:
             short = len(question.split()) <= 5
             cue = short and bool(FOLLOW_UP_CUE.search(question))
@@ -1066,6 +1086,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
         # A count across a building's floors is exact too (each floor counted, then summed): no model needed.
         exact_project = is_project and r.intent == "count"
+        if exact_project and r.scope and r.scope.get("kind") in ("label", "unit", "room"):
+            eff_scope = eff_scope | {"within": r.scope}  # kept per floor; never in the response scope
         if mode == "hybrid" and (not is_project or exact_project) and not has_followup_semantics:
             if (indexed and r.intent in (
                     "count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count")) or (
@@ -1079,6 +1101,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                     d, question, lang, r.intent, r.subject, eff_scope, overrides, r.matched,
                     tag=tag, pattern=r.pattern, topic=r.topic, ref=ref,
                 )
+                if isinstance(exact_built.body.get("scope"), dict):
+                    exact_built.body["scope"] = {k: v for k, v in exact_built.body["scope"].items() if k != "within"}
                 if ok_exact or not models_enabled() or not svc.budget.can_spend():
                     yield "understood", {"detected_lang": exact_built.body["detected_lang"],
                                          "canonical_en": exact_built.body["canonical_en"], "route": "template"}
