@@ -178,6 +178,18 @@ describe('rooms with no printed area', () => {
   })
 })
 
+describe('room rows of a drawing with an estimated scale', () => {
+  it('mark each area approximate, as the headline does', () => {
+    const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'Net floor area of apartment A' })
+    const id = base.evidence.rooms[0].room_id
+    const drawing = { ...bundledDrawing, rooms: bundledDrawing.rooms.map((r) => (r.room_id === id ? { ...r, area_source: 'estimate' as const } : r)) }
+    const all = evidenceRows(base, emptyToggles(), drawing, 'en').filter((r) => r.kind === 'room')
+    const text = (r: (typeof all)[number]) => JSON.stringify(r)
+    expect(text(all[0])).toMatch(/≈ \d+ m² \(estimate\)/)
+    expect(all.slice(1).some((r) => text(r).includes('≈'))).toBe(false)
+  })
+})
+
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryRouter, useLocation } from 'react-router'

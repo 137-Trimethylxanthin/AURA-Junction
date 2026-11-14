@@ -32,7 +32,7 @@ import { actions, selectIsPending, useActiveTurn, useAppStore } from '@/store'
 import { buildBuilding, type BuildingModel, type FloorEvidence, type FloorInput, type StackMode } from './buildingModel'
 import { Engine, type CameraPreset } from './engine'
 import { buildImageModel, type ImageMode, type ImageModel } from './imageModel'
-import { DEFAULT_WALL_H, buildPlanModel, type PlanModel } from './planModel'
+import { DEFAULT_WALL_H, buildPlanModel, initialWallHeight, type PlanModel } from './planModel'
 import { isRebuiltPlanSvg, parsePlanSvg } from './svgPlan'
 import './viewer3d.css'
 
@@ -248,7 +248,9 @@ export default function Viewer3D() {
           m.setRelief(relief / 100)
           m.setMode(mode)
         }
-        engine.show(model as PlanModel | ImageModel, wallH, true)
+        const startH = isImage ? wallH : initialWallHeight(drawing, model.size)
+        if (!isImage) setWallH(startH)
+        engine.show(model as PlanModel | ImageModel, startH, true)
         setPreset('persp')
         setStatus({ state: 'ready', model: isImage ? 'image' : 'plan' })
       } catch (e) {

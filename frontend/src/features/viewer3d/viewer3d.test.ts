@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { bundledDrawing } from '@/data/drawing'
 import type { Box } from '@/api/contract'
 import { isRebuiltPlanSvg, parsePlanSvg } from './svgPlan'
-import { buildPlanModel } from './planModel'
+import { buildPlanModel, initialWallHeight } from './planModel'
 import { inkMask, keepWallLike, openMask, wallRects } from './imageModel'
 
 const svgText = readFileSync('public/drawings/swiss-46639/plan.svg', 'utf8')
@@ -57,6 +57,18 @@ describe('plan model', () => {
     m.dispose()
   })
 
+  it('starts a plan with an estimated scale with walls in proportion to its footprint', () => {
+    const estimated = { ...bundledDrawing, rooms: bundledDrawing.rooms.map((r) => ({ ...r, area_source: 'estimate' as const })) }
+    expect(initialWallHeight(bundledDrawing, { w: 8, d: 7 })).toBe(2.6) // a stated scale: the typical storey
+    expect(initialWallHeight(estimated, { w: 8, d: 7 })).toBe(1.4)
+    expect(initialWallHeight(estimated, { w: 60, d: 40 })).toBe(2.6)
+    expect(initialWallHeight(estimated, { w: 3, d: 2 })).toBe(1.2)
+  })
+  it('frames the walls as well as the footprint', () => {
+    const m = buildPlanModel(bundledDrawing, plan)
+    expect(m.size.radius).toBeCloseTo(Math.hypot(m.size.w, m.size.d) / 2 + 2.6)
+    m.dispose()
+  })
   it('cuts walls down with the wall height and keeps railings at railing height', () => {
     const m = buildPlanModel(bundledDrawing, plan)
     const heights = () => {

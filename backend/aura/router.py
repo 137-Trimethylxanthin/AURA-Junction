@@ -289,6 +289,15 @@ LABEL_CONCEPTS: list[tuple[str, re.Pattern[str], list[str]]] = [
      ["Cage d'escalier", "Treppenhaus", "Vano scala", "Staircase", "Stair"]),
 ]
 
+# The store's reading of a room label (jstore.interpret.vocab: "OH" is a living_room, "MH" a bedroom) as the
+# concept a question names: a short printed name is found by what it means, not only by how it is written.
+STORE_ROOM_CONCEPT: dict[str, str] = {
+    "bedroom": "bedroom", "living_room": "living", "living_dining": "living", "dining_room": "living",
+    "kitchen": "kitchen", "kitchen_dining": "kitchen", "bathroom": "bathroom", "toilet": "bathroom",
+    "storage": "storage", "corridor": "corridor", "entrance": "corridor", "hall": "corridor",
+    "balcony": "outdoor", "loggia": "outdoor", "terrace": "outdoor", "staircase": "stairs",
+}
+
 _QUOTED = re.compile(r"'([^']{1,60})'|‘([^’]{1,60})’|«\s?([^»]{1,60}?)\s?»|„([^“”]{1,60})[“”]|"
                      r"\"([^\"]{1,60})\"|“([^”]{1,60})”")
 _UNIT_RE = re.compile(
@@ -330,6 +339,8 @@ class DrawingCtx:
     kind: str = "cad_dxf"
     #: the store read dimensions printed on this sheet: a length question has something to answer from
     printed_dimensions: int = 0
+    #: printed label -> concept ("bedroom", "living" ...) by the store's room type, where it has one
+    label_concepts: dict[str, str] = field(default_factory=dict)
 
 
 WHOLE_MODEL = S(r"whole building|entire building|in the (?:ifc )?model|whole model|all storeys|"
@@ -412,6 +423,10 @@ def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]
             for p in printed:
                 if _norm(p) in by_norm:
                     return by_norm[_norm(p)], p
+            typed = [lab for lab in labels if ctx and ctx.label_concepts.get(lab) == _concept]
+            if typed:                                  # the store reads a label of this drawing as that room
+                best = max(typed, key=ctx.labels.count)
+                return best, best
             if quoted:
                 return quoted[0], quoted[0]
             return (printed[0] if not labels else None), None

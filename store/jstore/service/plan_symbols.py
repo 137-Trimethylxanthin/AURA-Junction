@@ -17,12 +17,11 @@ MARKER_M = 0.9          # the opening drawn for a door of unknown width
 THIN = 0.45             # a box this flat is the opening alone
 
 
-def _cover(solid, p, q, t: float) -> float:
-    """Length of wall along the segment p-q (within t either side of it)."""
-    if solid is None or p == q:
+def _cover(near, p, q, t: float) -> float:
+    """Length of the segment p-q that runs in or beside a wall (`near`: the walls grown by the reach t)."""
+    if near is None or p == q:
         return 0.0
-    strip = LineString([p, q]).buffer(t, cap_style="flat")
-    return float(strip.intersection(solid).area) / (2 * t)
+    return float(LineString([p, q]).intersection(near).length)
 
 
 def _gap(solid, a, b, t: float) -> tuple[tuple, tuple] | None:
@@ -41,12 +40,13 @@ def door_symbol(x: float, y: float, w: float, h: float, solid, u: float) -> dict
     on the wall line, the unit normal `n` the leaf swings to, and `anchored`: the opening lies on a wall."""
     if max(w, h) <= 0 or u <= 0:
         return dict(mode="marker", a=(x, y + h / 2), b=(x + w, y + h / 2), n=(0.0, 1.0), anchored=False)
-    t = 0.15 / u
+    t = 0.1 / u
     local = None
     if solid is not None and not solid.is_empty:
         pad = max(w, h)
         local = solid.intersection(shapely.box(x - pad, y - pad, x + w + pad, y + h + pad))
         local = None if local.is_empty else local
+    near = local.buffer(t) if local is not None else None
     long, short = max(w, h), min(w, h)
     thin = short / long < THIN or (short * u < SINGLE_MIN_M and short < long)   # too flat or too shallow for a swing
     if thin:                                # the opening alone: its long axis is the wall line
@@ -58,15 +58,17 @@ def door_symbol(x: float, y: float, w: float, h: float, solid, u: float) -> dict
             n = (sign * base[0], sign * base[1])
             if local is None or not shapely.contains_xy(local, *tip):
                 break
-        length, depth, anchored = long, long, local is not None and _cover(local, _ext(a, b, -0.5), _ext(b, a, -0.5), t) > 0
+        # anchored: wall runs along the line beside the opening (a wall merely crossing it is as thick as a wall)
+        beside = _cover(near, _ext(a, b, -0.5), a, t) + _cover(near, b, _ext(b, a, -0.5), t)
+        length, depth, anchored = long, long, beside >= 0.45 * long
     else:                                                  # opening + swing: one edge of the box is the wall line
         edges = [((x, y), (x + w, y), (0.0, 1.0), w, h), ((x, y + h), (x + w, y + h), (0.0, -1.0), w, h),
                  ((x, y), (x, y + h), (1.0, 0.0), h, w), ((x + w, y), (x + w, y + h), (-1.0, 0.0), h, w)]
         best, score = None, 0.0
         for e in edges:
             p, q, _, ln, _ = e
-            s = (_cover(local, _ext(p, q, -0.5), p, t) + _cover(local, q, _ext(q, p, -0.5), t)
-                 - 0.5 * _cover(local, p, q, t)) / ln
+            s = (_cover(near, _ext(p, q, -0.5), p, t) + _cover(near, q, _ext(q, p, -0.5), t)
+                 - 0.5 * _cover(near, p, q, t)) / ln
             if best is None or s > score:
                 best, score = e, s
         if score < 0.2:                                    # no wall beside the box: where the door stands is unknown
@@ -109,7 +111,9 @@ def door_paths(sym: dict, stroke: str) -> list[str]:
     if length <= 0:
         return []
     d = ((b[0] - a[0]) / length, (b[1] - a[1]) / length)
-    out = [f'<path d="M{a[0]:.1f},{a[1]:.1f}L{b[0]:.1f},{b[1]:.1f}" fill="none" stroke="{stroke}" stroke-width="0.5"/>']
+    mid = _ext(a, b, 0.5)     # the threshold has a middle point: a two-point stroke of a door's length is a leaf (3D view)
+    out = [f'<path d="M{a[0]:.1f},{a[1]:.1f}L{mid[0]:.1f},{mid[1]:.1f}L{b[0]:.1f},{b[1]:.1f}" fill="none" stroke="{stroke}" '
+           f'stroke-width="0.5"/>']
     if sym["mode"] == "marker":
         k = min(length * 0.12, 4.0)
         for p in (a, b):

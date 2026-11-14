@@ -66,3 +66,9 @@ def test_a_room_inside_wall_fill_opens_the_fill():
     out = shapely.union_all(_walls_around_rooms(walls, rooms))
     assert not out.contains(shapely.Point(20, 20)) and out.contains(shapely.Point(39, 20))
     assert abs(out.area - (1600 - 400)) < 1e-6
+
+
+def test_a_wall_that_only_crosses_the_line_of_an_opening_does_not_anchor_it():
+    crossing = shapely.box(0, 90, 600, 110)                           # horizontal wall; the opening runs away from it
+    sym = door_symbol(300, 130, 0, 180, crossing, U)                  # 1.8 m long, perpendicular to the wall
+    assert sym["mode"] == "marker" and not sym["anchored"]

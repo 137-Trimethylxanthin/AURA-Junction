@@ -911,7 +911,8 @@ def _clean(d: dict) -> dict:
 
 def room_poly(r: dict) -> dict:
     """The RoomPoly of the contract (`area_m2` stays null when unknown; every other absent field is omitted)."""
-    out = _clean({k: r[k] for k in ("room_id", "num", "name", "unit", "outdoor", "points", "label_at", "area_source")})
+    out = _clean({k: r.get(k) for k in ("room_id", "num", "name", "unit", "outdoor", "points", "label_at", "area_source",
+                                         "room_type")})          # room_type: what the store reads the label as
     out["area_m2"] = r["area_m2"]
     return out
 
