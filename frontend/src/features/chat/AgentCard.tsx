@@ -529,14 +529,17 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
             {body}
           </p>
           {a.reason === 'low_confidence' && resp.estimate?.probabilities ? (
-            <ul className="num flex flex-col gap-0.5 text-sm" data-estimate-probabilities>
+            <ul className="num flex flex-col gap-1 text-xs" data-estimate-probabilities>
               {Object.entries(resp.estimate.probabilities)
                 .sort((x, y) => y[1] - x[1])
                 .slice(0, 5)
                 .map(([k, v]) => (
-                  <li key={k} className="flex justify-between gap-3">
-                    <span>{k}</span>
-                    <span>{Math.floor(v * 100)} %</span>
+                  <li key={k} className="grid grid-cols-[3.5rem_1fr_2.5rem] items-center gap-2">
+                    <span className="truncate">{k}</span>
+                    <span className="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
+                      <span className="block h-full rounded-full bg-muted-foreground" style={{ width: `${Math.floor(v * 100)}%` }} />
+                    </span>
+                    <span className="text-right">{Math.floor(v * 100)} %</span>
                   </li>
                 ))}
             </ul>

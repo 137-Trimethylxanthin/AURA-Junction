@@ -1,3 +1,4 @@
+import { useUi } from "@/i18n/uiLang"
 import {
   Suspense,
   lazy,
@@ -65,6 +66,7 @@ function useFitWidth(ref: React.RefObject<HTMLDivElement | null>, aspect: number
 }
 
 export function PlanStage() {
+  const { tu } = useUi()
   const drawing = useAppStore((s) => s.session.drawing)
   const tool = useAppStore((s) => s.ui.tool)
   const zoom = useAppStore(selectZoom)
@@ -373,8 +375,8 @@ export function PlanStage() {
               className="size-3.5 opacity-80"
             />
             {coarse
-              ? "Long-press a room for actions"
-              : "Right-click a room for actions"}
+              ? tu("hint_long")
+              : tu("hint_right")}
           </motion.div>
         ) : null}
       </AnimatePresence>

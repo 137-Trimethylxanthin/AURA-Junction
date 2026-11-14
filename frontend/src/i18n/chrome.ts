@@ -183,6 +183,9 @@ export const chromeEn = {
   fb_down: 'Something is wrong',
   session_aria: 'Session: {calls}, {cost}. Open reasoning tree',
   open_server_error: 'The server had a problem opening this drawing. Try again in a moment.',
+  sugg_aria: 'Suggested questions',
+  hint_long: 'Long-press a room for actions',
+  hint_right: 'Right-click a room for actions',
 }
 
 export type ChromeKey = keyof typeof chromeEn
@@ -355,6 +358,9 @@ export const chromeFr: ChromeDict = {
   fb_down: 'Il y a une erreur',
   session_aria: 'Session : {calls}, {cost}. Ouvrir l’arbre de raisonnement',
   open_server_error: 'Le serveur a rencontré un problème à l’ouverture de ce plan. Réessayez dans un instant.',
+  sugg_aria: 'Questions suggérées',
+  hint_long: 'Appui long sur une pièce pour les actions',
+  hint_right: 'Clic droit sur une pièce pour les actions',
 }
 
 export const chromeFi: ChromeDict = {
@@ -524,6 +530,9 @@ export const chromeFi: ChromeDict = {
   fb_down: 'Jokin on pielessä',
   session_aria: 'Istunto: {calls}, {cost}. Avaa päättelypuu',
   open_server_error: 'Palvelimella oli ongelma piirustuksen avaamisessa. Yritä hetken kuluttua uudelleen.',
+  sugg_aria: 'Ehdotetut kysymykset',
+  hint_long: 'Paina huonetta pitkään nähdäksesi toiminnot',
+  hint_right: 'Napsauta huonetta hiiren kakkospainikkeella nähdäksesi toiminnot',
 }
 
 export const chromeDe: ChromeDict = {
@@ -693,4 +702,7 @@ export const chromeDe: ChromeDict = {
   fb_down: 'Etwas stimmt nicht',
   session_aria: 'Sitzung: {calls}, {cost}. Denkbaum öffnen',
   open_server_error: 'Der Server hatte ein Problem beim Öffnen dieses Plans. Versuchen Sie es gleich noch einmal.',
+  sugg_aria: 'Vorgeschlagene Fragen',
+  hint_long: 'Raum lange drücken für Aktionen',
+  hint_right: 'Rechtsklick auf einen Raum für Aktionen',
 }

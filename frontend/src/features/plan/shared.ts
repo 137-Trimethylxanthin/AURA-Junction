@@ -1,3 +1,5 @@
+import { LOCALE } from '@/lib/format'
+import { uiLang } from '@/i18n/uiLang'
 import type { RefObject } from 'react'
 import type { BoxSubjectAny, Lang, RoomPoly } from '@/api/contract'
 import { noun } from '@/lib/format'
@@ -34,7 +36,7 @@ export function isEditable(target: EventTarget | null): boolean {
 
 /** Metres with 2–3 decimals (4.135, 3.60). */
 export const fmtMetres = (n: number) =>
-  new Intl.NumberFormat('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 3 }).format(n)
+  new Intl.NumberFormat(LOCALE[uiLang.get()], { minimumFractionDigits: 2, maximumFractionDigits: 3 }).format(n)
 
 /** Parses "3,6" or "3.60"; null when not a positive number. */
 export function parseMetres(s: string): number | null {

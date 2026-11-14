@@ -827,7 +827,7 @@ const uiDe: UiDict = {
   original_opacity: 'Deckkraft des Originals',
   zoom_in: 'Vergrössern',
   zoom_out: 'Verkleinern',
-  ask_placeholder: 'Fragen Sie in jeder Sprache…',
+  ask_placeholder: 'In jeder Sprache fragen…',
   ask_label: 'Frage zu diesem Plan',
   ask_voice: 'Per Sprache fragen',
   send: 'Senden',

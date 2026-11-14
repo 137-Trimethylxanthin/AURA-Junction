@@ -1,3 +1,4 @@
+import { useUi } from '@/i18n/uiLang'
 import { cn } from '@/lib/utils'
 import { actions, selectIsPending, useAppStore } from '@/store'
 import { SUGGESTIONS } from './draft'
@@ -5,9 +6,10 @@ import { SUGGESTIONS } from './draft'
 /** Suggested questions with a language tag. `row` = one horizontally scrolling line (composer). */
 export function SuggestionList({ row = false }: { row?: boolean }) {
   const pending = useAppStore(selectIsPending)
+  const { tu } = useUi()
   return (
     <ul
-      aria-label="Suggested questions"
+      aria-label={tu('sugg_aria')}
       className={cn(
         'flex gap-1.5',
         row ? 'shrink-0' : 'flex-col items-start',
