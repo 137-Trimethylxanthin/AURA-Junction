@@ -341,6 +341,31 @@ export interface DrawingStatusBody {
   stage_s?: number
 }
 
+/** One accepted upload type of `GET /uploads/accepted`. */
+export interface AcceptedType {
+  type: string
+  ext: string[]
+  max_mb: number
+  presenter_only?: boolean
+}
+
+/** `GET /uploads/accepted`: what this server takes, in its current mode. */
+export interface AcceptedUploads {
+  contract_version?: string
+  mode?: 'full' | 'quick'
+  types: AcceptedType[]
+  ttl_hours?: number
+}
+
+export function isAcceptedUploads(v: unknown): v is AcceptedUploads {
+  if (typeof v !== 'object' || v === null || !Array.isArray((v as AcceptedUploads).types)) return false
+  return (v as AcceptedUploads).types.every(
+    (t) =>
+      typeof t === 'object' && t !== null && typeof t.type === 'string' && Array.isArray(t.ext) &&
+      t.ext.every((e) => typeof e === 'string') && typeof t.max_mb === 'number' && Number.isFinite(t.max_mb),
+  )
+}
+
 /** `POST /uploads` (multipart, field `file`) response (1.1). */
 export interface UploadResult {
   contract_version?: string
@@ -434,7 +459,12 @@ export interface TraceNode {
   detail?: Record<string, unknown>
 }
 
-export type AbstainReason = 'not_on_drawing' | 'not_supported_yet' | 'unclear_question' | 'low_confidence'
+export type AbstainReason =
+  | 'not_on_drawing'
+  | 'not_supported_yet'
+  | 'unclear_question'
+  | 'low_confidence'
+  | 'not_answerable'
 
 /** 1.2: open-ended answer from the deep agent (unmapped unit, text/comparison, or open subject). */
 export interface AnswerNote {
@@ -887,7 +917,7 @@ function isAnswer(v: unknown): v is Answer {
   if (v.kind === 'note') return isStr(v.value) && optNum(v.number) && optStr(v.unit)
   if (v.kind === 'abstain')
     return (
-      isOneOf(v.reason, ['not_on_drawing', 'not_supported_yet', 'unclear_question', 'low_confidence'] as const) &&
+      isOneOf(v.reason, ['not_on_drawing', 'not_supported_yet', 'unclear_question', 'low_confidence', 'not_answerable'] as const) &&
       (v.where_to_find === undefined || isStr(v.where_to_find))
     )
   return false

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /**
  * WP6, mandatory: the merged upload flow on the running local stack (frontend :5173, backend :8000 in full mode).
@@ -16,7 +17,7 @@ import path from 'node:path'
  * A second test covers quick mode with /health and the status mocked.
  */
 
-const REPO = path.resolve(__dirname, '../..')
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const DATASET = path.join(REPO, 'data/junction-dataset')
 const STEM = process.env.AURA_E2E_STEM ?? 'site1004_bldg2086_floor9400' // not one of the 17 bundled drawings
 const API = process.env.AURA_E2E_API_BASE ?? 'http://localhost:8000'

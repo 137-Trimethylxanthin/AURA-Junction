@@ -415,6 +415,7 @@ export function announce(resp: AskResponse, d: Derived): string {
     if (r === 'not_on_drawing') return 'Not on this drawing. Nothing guessed.'
     if (r === 'not_supported_yet') return 'Fixtures of this kind are not extracted yet. Nothing guessed.'
     if (r === 'low_confidence') return 'Not sure enough to say. Nothing stated as a count.'
+    if (r === 'not_answerable') return 'Not in this drawing’s data. Nothing guessed.'
     return 'The question could not be matched to this drawing.'
   }
   const v = valueParts(resp, d, 'en')
@@ -605,4 +606,12 @@ export type { AgentFailure } from '@/api/contract'
 /** A failed deep-agent run (service down, deadline, run error), as the backend labels it in `agent_failure`. */
 export function agentFailure(resp: AskResponse): AgentFailure | null {
   return resp.answer.kind === 'abstain' ? (resp.agent_failure ?? null) : null
+}
+
+/** What the exact router, tools and SQL tried, from the trace's `look` node (English, from the server); null when absent. */
+export function triedText(resp: AskResponse): string | null {
+  const look = resp.trace.find((n) => n.id === 'look')
+  const text = look?.body.replace(/^I cannot answer this from the drawing.s data:?\s*/i, '').trim()
+  if (!text) return null
+  return text.length > 240 ? `${text.slice(0, 237)}…` : text
 }

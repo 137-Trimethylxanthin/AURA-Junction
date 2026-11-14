@@ -45,6 +45,7 @@ import {
   groupCssVars,
   rows,
   sentence,
+  triedText,
   valueParts,
   type AgentFailure,
   type Chip,
@@ -819,7 +820,9 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
     const title =
       a.reason === 'not_on_drawing'
         ? t(lang, 'not_on_drawing')
-        : a.reason === 'low_confidence'
+        : a.reason === 'not_answerable'
+          ? t(lang, 'na_title')
+          : a.reason === 'low_confidence'
           ? t(lang, 'low_conf_title')
           : a.reason === 'not_supported_yet'
           ? t(lang, 'not_supported_yet')
@@ -827,7 +830,9 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
     const body =
       a.reason === 'unclear_question'
         ? t(lang, 'unclear_hint')
-        : a.reason === 'low_confidence'
+        : a.reason === 'not_answerable'
+          ? t(lang, 'na_body')
+          : a.reason === 'low_confidence'
           ? t(lang, 'low_conf_body')
           : [a.where_to_find, t(lang, 'nothing_guessed')].filter(Boolean).join(' ')
     return (
@@ -839,6 +844,11 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
           <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]" data-abstain-body>
             {body}
           </p>
+          {a.reason === 'not_answerable' && triedText(resp) ? (
+            <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]" data-abstain-tried>
+              {t(lang, 'na_tried', { text: triedText(resp) ?? '' })}
+            </p>
+          ) : null}
           {a.reason === 'low_confidence' && resp.estimate?.probabilities ? (
             <ul className="num flex flex-col gap-1 text-xs" data-estimate-probabilities>
               {Object.entries(resp.estimate.probabilities)

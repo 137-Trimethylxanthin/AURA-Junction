@@ -2,7 +2,6 @@ import { useUi } from "@/i18n/uiLang"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router"
 import { CloudOffIcon, LayersIcon } from "lucide-react"
-import { ACCEPT } from "@/api/library"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,7 +9,7 @@ import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { StageTimeline } from "@/pages/upload/StageTimeline"
 import { stageView } from "@/pages/upload/stages"
-import { uploadHandoff, useStoreMode, useUploads } from "@/pages/upload/useUploads"
+import { acceptAttr, uploadHandoff, useAccepted, useStoreMode, useUploads } from "@/pages/upload/useUploads"
 
 export interface ReadyUploadSummary {
   id: string
@@ -91,6 +90,7 @@ function Uploader({
   const navigate = useNavigate()
   const mode = useStoreMode(base)
   const { rows } = useUploads(base, { onProjectsDiscovered, mode })
+  const accepted = useAccepted(base)
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
 
@@ -143,7 +143,7 @@ function Uploader({
           ref={input}
           type="file"
           multiple
-          accept={ACCEPT}
+          accept={acceptAttr(accepted)}
           className="sr-only"
           tabIndex={-1}
           aria-label={tu("up_file_aria")}

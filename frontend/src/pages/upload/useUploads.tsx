@@ -1,10 +1,10 @@
 import { tu as tuNow } from '@/i18n/uiLang'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
-import { ApiError, deleteDrawing, getDrawingStatus, getHealth, listProjects } from '@/api/client'
-import type { DrawingStatusBody } from '@/api/contract'
+import { ApiError, deleteDrawing, getAcceptedUploads, getDrawingStatus, getHealth, listProjects, reindexDrawing } from '@/api/client'
+import type { AcceptedType, DrawingStatusBody } from '@/api/contract'
 import {
-  checkFile,
+  UPLOAD_CAPS,
   myProjects,
   myUploads,
   presenter,
@@ -42,7 +42,67 @@ export interface UploadRow extends StoredUpload {
   leaving?: boolean
   /** Bytes, when the file was picked in this session. */
   size?: number
+  /** Refused before a drawing existed (the server's own words when it gave any). */
+  localError?: string
 }
+
+export interface Accepted {
+  types: AcceptedType[]
+  ttlHours: number
+  /** False: the built-in list (an older backend without GET /uploads/accepted). */
+  fromServer: boolean
+}
+
+const MB = 1024 * 1024
+/** Built-in list, used until (or unless) the server says what it takes. */
+export const BUILTIN_ACCEPTED: Accepted = {
+  types: [
+    { type: 'DXF', ext: UPLOAD_CAPS.dxf.exts, max_mb: UPLOAD_CAPS.dxf.bytes / MB },
+    { type: 'IFC', ext: UPLOAD_CAPS.ifc.exts, max_mb: UPLOAD_CAPS.ifc.bytes / MB },
+    { type: 'PDF', ext: UPLOAD_CAPS.pdf.exts, max_mb: UPLOAD_CAPS.pdf.bytes / MB },
+    { type: 'PNG, JPG or WebP', ext: UPLOAD_CAPS.image.exts, max_mb: UPLOAD_CAPS.image.bytes / MB, presenter_only: true },
+  ],
+  ttlHours: 24,
+  fromServer: false,
+}
+
+/** What the server accepts in its current mode; the built-in list while loading or on an older backend. */
+export function useAccepted(base: string | null): Accepted {
+  const [acc, setAcc] = useState<Accepted>(BUILTIN_ACCEPTED)
+  useEffect(() => {
+    if (!base) return
+    let alive = true
+    getAcceptedUploads({ baseUrl: base })
+      .then((a) => {
+        if (alive && a && a.types.length) setAcc({ types: a.types, ttlHours: a.ttl_hours ?? 24, fromServer: true })
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [base])
+  return acc
+}
+
+export const acceptAttr = (a: Accepted) => [...new Set(a.types.flatMap((t) => t.ext))].join(',')
+
+/** Client-side check against the accepted list (the server still decides from the file's bytes). */
+export function checkAgainst(
+  file: { name: string; size: number },
+  a: Accepted,
+  hasPresenter: boolean,
+): { ok: true } | { ok: false; message: string } {
+  const name = file.name.toLowerCase()
+  const t = a.types.find((x) => x.ext.some((e) => name.endsWith(e.toLowerCase())))
+  if (!t) return { ok: false, message: tuNow('ue_type') }
+  if (file.size === 0) return { ok: false, message: tuNow('ue_empty') }
+  if (file.size > t.max_mb * MB) return { ok: false, message: tuNow('ue_big', { type: t.type, mb: t.max_mb }) }
+  if (t.presenter_only && !hasPresenter) return { ok: false, message: tuNow('ue_presenter') }
+  return { ok: true }
+}
+
+/** The server's refusal in its own words when it sent any, else our wording for the error code. */
+const refusalText = (e: unknown) => (e instanceof ApiError && e.message && e.status < 500 ? e.message : uploadErrorText(e))
 
 export interface Rejection {
   name: string
@@ -206,8 +266,8 @@ export function useUploads(base: string, opts: { onProjectsDiscovered?: () => vo
         poll(res.drawing_id)
         return res.drawing_id
       } catch (e) {
-        setRows((rs) => rs.filter((r) => r.id !== temp))
-        toast.error(tuNow('up_toast_failed', { name: file.name }), { description: uploadErrorText(e) })
+        // Keep a failed row with the server's message (an SVG without the full setup, a DWG without the converter, ...).
+        patch(temp, { phase: 'failed', sent: undefined, last: 'upload', localError: refusalText(e) })
         return null
       }
     },
@@ -216,13 +276,13 @@ export function useUploads(base: string, opts: { onProjectsDiscovered?: () => vo
 
   /** Checks a drop or pick against the caps, then uploads the accepted files one after another. */
   const add = useCallback(
-    async (files: FileList | File[] | null, hasPresenter: boolean): Promise<string[]> => {
+    async (files: FileList | File[] | null, hasPresenter: boolean, accepted: Accepted = BUILTIN_ACCEPTED): Promise<string[]> => {
       const all = Array.from(files ?? [])
       if (!all.length) return []
       const out: Rejection[] = []
       const ok: File[] = []
       for (const file of all.slice(0, UPLOAD_BATCH)) {
-        const check = checkFile(file, hasPresenter)
+        const check = checkAgainst(file, accepted, hasPresenter)
         if (check.ok) ok.push(file)
         else out.push({ name: file.name, reason: check.message })
       }
@@ -242,6 +302,10 @@ export function useUploads(base: string, opts: { onProjectsDiscovered?: () => vo
 
   const remove = useCallback(
     async (r: UploadRow) => {
+      if (r.id.startsWith('local-')) {
+        setRows((rs) => rs.filter((x) => x.id !== r.id)) // refused before upload: nothing on the server
+        return
+      }
       try {
         await deleteDrawing({ baseUrl: base }, r.id, r.delete_token)
       } catch (e) {
@@ -260,14 +324,27 @@ export function useUploads(base: string, opts: { onProjectsDiscovered?: () => vo
     [base],
   )
 
-  /** Ask again: clears "too slow" and polls the server afresh. */
+  /**
+   * Retry. A failed or partial store run with a delete token: POST /drawings/:id/reindex (every page), then poll.
+   * Otherwise (too slow, no token): clear the wait and poll afresh.
+   */
   const retry = useCallback(
-    (r: UploadRow) => {
+    async (r: UploadRow, reindex = false) => {
+      if (reindex && r.delete_token) {
+        try {
+          const st = await reindexDrawing({ baseUrl: base }, r.id, r.delete_token)
+          if (st) patch(r.id, { status: st, phase: st.status })
+        } catch (e) {
+          const quick = e instanceof ApiError && e.status === 409
+          toast.error(tuNow(quick ? 'ul_retry_quick' : 'ul_retry_failed'), quick ? undefined : { description: refusalText(e) })
+          if (quick) return
+        }
+      }
       patch(r.id, { slow: undefined, storeSince: undefined, pollError: undefined })
-      rowsRef.current = rowsRef.current.map((x) => (x.id === r.id ? { ...x, slow: undefined, storeSince: undefined } : x))
+      rowsRef.current = rowsRef.current.map((x) => (x.id === r.id ? { ...x, slow: undefined, storeSince: undefined, last: 'reading' } : x))
       poll(r.id)
     },
-    [patch, poll],
+    [base, patch, poll],
   )
 
   /** Track an upload this browser has no token for (a shared /upload/:id link): status only, no delete. */

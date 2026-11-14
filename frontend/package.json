@@ -13,6 +13,7 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "e2e:api": "playwright test -c e2e/playwright.api.config.ts",
+    "e2e:live": "playwright test -c e2e/playwright.live.config.ts",
     "fixtures:export": "UPDATE_FIXTURES=1 vitest run src/api/conformance.fixtures.test.ts"
   },
   "dependencies": {

@@ -867,3 +867,35 @@ describe('pdf_vector and store_sql methods', () => {
     })
   }
 })
+
+import { announce, triedText } from '@/features/chat/view'
+
+describe('not_answerable abstain', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+  // Trace and answer node as returned by the live backend on swiss-4397 (walking-distance question).
+  const r = {
+    ...base,
+    answer: { kind: 'abstain', reason: 'not_answerable' },
+    method: 'none',
+    evidence: { boxes: [], rooms: [] },
+    trace: [
+      { id: 'q', title: 'Question', tag: 'English · detected', body: '“distance by walking route”', kind: 'info' },
+      {
+        id: 'look',
+        parent: 'q',
+        title: 'Look for the data',
+        tag: 'drawing',
+        body: "I cannot answer this from the drawing's data: the tools found no answer within their limits.",
+        kind: 'warn',
+      },
+      { id: 'answer', parent: 'q', title: 'Answer', tag: 'abstain', body: 'Abstained. Nothing guessed.', kind: 'warn' },
+    ],
+  } as unknown as AskResponse
+
+  it('is accepted, announced neutrally, and reports what was tried', () => {
+    expect(isAskResponse(r)).toBe(true)
+    expect(announce(r, deriveAnswer(r, emptyToggles()))).toBe('Not in this drawing’s data. Nothing guessed.')
+    expect(triedText(r)).toBe('the tools found no answer within their limits.')
+    expect(triedText({ ...r, trace: [] })).toBeNull()
+  })
+})

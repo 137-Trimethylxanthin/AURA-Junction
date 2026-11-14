@@ -12,7 +12,8 @@ import {
   Trash2Icon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { UPLOAD_CAPS, ACCEPT, apiBase } from '@/api/library'
+import { apiBase } from '@/api/library'
+import { useTitle } from '@/hooks/use-title'
 import type { UploadPage as UploadPageInfo } from '@/api/contract'
 import { SiteHeader } from '@/components/shell/SiteHeader'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -39,7 +40,10 @@ import { StageTimeline } from './StageTimeline'
 import { elapsed, estimatedCounts as estimatesOf, realFraction, reportedCounts, stageView, type StageView } from './stages'
 import {
   UPLOAD_BATCH,
+  acceptAttr,
   uploadHandoff,
+  useAccepted,
+  type Accepted,
   useHasPresenter,
   useStoreMode,
   useUploads,
@@ -52,6 +56,7 @@ const MB = 1024 * 1024
 export default function UploadPage() {
   const { tu } = useUi()
   const base = apiBase()
+  useTitle(tu('ul_title'))
   return (
     <div className="flex min-h-dvh flex-col bg-background">
       <SiteHeader />
@@ -130,13 +135,14 @@ function Uploads({ base }: { base: string }) {
   const mode = useStoreMode(base)
   const { rows, rejected, add, remove, retry, watch } = useUploads(base, { mode })
   const hasPresenter = useHasPresenter()
+  const accepted = useAccepted(base)
   const anyLive = rows.some((r) => viewOf(r, mode).outcome === 'working')
   const now = useNow(anyLive)
 
   // Files dropped on the library card arrive here.
   useEffect(() => {
     const files = uploadHandoff.take()
-    if (files.length) void add(files, hasPresenter)
+    if (files.length) void add(files, hasPresenter, accepted)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -151,7 +157,7 @@ function Uploads({ base }: { base: string }) {
       <PageHead mode={effectiveMode} />
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
         <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6">
-          <DropZone onFiles={(f) => void add(f, hasPresenter)} hasPresenter={hasPresenter} />
+          <DropZone onFiles={(f) => void add(f, hasPresenter, accepted)} accepted={accepted} />
           {rejected.length ? (
             <Alert variant="destructive" data-upload-rejected>
               <TriangleAlertIcon />
@@ -203,7 +209,7 @@ function Uploads({ base }: { base: string }) {
                     now={now}
                     focused={r.id === drawingId}
                     onDelete={() => void remove(r)}
-                    onRetry={() => retry(r)}
+                    onRetry={(reindex) => void retry(r, reindex)}
                   />
                 </li>
               ))}
@@ -215,16 +221,10 @@ function Uploads({ base }: { base: string }) {
   )
 }
 
-function DropZone({ onFiles, hasPresenter }: { onFiles: (f: FileList | null) => void; hasPresenter: boolean }) {
+function DropZone({ onFiles, accepted }: { onFiles: (f: FileList | null) => void; accepted: Accepted }) {
   const { tu } = useUi()
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
-  const caps: { key: UiKey; vars: Record<string, string | number> }[] = [
-    { key: 'ul_cap_dxf', vars: { mb: UPLOAD_CAPS.dxf.bytes / MB } },
-    { key: 'ul_cap_ifc', vars: { mb: UPLOAD_CAPS.ifc.bytes / MB } },
-    { key: 'ul_cap_pdf', vars: { mb: UPLOAD_CAPS.pdf.bytes / MB } },
-    { key: hasPresenter ? 'ul_cap_img' : 'ul_cap_img_presenter', vars: { mb: UPLOAD_CAPS.image.bytes / MB } },
-  ]
   return (
     <Card className="gap-0 p-0">
       <div
@@ -258,7 +258,7 @@ function DropZone({ onFiles, hasPresenter }: { onFiles: (f: FileList | null) => 
           ref={input}
           type="file"
           multiple
-          accept={ACCEPT}
+          accept={acceptAttr(accepted)}
           className="sr-only"
           tabIndex={-1}
           aria-label={tu('up_file_aria')}
@@ -269,17 +269,17 @@ function DropZone({ onFiles, hasPresenter }: { onFiles: (f: FileList | null) => 
           }}
         />
       </div>
-      <dl className="flex flex-col gap-2 border-t px-4 py-3 text-xs">
-        {caps.map((c) => (
-          <div key={c.key} className="text-muted-foreground">
-            <span className="num">{tu(c.key, c.vars)}</span>
-          </div>
+      <ul className="flex flex-col gap-2 border-t px-4 py-3 text-xs text-muted-foreground" aria-label={tu('ul_types')} data-accepted={accepted.fromServer ? 'server' : 'builtin'}>
+        {accepted.types.map((t) => (
+          <li key={t.type} className="num">
+            {tu(t.presenter_only ? 'ul_cap_presenter' : 'ul_cap', { type: t.type, mb: t.max_mb })}
+          </li>
         ))}
-      </dl>
+      </ul>
       <div className="flex flex-col gap-1 border-t px-4 py-3 text-xs text-muted-foreground">
         <p>{tu('ul_pdf_pages')}</p>
         <p>
-          {tu('ul_deleted_24h')}{' '}
+          {tu('ul_deleted_ttl', { h: accepted.ttlHours })}{' '}
           <Link to="/privacy" className="font-medium text-foreground underline underline-offset-2">
             {tu('nav_privacy')}
           </Link>
@@ -360,7 +360,7 @@ function UploadCard({
   now: number
   focused: boolean
   onDelete(): void
-  onRetry(): void
+  onRetry(reindex?: boolean): void
 }) {
   const { tu, lang } = useUi()
   const navigate = useNavigate()
@@ -503,10 +503,10 @@ function UploadCard({
 }
 
 /** What happened, in words, for every outcome that is not plain progress or success. */
-function Callout({ r, view, onRetry }: { r: UploadRow; view: StageView; onRetry(): void }) {
+function Callout({ r, view, onRetry }: { r: UploadRow; view: StageView; onRetry(reindex?: boolean): void }) {
   const { tu } = useUi()
   const note = r.status?.note
-  const error = r.status?.error?.replace(/^(DXF |The file |This file )?could not be read:?\s*/i, '')
+  const error = r.localError ?? r.status?.error?.replace(/^(DXF |The file |This file )?could not be read:?\s*/i, '')
   switch (view.outcome) {
     case 'store_failed':
       return (
@@ -516,7 +516,7 @@ function Callout({ r, view, onRetry }: { r: UploadRow; view: StageView; onRetry(
           <AlertDescription className="flex flex-col items-start gap-2">
             <span>{note || tu('ul_store_failed_desc')}</span>
             {view.openable ? <span>{tu('ul_still_askable')}</span> : null}
-            <Button variant="outline" onClick={onRetry}>
+            <Button variant="outline" onClick={() => onRetry(true)}>
               <RotateCwIcon data-icon="inline-start" />
               {tu('ul_retry')}
             </Button>
@@ -528,7 +528,15 @@ function Callout({ r, view, onRetry }: { r: UploadRow; view: StageView; onRetry(
         <Alert data-callout="partial">
           <TriangleAlertIcon className="text-warning" />
           <AlertTitle>{tu('ul_partial_title')}</AlertTitle>
-          <AlertDescription>{note || tu('ul_partial_desc')}</AlertDescription>
+          <AlertDescription className="flex flex-col items-start gap-2">
+            <span>{note || tu('ul_partial_desc')}</span>
+            {r.delete_token ? (
+              <Button variant="outline" onClick={() => onRetry(true)}>
+                <RotateCwIcon data-icon="inline-start" />
+                {tu('ul_retry')}
+              </Button>
+            ) : null}
+          </AlertDescription>
         </Alert>
       )
     case 'quick':
@@ -546,7 +554,7 @@ function Callout({ r, view, onRetry }: { r: UploadRow; view: StageView; onRetry(
           <AlertTitle>{tu('ul_slow_title')}</AlertTitle>
           <AlertDescription className="flex flex-col items-start gap-2">
             <span>{tu(view.openable ? 'ul_slow_desc_open' : 'ul_slow_desc')}</span>
-            <Button variant="outline" onClick={onRetry}>
+            <Button variant="outline" onClick={() => onRetry(false)}>
               <RotateCwIcon data-icon="inline-start" />
               {tu('ul_check_again')}
             </Button>
