@@ -28,6 +28,7 @@ from shapely.geometry import box as make_box
 
 from ..db import DB
 from . import store
+from .plan_symbols import door_paths, door_symbol, opening_cut
 
 CONTRACT_VERSION = "1.1"
 
@@ -770,7 +771,32 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
             g = g if g.is_valid else g.buffer(0)
             if not g.is_empty:
                 m.walls.append(g)
+        m.walls = _walls_around_rooms(m.walls, m.rooms)
     return m
+
+
+def _walls_around_rooms(walls: list, rooms: list[dict]) -> list:
+    """Wall polygons without the rooms they swallow: a room the store knows that lies mostly inside wall fill (a
+    shaft, a sauna or a store drawn dark on the scan) is a room, so the fill is opened for it."""
+    if not walls:
+        return walls
+    solid = shapely.union_all(walls)
+    inside = []
+    for r in rooms:
+        if len(r["points"]) < 3:
+            continue
+        p = shapely.Polygon(r["points"])
+        p = p if p.is_valid else p.buffer(0)
+        if p.area > 0 and solid.intersection(p).area > 0.5 * p.area:
+            inside.append(p)
+    if not inside:
+        return walls
+    hole = shapely.union_all(inside)
+    out = []
+    for g in walls:
+        g = g.difference(hole)
+        out += [x for x in getattr(g, "geoms", [g]) if x.geom_type == "Polygon" and not x.is_empty]
+    return out
 
 
 def _linework(db: DB, m: Model) -> tuple[str, int | str, Affine] | None:
@@ -1103,40 +1129,52 @@ def _scan_plan_svg(m: Model) -> str:
             d = d_of(geom)
             if d:
                 out.append(f'<path d="{d}" fill="{WALL_FILL}" fill-rule="evenodd"/>')
-    solid = shapely.union_all(m.walls) if m.walls else None
-    doors, windows, fixtures = [], [], []
+    to_svg = (sx, 0.0, 0.0, 0.0, sy, 0.0)
+    solid = transform(shapely.union_all(m.walls), to_svg) if m.walls else None     # in the units of the drawing
+    doors, windows, fixtures, cuts = [], [], [], []
     polys = [shapely.Polygon(r["points"]) for r in m.rooms if len(r["points"]) >= 3]
     indoors = shapely.union_all([p if p.is_valid else p.buffer(0) for p in polys]).buffer(1.0) if polys else None
+    door_boxes = [(i["box"]["x"] * sx, i["box"]["y"] * sy, i["box"]["w"] * sx, i["box"]["h"] * sy)
+                  for i in m.items if i["kind"] == "door" and i["box"] and not i.get("duplicate_of")]
+    u = 0.0                                              # metres per unit of the drawing
+    if base.frame:
+        pct_to_m = mul(base.frame, inv(base.to_pct))
+        u = math.hypot(pct_to_m[0], pct_to_m[3]) / sx
+    if u <= 0 and door_boxes:                            # no scale at all: the typical door of the plan is 0.9 m
+        u = 0.9 / max(sorted(max(b[2], b[3]) for b in door_boxes)[len(door_boxes) // 2], 1e-6)
+    near = None                                          # where an opening can be: by a wall or the edge of a room
+    if solid is not None or polys:
+        lines = ([solid] if solid is not None else []) + [transform(p.boundary, to_svg) for p in polys]
+        near = shapely.union_all(lines).buffer(0.5 / u if u > 0 else 6.0)
     for it in m.items:
         g, b = it.get("shape"), it["box"]
         if not b or it["subject"] == "label":
             continue
         x, y, w, h = b["x"] * sx, b["y"] * sy, b["w"] * sx, b["h"] * sy
         if it["kind"] == "window":
+            if near is not None and not near.intersects(shapely.box(x, y, x + w, y + h)):
+                continue                                 # a window stands in a wall: one detected away from all is not drawn
             d = d_of(g) if g is not None and g.geom_type in ("Polygon", "MultiPolygon") else ""
             windows.append(f'<path d="{d or f"M{x:.1f},{y:.1f}h{w:.1f}v{h:.1f}h{-w:.1f}Z"}" fill="#ffffff" stroke="{WINDOW_STROKE}" stroke-width="0.8"/>')
             a, c = ((x, y + h / 2), (x + w, y + h / 2)) if w >= h else ((x + w / 2, y), (x + w / 2, y + h))
             windows.append(f'<path d="M{a[0]:.1f},{a[1]:.1f}L{c[0]:.1f},{c[1]:.1f}" fill="none" stroke="{WINDOW_STROKE}" stroke-width="0.5"/>')
         elif it["kind"] == "door":
-            doors.append(f'<path d="M{x:.1f},{y:.1f}h{w:.1f}v{h:.1f}h{-w:.1f}Z" fill="none" stroke="{DOOR_STROKE}" stroke-width="0.5"/>')
-            # the leaf stands open at the hinge, across the wall, on the side that is not wall; the arc is its swing
-            along_x = w >= h
-            n = max(w, h)
-            hinge = (x, y + h / 2) if along_x else (x + w / 2, y)
-            best = None
-            for sign in (1, -1):
-                off = sign * (n + min(w, h) / 2)
-                tip = (hinge[0], hinge[1] + off) if along_x else (hinge[0] + off, hinge[1])
-                inside = solid is not None and bool(shapely.contains_xy(solid, tip[0] / sx, tip[1] / sy))
-                if best is None or (best[2] and not inside):
-                    best = (tip, sign, inside)
-            tip, sign, _ = best
-            end = (x + w, y + h / 2 + sign * h / 2) if along_x else (x + w / 2 + sign * w / 2, y + h)
-            start = (hinge[0], hinge[1] + sign * h / 2) if along_x else (hinge[0] + sign * w / 2, hinge[1])
-            sweep = 1 if (sign > 0) != along_x else 0
-            doors.append(f'<path d="M{start[0]:.1f},{start[1]:.1f}L{tip[0]:.1f},{tip[1]:.1f}" fill="none" stroke="{DOOR_STROKE}" stroke-width="1"/>')
-            doors.append(f'<path d="M{tip[0]:.1f},{tip[1]:.1f}A{n:.1f},{n:.1f} 0 0 {sweep} {end[0]:.1f},{end[1]:.1f}" fill="none" '
-                         f'stroke="{DOOR_STROKE}" stroke-width="0.5"/>')
+            if near is not None and not near.intersects(shapely.box(x, y, x + w, y + h)):
+                continue                                 # (nor is a door)
+            if g is not None and not g.is_empty:         # the detected shape itself: the box of a line is padded
+                x0, y0, x1, y1 = g.bounds
+                x, y, w, h = x0 * sx, y0 * sy, (x1 - x0) * sx, (y1 - y0) * sy
+            sym = door_symbol(x, y, w, h, solid, u)
+            if sym.get("oversized") and any(not (abs(o[0] - x) < 1 and abs(o[1] - y) < 1) and x <= o[0] + o[2] / 2 <= x + w and y <= o[1] + o[3] / 2 <= y + h
+                                            for o in door_boxes):
+                continue                                 # an oversized box around another door: that door is the symbol
+            cut = opening_cut(sym, solid, u)
+            if cut is not None:
+                for geom in getattr(cut, "geoms", [cut]):
+                    if geom.geom_type == "Polygon":
+                        cuts.append('<path d="M' + " ".join(f"{px:.1f},{py:.1f}" for px, py in geom.exterior.coords[:-1])
+                                    + 'Z" fill="#ffffff"/>')
+            doors += door_paths(sym, DOOR_STROKE)
         elif indoors is None or shapely.contains_xy(indoors, b["x"] + b["w"] / 2, b["y"] + b["h"] / 2):
             r = min(w, h) * 0.18                     # (a fixture detected outside every room is not part of the plan)
             d = (f"M{x + r:.1f},{y:.1f}h{w - 2 * r:.1f}l{r:.1f},{r:.1f}v{h - 2 * r:.1f}l{-r:.1f},{r:.1f}h{-(w - 2 * r):.1f}"
@@ -1144,8 +1182,9 @@ def _scan_plan_svg(m: Model) -> str:
             fixtures.append(f'<path d="{d}" fill="none" stroke="{FIXTURE_STROKE}" stroke-width="0.7"/>')
             fixtures.append(f'<path d="M{x + w * 0.25:.1f},{y + h * 0.25:.1f}h{w * 0.5:.1f}v{h * 0.5:.1f}h{-w * 0.5:.1f}Z" fill="none" '
                             f'stroke="{FIXTURE_STROKE}" stroke-width="0.4"/>')
-    out += ['</g><g data-layer="windows">', *windows, '</g><g data-layer="doors">', *doors,
+    out += [*cuts, '</g><g data-layer="windows">', *windows, '</g><g data-layer="doors">', *doors,
             '</g><g data-layer="fixtures">', *fixtures, '</g><g data-layer="labels">']
+    tall = max(1.0, H / SVG_W)                           # a tall sheet is shown smaller: its text grows with it
     for r in m.rooms:
         if len(r["points"]) < 3:
             continue
@@ -1159,7 +1198,8 @@ def _scan_plan_svg(m: Model) -> str:
         if not lines:
             continue
         longest = max(len(t) for t, _ in lines)          # the label fits the room: by its longest line and its lines
-        size = max(3.0, min(11.0, (max(xs) - min(xs)) / (0.56 * longest + 1), (max(ys) - min(ys)) / (1.3 * len(lines) + 0.5)))
+        size = max(3.0 * tall, min(11.0 * tall, (max(xs) - min(xs)) / (0.56 * longest + 1),
+                                   (max(ys) - min(ys)) / (1.3 * len(lines) + 0.5)))
         y -= (len(lines) - 1) * size * 0.6
         for text, weight in lines:
             out.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size:.1f}" font-weight="{weight}" text-anchor="middle" '
@@ -1167,7 +1207,7 @@ def _scan_plan_svg(m: Model) -> str:
                        f'paint-order="stroke">{html.escape(text)}</text>')
             y += size * 1.2
     if m.nominal:
-        out.append(f'<text x="6" y="{H - 6:.1f}" font-size="9" fill="#64748b" stroke="#ffffff" stroke-width="2" '
+        out.append(f'<text x="6" y="{H - 6:.1f}" font-size="{9 * tall:.1f}" fill="#64748b" stroke="#ffffff" stroke-width="2" '
                    f'paint-order="stroke">{html.escape(ESTIMATE_NOTE)}</text>')
     out.append("</g></svg>")
     return "\n".join(out)
