@@ -306,7 +306,8 @@ describe('1.2 Slash commands (/clear, /zoom, /color, filtering & Composer DOM ex
 
   it('parses /clear, /zoom <100..450>, /color contextual prompts, and aliases cleanly', () => {
     expect(resolveSlashCommand('/clear', { hasTurns: true })).toEqual({ kind: 'client', id: 'clear' })
-    expect(resolveSlashCommand('/new', { hasTurns: true })).toEqual({ kind: 'client', id: 'clear' })
+    expect(resolveSlashCommand('/new', { hasTurns: true })).toEqual({ kind: 'client', id: 'new' })
+    expect(resolveSlashCommand('/history', { hasTurns: false })).toEqual({ kind: 'client', id: 'history' })
     expect(resolveSlashCommand('/reset', { hasTurns: false })).toEqual({ kind: 'client', id: 'clear' })
     expect(resolveSlashCommand('/csv', { hasTurns: true })).toEqual({ kind: 'client', id: 'export' })
     expect(resolveSlashCommand('/?', { hasTurns: false })).toEqual({ kind: 'client', id: 'help' })

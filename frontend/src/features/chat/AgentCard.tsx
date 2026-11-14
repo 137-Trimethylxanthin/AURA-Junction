@@ -33,6 +33,7 @@ import {
 } from '@/store'
 import { BoxCropThumb } from './BoxCropThumb'
 import { StreamSteps } from './StreamSteps'
+import { ListenButton } from '@/features/voice/ListenButton'
 import {
   chips,
   evidenceGroupsOf,
@@ -882,10 +883,14 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
               {parts[0]}
             </span>
             {parts[1] ? <span className="text-lg font-medium">{parts[1]}</span> : null}
+            <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="ml-auto self-center" />
           </p>
         ) : null}
         {numericNoteProse ? <ClampedProse text={numericNoteProse} lang={lang} kind="note" /> : null}
         <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        {!parts || resp.answer.kind === 'text' || isProseNote ? (
+          <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="-ml-2 self-start" />
+        ) : null}
         {resp.estimate ? (
           <p className="text-sm text-muted-foreground" data-estimate>
             {resp.method === 'agent_estimate' ? (

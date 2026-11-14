@@ -25,6 +25,7 @@ import {
   SidebarOverlay,
 } from "@/features/chat"
 import { SessionHistorySheet } from "@/features/history/SessionHistorySheet"
+import { VoiceCopilotBar } from "@/features/voice/VoiceCopilotBar"
 import { Credit, PlanStage, PlanToolbar } from "@/features/plan"
 import { CommandPaletteDialog } from "@/features/shortcuts/CommandPaletteDialog"
 import { ShortcutHelpDialog } from "@/features/shortcuts/ShortcutHelpDialog"
@@ -126,7 +127,12 @@ export default function Workspace() {
         stage={<PlanStage />}
         credit={<Credit />}
         chat={<ChatPanel />}
-        composer={<Composer />}
+        composer={
+          <div className="flex flex-col gap-2">
+            <VoiceCopilotBar />
+            <Composer />
+          </div>
+        }
         sidebarOverlay={<SidebarOverlay />}
         sidebarOverlayOpen={traceOpen}
       />

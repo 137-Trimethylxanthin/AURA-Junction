@@ -1,7 +1,7 @@
 import type { AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
 import { LOCALE, fmtArea, fmtCount, noun } from '@/lib/format'
-import { t, type StringKey } from '@/i18n/strings'
+import { t, type StringKey, type UiKey } from '@/i18n/strings'
 
 /** Pure view-model helpers for the answer card. Every number comes from the response or Derived. */
 
@@ -435,6 +435,8 @@ export type SlashCommandId =
   | 'color'
   | 'stairs'
   | 'summary'
+  | 'new'
+  | 'history'
 
 export interface SlashCommandSpec {
   id: SlashCommandId
@@ -448,10 +450,26 @@ export interface SlashCommandSpec {
   description: string
   /** True when Tab-completion should append a trailing space for arguments. */
   acceptsArgs?: boolean
+  /** Interface-language key for the description (shown instead of `description` when set). */
+  descriptionKey?: UiKey
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
-  { id: 'clear', cmd: '/clear', aliases: ['new', 'reset'], description: 'Clear conversation (with Undo)' },
+  { id: 'clear', cmd: '/clear', aliases: ['reset'], description: 'Clear conversation (with Undo)' },
+  {
+    id: 'new',
+    cmd: '/new',
+    aliases: [],
+    description: 'New conversation (the current one is saved to History)',
+    descriptionKey: 'slash_new_desc',
+  },
+  {
+    id: 'history',
+    cmd: '/history',
+    aliases: ['sessions'],
+    description: 'Open session history',
+    descriptionKey: 'slash_history_desc',
+  },
   {
     id: 'color',
     cmd: '/color',
@@ -530,6 +548,8 @@ export function resolveSlashCommand(input: string, ctx: { hasTurns: boolean }): 
     case 'whatif':
     case 'undo':
     case 'help':
+    case 'new':
+    case 'history':
       return { kind: 'client', id: spec.id }
     case 'zoom': {
       if (!arg) return { kind: 'client', id: 'fit' }

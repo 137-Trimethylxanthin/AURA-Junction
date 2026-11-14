@@ -9,11 +9,11 @@ import {
   useRef,
   useState,
 } from "react"
-import { ArrowUpIcon, CrosshairIcon, LayersIcon, MicIcon, SparklesIcon, TerminalIcon, XIcon } from "lucide-react"
+import { ArrowUpIcon, CrosshairIcon, LayersIcon, SparklesIcon, TerminalIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import type { Scope } from "@/api/contract"
 import { Button } from "@/components/ui/button"
-import { LOCALE, fmtCount } from "@/lib/format"
+import { fmtCount } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import {
   actions,
@@ -29,7 +29,8 @@ import {
   useAppStore,
 } from "@/store"
 import { downloadText, evidenceCsv } from "@/features/plugins/csv"
-import { speechSupported, useSpeech } from "@/features/voice/useSpeech"
+import { dictationSupported, useDictation } from "@/features/voice/useDictation"
+import { MicButton } from "@/features/voice/MicButton"
 import { RewriteCard } from "@/features/rewrite/RewriteCard"
 import { needsTidy, splitLocally } from "@/features/rewrite/heuristic"
 import { canRewriteWithModel, useRewrite } from "@/features/rewrite/state"
@@ -37,6 +38,7 @@ import { t } from "@/i18n/strings"
 import { promptBlocksFor, fillBlock, useDraft } from "./draft"
 import { markLabel } from "@/features/plan/shared"
 import type { UiKey } from "@/i18n/strings"
+import { sessionHistory } from "@/features/history"
 
 const PB_LABEL: Record<string, UiKey> = { Count: "pb_count", Area: "pb_area", "Where is": "pb_where", Check: "pb_check", List: "pb_list" }
 import { ScrollRow } from "./ScrollRow"
@@ -79,10 +81,10 @@ export function Composer() {
   const promptBlocks = useMemo(() => promptBlocksFor(drawing, activeProject), [drawing, activeProject])
   const ta = useRef<HTMLTextAreaElement>(null)
   const [voiceOpen, setVoiceOpen] = useState(false)
-  const [canSpeak] = useState(speechSupported)
+  const [canSpeak] = useState(dictationSupported)
   const [slashIndex, setSlashIndex] = useState(0)
   const [dismissedSlashText, setDismissedSlashText] = useState<string | null>(null)
-  const speech = useSpeech(LOCALE[lang])
+  const speech = useDictation(lang)
   const rewriteOpen = useRewrite((s) => s.status !== "idle")
   // Re-evaluated when the source changes (the model rewrite needs the API).
   const sourceKind = useAppStore((s) => s.session.source.kind)
@@ -164,6 +166,25 @@ export function Composer() {
     setDismissedSlashText(null)
     const st = appStore.getState()
     switch (action.id) {
+      case "new": {
+        if (st.turns.length > 0 || st.ui.marks.length > 0) {
+          const restore = actions().newConversation()
+          toast(tu("hist_saved"), {
+            id: NEW_CHAT_UNDO_TOAST,
+            toasterId: CHAT_TOASTER,
+            duration: 6000,
+            action: {
+              label: tu("undo"),
+              onClick: () => restore(),
+            },
+          })
+        }
+        break
+      }
+      case "history": {
+        sessionHistory.setOpen(true)
+        break
+      }
       case "clear": {
         if (st.turns.length > 0 || st.ui.marks.length > 0) {
           const restore = actions().newConversation()
@@ -294,6 +315,7 @@ export function Composer() {
             error={speech.error}
             langName={LANG_NAME_EN[lang]}
             onStop={speech.stop}
+            onRetry={speech.start}
             onDiscard={closeVoice}
             onUse={() => {
               const said = speech.text
@@ -341,7 +363,7 @@ export function Composer() {
                   {spec.cmd}
                   {spec.argHint ? <span className="ml-1 font-normal text-muted-foreground">{spec.argHint}</span> : null}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{spec.description}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{spec.descriptionKey ? tu(spec.descriptionKey) : spec.description}</span>
               </li>
             )
           })}
@@ -485,19 +507,11 @@ export function Composer() {
           </Button>
         ) : null}
         {canSpeak ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={tu('ask_voice')}
-            aria-pressed={voiceOpen}
-            title={tu('ask_voice')}
-            onClick={voiceOpen ? closeVoice : openVoice}
-            className={cn(
-              voiceOpen && "bg-destructive-surface text-destructive"
-            )}
-          >
-            <MicIcon />
-          </Button>
+          <MicButton
+            open={voiceOpen}
+            state={speech.state}
+            onToggle={() => (!voiceOpen ? openVoice() : speech.state === "listening" ? speech.stop() : closeVoice())}
+          />
         ) : null}
         <Button
           size="icon"

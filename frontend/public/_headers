@@ -6,7 +6,7 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://aura-backend.example.modal.run; font-src 'self' data:; connect-src 'self' https://aura-backend.example.modal.run; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://aura-backend.example.modal.run; font-src 'self' data:; connect-src 'self' https://aura-backend.example.modal.run wss://generativelanguage.googleapis.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'
   Permissions-Policy: microphone=(self), camera=(), geolocation=(), payment=(), usb=()
   X-Frame-Options: DENY
 

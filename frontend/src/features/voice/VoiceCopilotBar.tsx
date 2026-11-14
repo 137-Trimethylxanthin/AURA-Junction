@@ -46,7 +46,7 @@ export function VoiceCopilotBar({
       <Button
         type="button"
         variant="outline"
-        className={cn('h-10 min-w-10 gap-2', className)}
+        className={cn('h-10 min-w-10 gap-2 self-start', className)}
         aria-keyshortcuts="Alt+Shift+V"
         title={`${tu('vo_live_start')} (Alt+Shift+V)`}
         onClick={toggle}

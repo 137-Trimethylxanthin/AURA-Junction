@@ -106,7 +106,7 @@ export function HeaderActions() {
             disabled={!hasTurns}
             onClick={() => {
               const restore = actions().newConversation()
-              toast(tu("new_chat_cleared"), {
+              toast(tu("hist_saved"), {
                 id: NEW_CHAT_UNDO_TOAST,
                 toasterId: CHAT_TOASTER,
                 duration: 6000,

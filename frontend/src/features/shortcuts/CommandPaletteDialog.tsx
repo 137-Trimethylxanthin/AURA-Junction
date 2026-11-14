@@ -7,6 +7,7 @@ import {
   FileSpreadsheetIcon,
   GitBranchIcon,
   GlobeIcon,
+  HistoryIcon,
   KeyboardIcon,
   LayersIcon,
   MapPinIcon,
@@ -39,6 +40,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { bundledDrawing } from '@/data/drawing'
 import { suggestionsFor, useDraft } from '@/features/chat/draft'
+import { sessionHistory, useSessionHistory } from '@/features/history'
 import { roomTitle } from '@/features/plan/shared'
 import { downloadText, evidenceCsv } from '@/features/plugins/csv'
 import { uiLang, useUi } from '@/i18n/uiLang'
@@ -66,7 +68,7 @@ const LANGUAGE_ITEMS: readonly { code: Lang; name: string }[] = [
 ]
 
 /** Power rows that already have a dedicated palette item (which just shows the pill). */
-const PALETTE_HAS_ITEM = new Set(['fit', 'all-floors', 'export', 'new-chat', 'library', 'plugins'])
+const PALETTE_HAS_ITEM = new Set(['fit', 'all-floors', 'export', 'new-chat', 'library', 'plugins', 'history'])
 
 export function CommandPaletteDialog({
   store = appStore,
@@ -91,6 +93,11 @@ export function CommandPaletteDialog({
   const hasOriginal = useStore(store, (s) => Boolean(s.session.drawing.images.original))
   const activeProject = useStore(store, selectActiveProject)
   const crossPlanScope = useStore(store, selectCrossPlanScope)
+  const allSessions = useSessionHistory((st) => st.sessions)
+  const recentSessions = useMemo(
+    () => [...allSessions].sort((a, b) => b.updated_at - a.updated_at).slice(0, 8),
+    [allSessions],
+  )
 
   const [remoteDrawings, setRemoteDrawings] = useState<DrawingSummary[] | null>(null)
   const skipCloseRestoreRef = useRef(false)
@@ -454,7 +461,7 @@ export function CommandPaletteDialog({
                   onSelect={() =>
                     runCommand(() => {
                       const restore = store.getState().newConversation()
-                      toast(tu('new_chat_cleared'), {
+                      toast(tu('hist_saved'), {
                         id: 'new-chat-undo',
                         toasterId: 'chat',
                         duration: 6000,
@@ -474,6 +481,21 @@ export function CommandPaletteDialog({
                   </CommandShortcut>
                 </CommandItem>
               ) : null}
+
+              <CommandItem
+                value={`history sessions past conversations ${tu('hist_open')}`}
+                className="min-h-10"
+                onSelect={() => runCommand(() => sessionHistory.setOpen(true))}
+              >
+                <HistoryIcon />
+                <span>{tu('hist_open')}</span>
+                <CommandShortcut>
+                  <KbdGroup>
+                    <Kbd>{alt}</Kbd>
+                    <Kbd>H</Kbd>
+                  </KbdGroup>
+                </CommandShortcut>
+              </CommandItem>
 
               <CommandItem
                 value={`plugins mcp extensions ${tu('plugins')}`}
@@ -644,6 +666,30 @@ export function CommandPaletteDialog({
                       </CommandItem>
                     )
                   })}
+                </CommandGroup>
+              </>
+            ) : null}
+
+            {recentSessions.length > 0 ? (
+              <>
+                <CommandSeparator />
+                <CommandGroup heading={tu('hist_recent')}>
+                  {recentSessions.map((s) => (
+                    <CommandItem
+                      key={s.id}
+                      value={`session ${s.title} ${s.drawing_title ?? ''} ${s.id}`}
+                      className="min-h-10"
+                      onSelect={() => runCommand(() => void sessionHistory.restore(s.id, navigate))}
+                    >
+                      <HistoryIcon />
+                      <span className="truncate">{s.title}</span>
+                      {s.floor_label ?? s.drawing_title ? (
+                        <span className="ml-auto max-w-[40%] truncate text-xs text-muted-foreground">
+                          {s.floor_label ?? s.drawing_title}
+                        </span>
+                      ) : null}
+                    </CommandItem>
+                  ))}
                 </CommandGroup>
               </>
             ) : null}
