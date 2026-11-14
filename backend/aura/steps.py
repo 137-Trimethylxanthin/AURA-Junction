@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -77,6 +78,10 @@ DECLARATIONS: list[dict] = [
          "label": {"type": "string", "description": "Substring of the printed room label."},
          "unit": {"type": "string", "description": "Apartment letter."},
          "min_area_m2": {"type": "number"}, "max_area_m2": {"type": "number"},
+         "min_strict": {"type": "boolean", "description": "true for 'larger/more than' (>), false "
+                                                           "for 'at least' (>=)."},
+         "max_strict": {"type": "boolean", "description": "true for 'smaller/less than' (<), false "
+                                                           "for 'at most' (<=)."},
          "indoor_only": {"type": "boolean", "description": "Drop balconies/terraces."},
          "from": _FROM}}},
     {"name": "rooms_containing",
@@ -99,7 +104,11 @@ DECLARATIONS: list[dict] = [
          "from": {"type": "string", "description": "Optional door/window result set to narrow, "
                                                    "e.g. the previous answer's doors."},
          "double": {"type": "boolean"},
-         "min_width_m": {"type": "number"}, "max_width_m": {"type": "number"}},
+         "min_width_m": {"type": "number"}, "max_width_m": {"type": "number"},
+         "min_strict": {"type": "boolean", "description": "true for 'wider than' (>), false for "
+                                                           "'at least' (>=)."},
+         "max_strict": {"type": "boolean", "description": "true for 'narrower than' (<), false "
+                                                           "for 'at most' (<=)."}},
          "required": ["kind"]}},
     {"name": "connected_rooms",
      "description": "Rooms connected to the rooms of a set: via='door' (a door on both outlines) "
@@ -266,6 +275,33 @@ class Toolbox:
         return out
 
 
+# Comparison words: "wider/larger/more/over ... than" is strict (>), "at least / or more / minimum"
+# inclusive (>=); likewise "narrower/smaller/less/under" (<) versus "at most / up to" (<=).
+_INCL_LO = re.compile(r"at least|or (?:more|larger|bigger|wider|greater|above)|\bminimum\b|\bmin\.|"
+                      r"no (?:less|smaller|narrower) than|≥|>=", re.IGNORECASE)
+_STRICT_LO = re.compile(r"\b(?:wider|larger|bigger|greater|more|longer|over|above|exceed\w*)\b|>",
+                        re.IGNORECASE)
+_INCL_HI = re.compile(r"at most|or (?:less|smaller|narrower|fewer|below)|\bup to\b|\bmaximum\b|\bmax\.|"
+                      r"no (?:more|larger|wider|bigger) than|≤|<=", re.IGNORECASE)
+_STRICT_HI = re.compile(r"\b(?:narrower|smaller|less|fewer|shorter|under|below)\b|<", re.IGNORECASE)
+
+
+def _strict(side: str, model_flag: Any, question: str) -> bool:
+    """Whether a bound is strict: the question's own words decide; the model's flag only when the
+    question has no comparison word; inclusive by default."""
+    incl, strict = (_INCL_LO, _STRICT_LO) if side == "lo" else (_INCL_HI, _STRICT_HI)
+    if incl.search(question):
+        return False
+    if strict.search(question):
+        return True
+    return model_flag is True
+
+
+def _outside(v: float, lo: float | None, lo_s: bool, hi: float | None, hi_s: bool) -> bool:
+    return ((lo is not None and (v <= lo if lo_s else v < lo))
+            or (hi is not None and (v >= hi if hi_s else v > hi)))
+
+
 def _num(v: Any) -> float | None:
     try:
         return None if v is None else float(v)
@@ -280,6 +316,7 @@ class Session:
         self.tb = tb
         self.base = list(tb.order) if base is None else [r for r in tb.order if r in set(base)]
         self.scoped = base is not None  # the user selected an apartment / room / region
+        self.question = ""  # the user's message: its comparison words decide strict vs inclusive
         self.sets: dict[str, ResultSet] = {}
         self.n = 0
 
@@ -362,10 +399,14 @@ class Session:
         if unit and unit not in units:
             raise StepError(f"this drawing has no apartment {unit}; apartments: {', '.join(units) or 'none'}")
         lo, hi = _num(a.get("min_area_m2")), _num(a.get("max_area_m2"))
+        lo_s = lo is not None and _strict("lo", a.get("min_strict"), self.question)
+        hi_s = hi is not None and _strict("hi", a.get("max_strict"), self.question)
         indoor = bool(a.get("indoor_only"))
         rules = [x for x in (f"type = {rtype}" if rtype else "", f"label contains '{label}'" if label else "",
-                             f"apartment {unit}" if unit else "", f"area ≥ {lo:g} m²" if lo is not None else "",
-                             f"area ≤ {hi:g} m²" if hi is not None else "", "indoor" if indoor else "") if x]
+                             f"apartment {unit}" if unit else "",
+                             f"area {'>' if lo_s else '≥'} {lo:g} m²" if lo is not None else "",
+                             f"area {'<' if hi_s else '≤'} {hi:g} m²" if hi is not None else "",
+                             "indoor" if indoor else "") if x]
 
         def keep(rid: str) -> str | None:
             r = tb.rooms[rid]
@@ -380,17 +421,17 @@ class Session:
                 return "outdoor"
             if (lo is not None or hi is not None) and area is None:
                 return "no area"
-            if lo is not None and float(area) < lo:
-                return f"{area:g} m² < {lo:g}"
-            if hi is not None and float(area) > hi:
-                return f"{area:g} m² > {hi:g}"
+            if _outside(float(area), lo, lo_s, hi, hi_s):
+                return f"{area:g} m² outside the bound"
             return None
 
         rs = self._rooms_set(ref, "list_rooms", a, self._rooms_of(a.get("from")), keep,
                              " and ".join(rules) or "all rooms", ["rooms"])
         quals = [x for x in (f"labelled '{label}'" if label else "", f"in apartment {unit}" if unit else "",
-                             f"of at least {lo:g} m²" if lo is not None else "",
-                             f"of at most {hi:g} m²" if hi is not None else "",
+                             (f"larger than {lo:g} m²" if lo_s else f"of at least {lo:g} m²")
+                             if lo is not None else "",
+                             (f"smaller than {hi:g} m²" if hi_s else f"of at most {hi:g} m²")
+                             if hi is not None else "",
                              "indoors" if indoor else "") if x]
         rs.desc = (tools.noun(rtype, 2) if rtype else "rooms") + (" " + ", ".join(quals) if quals else "") \
             + self.among(a.get("from"))
@@ -450,26 +491,30 @@ class Session:
                 raise StepError(f"from={a['from']!r} is not a {kind} result set")
             pool = [b for b in pool if b.id in set(src.ids)]
         lo, hi = _num(a.get("min_width_m")), _num(a.get("max_width_m"))
-        if a.get("double"):
-            lo = max(lo or 0.0, DOUBLE_DOOR_M)
+        lo_s = lo is not None and _strict("lo", a.get("min_strict"), self.question)
+        hi_s = hi is not None and _strict("hi", a.get("max_strict"), self.question)
+        if a.get("double") and (lo is None or lo < DOUBLE_DOOR_M):
+            lo, lo_s = DOUBLE_DOOR_M, False  # the double-door rule is inclusive
         kept, dropped = [], []
         for b in pool:
             w = tb.width_m[b.id]
             why = ("not on those rooms" if rooms is not None and not rooms & set(tb.box_rooms[b.id]) else
-                   f"{w:.2f} m wide" if (lo is not None and w < lo) or (hi is not None and w > hi) else None)
+                   f"{w:.2f} m wide" if _outside(w, lo, lo_s, hi, hi_s) else None)
             (dropped.append({"id": b.id, "reason": why}) if why else kept.append(b.id))
         twice = sum(1 for i in kept if tb.box_by_id[i].duplicate_of)
         on = (f"on the outline of {self.words(a['rooms'])}" if a.get("rooms") else
               "in the selected scope" if rooms is not None else "")
         parts = [on,
-                 f"width ≥ {lo:.2f} m" + (" (double door)" if a.get("double") else "") if lo is not None else "",
-                 f"width ≤ {hi:.2f} m" if hi is not None else "",
+                 f"width {'>' if lo_s else '≥'} {lo:.2f} m" + (" (double door)" if a.get("double") else "")
+                 if lo is not None else "",
+                 f"width {'<' if hi_s else '≤'} {hi:.2f} m" if hi is not None else "",
                  f"{twice} drawn twice in the CAD file, both counted as the dataset does" if twice else ""]
         desc = " ".join(x for x in (
             tools.noun(kind, 2),
             f"at least {DOUBLE_DOOR_M:.2f} m wide (double doors)" if a.get("double") else
-            f"at least {lo:.2f} m wide" if lo is not None else "",
-            f"at most {hi:.2f} m wide" if hi is not None else "", on) if x)
+            (f"wider than {lo:.2f} m" if lo_s else f"at least {lo:.2f} m wide") if lo is not None else "",
+            (f"narrower than {hi:.2f} m" if hi_s else f"at most {hi:.2f} m wide") if hi is not None else "",
+            on) if x)
         if a.get("from"):
             desc += f", among {self.words(a['from'])}"
         return ResultSet(ref, "list_openings", a, "boxes", kept, ", ".join(p for p in parts if p) or "all",
@@ -802,6 +847,7 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
                 scope: dict, base: list[str] | None) -> A.Built | None:
     tb = await asyncio.to_thread(Toolbox, d)
     sess = Session(tb, base)
+    sess.question = question
     prev = _previous_set(sess, history)
     labels = sorted({str(r.get("name"))[:60] for r in tb.rooms.values() if r.get("name")})[:60]
     data = {"apartments": [str(u["id"])[:8] for u in d.drawing.get("units", [])],

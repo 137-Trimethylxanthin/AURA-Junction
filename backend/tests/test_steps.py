@@ -214,6 +214,37 @@ async def test_no_internal_set_refs_in_user_text(d):
     assert answer_node["detail"]["source"] == "tools"
 
 
+@pytest.mark.parametrize(("question", "strict"), [
+    ("which of them are wider than 0.95 m", True), ("doors over 0.95 m", True),
+    ("doors at least 0.95 m wide", False), ("doors of 0.95 m or more", False),
+    ("doors 0.95 m", False)])
+def test_width_bound_strictness_follows_the_words(d, question, strict):
+    tb = steps.Toolbox(d)
+    w = sorted(tb.width_m[b.id] for b in tb.boxes["door"])[len(tb.boxes["door"]) // 2]
+    sess = steps.Session(tb)
+    sess.question = question
+    rs = sess.run("list_openings", {"kind": "door", "min_width_m": w})
+    widths = [tb.width_m[i] for i in rs.ids]
+    assert widths and all(x > w if strict else x >= w for x in widths)
+    assert (w in widths) is (not strict)  # a door exactly at the bound is the difference
+    assert (f"width > {w:.2f} m" if strict else f"width ≥ {w:.2f} m") in rs.rule
+    assert ("wider than" if strict else "at least") in rs.desc
+
+
+@pytest.mark.parametrize(("question", "strict"), [
+    ("rooms smaller than 12 m²", True), ("rooms under 12 m²", True),
+    ("rooms of at most 12 m²", False), ("rooms up to 12 m²", False)])
+def test_area_upper_bound_strictness(d, question, strict):
+    tb = steps.Toolbox(d)
+    a = next(r["area_m2"] for r in d.drawing["rooms"] if r.get("area_m2"))
+    sess = steps.Session(tb)
+    sess.question = question
+    rs = sess.run("list_rooms", {"max_area_m2": a})
+    areas = [tb.rooms[r]["area_m2"] for r in rs.ids]
+    assert (a in areas) is (not strict)
+    assert (f"area < {a:g} m²" if strict else f"area ≤ {a:g} m²") in rs.rule
+
+
 async def test_call_limit_returns_none(d):
     built, stats, client = await ask(d, [[("list_rooms", {})]])  # never finishes
     assert built is None
