@@ -5,6 +5,7 @@ the trace (stages resources → decision → filter → answer).
 """
 from __future__ import annotations
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -121,3 +122,43 @@ def test_decision_model_exact_route_answers_and_is_shown_in_the_trace(tmp_path):
         assert dec["detail"]["runner_up"] == "agent" and dec["confidence"] == pytest.approx(0.91)
         assert dec["detail"]["asked"]["subject"]["choice"] == "door"
         assert sc.runs == []
+
+
+def test_decision_trace_never_shows_other_peoples_cached_questions(tmp_path):
+    def gate(path, body):
+        q = body.get("questions") or {}
+        if "cache_match" not in q:
+            return None
+        opts = [k for k in q["cache_match"]["criteria"] if k != "none"]
+        ans = {"on_drawing": {"noul": 0.97}, "exact_sufficient": {"noul": 0.05},
+               "intent": {"choice": "other", "confidence": 0.9, "probabilities": {"other": 0.9}},
+               "subject": {"choice": "other", "confidence": 0.9, "probabilities": {"other": 0.9}},
+               "scope": {"choice": "floor", "confidence": 0.9, "probabilities": {"floor": 0.9}},
+               "cache_match": {"choice": "none", "confidence": 0.8,
+                               "probabilities": {"none": 0.8, **{o: 0.2 for o in opts}}}}
+        return 200, {"answers": ans, "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1}}
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=MockSidecarState(),
+                                    gemini=MockGeminiDecisionsTransport(gate))) as c:
+        secret = "what is the total floor area zebra"  # someone else's earlier question
+        _chat(c, None, secret)
+        _, r = _chat(c, None, "tell me something unusual about the doors please")
+        dec = next(n for n in r["trace"] if n.get("stage") == "decision")
+        assert "zebra" not in str(dec)
+        assert "question" not in dec["detail"]["asked"]["cache_match"]
+
+
+def test_agent_down_is_a_neutral_failure_without_raw_errors(tmp_path):
+    sc = MockSidecarState()
+    sc.health_ok = False
+
+    def down(request):
+        raise httpx.ConnectError("connection refused to http://127.0.0.1:8090/runs")
+
+    sc.handler = None
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc)) as c:
+        c.app.state.svc.agent._http._transport = httpx.MockTransport(down)
+        _, r = _chat(c, None, "how many double doors are there?")
+        assert r["agent_failure"] == "unavailable" and r["answer"]["kind"] == "abstain"
+        look = next(n for n in r["trace"] if n["id"] == "look")
+        assert "127.0.0.1" not in look["body"] and "refused" not in look["body"]

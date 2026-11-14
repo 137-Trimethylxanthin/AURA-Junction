@@ -690,6 +690,7 @@ def test_multiplan_scope_project_stairs_color_groups_links_and_floor_switching(t
                 "message": "Show all stairs and where they lead to in different color combinations",
                 "scope": {"kind": "project", "project_id": proj_id, "drawing_ids": [d1, d2]},
             },
+            headers={"x-delete-token": up["delete_token"]},  # an upload-backed bundle is private
         )
         assert chat_r.status_code == 200, chat_r.text
         evs, _ = parse_sse_raw(chat_r.text)

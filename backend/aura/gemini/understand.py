@@ -374,10 +374,11 @@ async def decide_hybrid_route(
             asked[qk] = {"p": res.noul(qk)}
         else:
             ch, conf, probs = res.choice(qk)
-            if qk == "cache_match" and ch in key_by_opt:
-                ch = key_by_opt[ch][1]  # the cached question, not its option id
-                probs = {(key_by_opt[k][1] if k in key_by_opt else k): v for k, v in probs.items()}
             asked[qk] = {"choice": ch, "confidence": conf, "probabilities": probs}
+            if qk == "cache_match" and matched_q is not None:
+                # Cached questions were typed by other people: only option ids leave the server,
+                # plus the text of the one entry actually used as this answer.
+                asked[qk]["question"] = matched_q
 
     return HybridDecision(
         on_drawing=res.noul("on_drawing") if "on_drawing" in questions else None,

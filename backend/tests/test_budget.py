@@ -19,11 +19,29 @@ def test_seed_event_total_starts_at_94():
     # 41 requests before the build + 53 for the held-out CubiCasa eval.
     b = make()
     assert b.event_used() == 94
-    assert b.snapshot()["event"] == {"used": 94, "cap": 0, "seed": 94}
+    assert b.snapshot()["event"] == {"used": 94, "cap": 1000, "seed": 94}
 
 
-def test_caps_default_to_unlimited_but_spend_is_still_counted():
+def test_defaults_are_bounded():
+    """A deployment that sets nothing is capped (fail closed): the key and the disk are bounded."""
     s = Settings()
+    assert not s.unlimited
+    assert (s.event_cap, s.daily_cap, s.ip_agent_per_hour, s.agent_runs_per_ip_hour,
+            s.agent_runs_per_day, s.uploads_per_ip_hour, s.max_queued_uploads) == (1000, 350, 40, 3, 15, 10, 20)
+    assert s.upload_quota_bytes == 2 * 1024**3 and s.raster_public_cap == 0  # raster: presenter only
+    b = Budget(s)
+    for _ in range(3):
+        b.commit(b.reserve("agent_run", ip_hash="ip1"), model="gemini-3.8-flash")
+    with pytest.raises(BudgetError) as e:
+        b.reserve("agent_run", ip_hash="ip1")
+    assert e.value.code == "rate_limited"
+    with pytest.raises(BudgetError) as e:
+        b.reserve("raster_detect", ip_hash="ip2")
+    assert e.value.code == "presenter_required"
+
+
+def test_aura_unlimited_lifts_every_cap_but_spend_is_still_counted():
+    s = Settings(AURA_UNLIMITED=True)
     assert (s.event_cap, s.daily_cap, s.ip_agent_per_hour, s.agent_runs_per_ip_hour,
             s.agent_runs_per_day, s.uploads_per_ip_hour) == (0, 0, 0, 0, 0, 0)
     b = Budget(s)
@@ -101,7 +119,7 @@ def test_daily_cap_uses_helsinki_day():
 
 
 def test_per_ip_limit_applies_to_agent_bucket_only():
-    assert Settings().ip_agent_per_hour == 0  # unlimited by default; public deploys set a cap
+    assert Settings().ip_agent_per_hour == 40  # the venue shares one IP
     b = Budget(Settings(AURA_IP_AGENT_PER_HOUR=15))
     for _ in range(15):
         b.commit(b.reserve("agent", ip_hash="ip1"), model="gemini-3.1-flash-lite")
@@ -139,7 +157,7 @@ def test_presenter_bypasses_only_per_ip_limits():
 
 
 def test_raster_needs_presenter_unless_public_cap():
-    b = Budget(Settings(AURA_RASTER_PUBLIC_CAP=-1))
+    b = Budget(Settings())
     with pytest.raises(BudgetError) as e:
         b.reserve("raster_detect", ip_hash="x")
     assert e.value.code == "presenter_required"

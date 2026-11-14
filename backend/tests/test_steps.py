@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -75,7 +76,7 @@ async def test_rooms_with_toilets_in_one_call_from_indexed_fixtures(d):
     assert stats["meter"].calls == 1
     kept = [r["room_id"] for r in body["evidence"]["rooms"]]
     assert sorted(kept) == wc_rooms(d)
-    assert body["answer"]["kind"] == "note" and body["answer"]["number"] == len(kept)
+    assert body["answer"] == {"kind": "count", "value": len(kept), "subject": "room"}
     assert {b["subject"] for b in body["evidence"]["boxes"]} == {"wc"}
     assert body["method"] == "cad_geometry" and stats["route"] == "choice"
 
@@ -143,6 +144,74 @@ async def test_unrelated_judge_does_not_taint_an_exact_answer(d):
              verdict, [("finish", {"set": "s1", "answer": "count"})]]
     built, stats, _ = await ask(d, turns)
     assert validated(built, stats)["method"] == "cad_geometry"
+
+
+async def ask_with_history(d, turns, history, question="q"):
+    client = FakeClient(turns)
+    stats = {"meter": Meter(), "route": "template"}
+    built = await steps.answer_with_tools(svc_for(client), d, question, "en",
+                                          SimpleNamespace(ip_hash=None, presenter=False), stats,
+                                          history)
+    return built, stats, client
+
+
+def all_doors_turn(d) -> list[dict]:
+    doors = tools.count_objects(d, "door")
+    return [{"message": "show all doors", "response": {
+        "answer": {"kind": "count", "value": doors.value, "subject": "door"},
+        "evidence": {"boxes": [b.model_dump(exclude_none=True) for b in doors.boxes], "rooms": []}}}]
+
+
+def doors_of_wc_rooms(d) -> set[str]:
+    tb = steps.Toolbox(d)
+    wc = set(wc_rooms(d))
+    return {b.id for b in tb.boxes["door"] if wc & set(tb.box_rooms[b.id])}
+
+
+async def test_doors_of_toilet_rooms_standalone_and_as_follow_up_agree(d):
+    want = doors_of_wc_rooms(d)
+    # every WC room has at least one door: fewer doors than WC rooms would be wrong
+    assert len(want) >= len(wc_rooms(d))
+    alone, st1, _ = await ask(d, [[("rooms_containing", {"kind": "wc"}),
+                                   ("list_openings", {"kind": "door", "rooms": "s1", "finish_as": "list"})]])
+    follow, st2, client = await ask_with_history(
+        d, [[("rooms_containing", {"kind": "wc"}),
+             ("list_openings", {"kind": "door", "rooms": "s2", "from": "s1", "finish_as": "list"})]],
+        all_doors_turn(d))
+    for built, stats in ((alone, st1), (follow, st2)):
+        body = validated(built, stats)
+        assert body["answer"] == {"kind": "count", "value": len(want), "subject": "door"}
+        assert {b["id"] for b in body["evidence"]["boxes"]} == want
+        assert body["method"] == "cad_geometry"
+    index = next(p["text"] for c in client.sent[0]["contents"] for p in c["parts"]
+                 if "Drawing index" in p.get("text", ""))
+    assert '"previous_answer_set"' in index and '"set": "s1"' in index
+
+
+async def test_follow_up_only_narrows_previous_items(d):
+    history = all_doors_turn(d)
+    keep = history[0]["response"]["evidence"]["boxes"][:3]
+    history[0]["response"]["evidence"]["boxes"] = keep
+    built, stats, _ = await ask_with_history(
+        d, [[("list_openings", {"kind": "door", "from": "s1", "finish_as": "count"})]], history)
+    body = validated(built, stats)
+    assert {b["id"] for b in body["evidence"]["boxes"]} == {b["id"] for b in keep}
+
+
+async def test_no_internal_set_refs_in_user_text(d):
+    built, stats, _ = await ask(d, [[("rooms_containing", {"kind": "wc"}),
+                                     ("connected_rooms", {"to": "s1", "via": "door"}),
+                                     ("list_openings", {"kind": "door", "rooms": "s1", "double": True,
+                                                        "finish_as": "count"})]])
+    body = validated(built, stats)
+    texts = [body["explanation"]] + [n["body"] for n in body["trace"]
+                                     if n.get("stage") in ("filter", "answer")]
+    texts += [n["detail"]["rule"] for n in body["trace"] if n.get("stage") == "filter"]
+    assert not [t for t in texts if re.search(r"\bs\d+\b", t)]
+    assert "rooms that contain a WC" in body["explanation"]
+    assert "double door" in body["explanation"]
+    answer_node = next(n for n in body["trace"] if n.get("stage") == "answer")
+    assert answer_node["detail"]["source"] == "tools"
 
 
 async def test_call_limit_returns_none(d):

@@ -1145,9 +1145,12 @@ class AgentClient:
                     response_scope,
                     "low_confidence",
                     question,
-                    f"The deep agent could not complete this run ({run_error or 'no answer returned'}).",
+                    "The deep agent could not complete this run; nothing guessed.",
                     intent_tag=intent_tag,
                 )
+                if run_error:
+                    log.warning("deep agent run %s failed: %s", run_id, run_error)  # detail: log only
+                built.body["agent_failure"] = "error"
                 yield "_built", built
                 return
 
@@ -1220,6 +1223,7 @@ class AgentClient:
                 f"The agent did not finish in {elapsed_s} s; nothing guessed (not known yet, at most 40 requests).",
                 intent_tag=intent_tag,
             )
+            built.body["agent_failure"] = "timeout"
             yield "_built", built
         except (httpx.HTTPError, GeminiError) as e:
             log.warning("deep agent run failed: %s: %s", type(e).__name__, e)  # detail stays in the log
@@ -1237,6 +1241,7 @@ class AgentClient:
                 "The deep agent is not reachable right now; nothing guessed. Try again in a minute.",
                 intent_tag=intent_tag,
             )
+            built.body["agent_failure"] = "unavailable"
             yield "_built", built
         finally:
             if not settled:

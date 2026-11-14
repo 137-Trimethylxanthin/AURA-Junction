@@ -175,6 +175,12 @@ def test_manual_project_crud_and_validation(tmp_path):
         d_upper, d_lower = u1["drawing_id"], u2["drawing_id"]
         assert wait_status(c, d_upper)["status"] == "ready"
         assert wait_status(c, d_lower)["status"] == "ready"
+        mine = {"x-delete-token": f"{u1['delete_token']}, {u2['delete_token']}"}  # comma-separated
+
+        # Bundling uploads needs their delete tokens: someone else's upload is refused.
+        stranger = c.post("/projects", json={"title": "Grab", "drawing_ids": [d_upper, d_lower]},
+                          headers={"x-delete-token": u1["delete_token"]})
+        assert stranger.status_code == 403 and d_lower in stranger.json()["error"]
 
         # Validation: < 2 floors -> 400; unknown drawing_id -> 404
         assert c.post("/projects", json={"title": "Solo", "drawing_ids": [d_upper]}).status_code == 400
@@ -184,13 +190,15 @@ def test_manual_project_crud_and_validation(tmp_path):
         created = c.post(
             "/projects",
             json={"id": "proj-manual-1", "title": "Duplex House", "drawing_ids": [d_upper, d_lower]},
+            headers=mine,
         )
         assert created.status_code == 200, created.text
         pb = created.json()
         assert pb["id"] == "proj-manual-1"
         assert pb["auto_matched"] is False
         assert [f["drawing_id"] for f in pb["floors"]] == [d_lower, d_upper]
-        owner = {"x-project-token": pb["project_token"]}  # shown once, only its hash is stored
+        assert pb["token"] == pb["project_token"]
+        owner = {"x-project-token": pb["token"], **mine}  # shown once, only its hash is stored
 
         # Someone without the owner token can neither overwrite nor delete it.
         hijack = {"id": "proj-manual-1", "title": "Mine now", "drawing_ids": [d_upper, d_lower]}

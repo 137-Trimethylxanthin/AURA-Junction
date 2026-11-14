@@ -127,8 +127,8 @@ def test_huge_png_header_rejected_before_decode(client):
 
 
 def test_anonymous_png_needs_presenter(tmp_path):
-    # Presenter-only raster (public deployments: AURA_RASTER_PUBLIC_CAP=-1; local default is unlimited).
-    with TestClient(make_app(tmp_path, AURA_PRESENTER_TOKEN="pres", AURA_RASTER_PUBLIC_CAP=-1)) as client:
+    # Raster is presenter-only by default (AURA_RASTER_PUBLIC_CAP=0).
+    with TestClient(make_app(tmp_path, AURA_PRESENTER_TOKEN="pres")) as client:
         _anonymous_png_needs_presenter(client)
 
 
@@ -525,8 +525,7 @@ def test_raster_room_and_fixture_counts_are_gated_model_estimates(tmp_path):
     from tests.conftest import FIXTURES, SWISS_IMAGE
 
     fake = FakeTransport(FIXTURES / "gemini")
-    with TestClient(make_app(tmp_path, transport=fake, AURA_PRESENTER_TOKEN="pres",
-                             AURA_RASTER_PUBLIC_CAP=-1)) as c:
+    with TestClient(make_app(tmp_path, transport=fake, AURA_PRESENTER_TOKEN="pres")) as c:
         did = upload(c, SWISS_IMAGE.read_bytes(), "plan.png",
                      headers={"x-aura-presenter": "pres"}).json()["drawing_id"]
         assert wait_status(c, did)["status"] == "ready"

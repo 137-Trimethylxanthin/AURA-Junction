@@ -24,6 +24,10 @@ export AURA_SIDECAR_URL="${AURA_SIDECAR_URL:-http://127.0.0.1:${JUNCTION_PORT:-8
 export AURA_SIDECAR_TOKEN_FILE="${AURA_SIDECAR_TOKEN_FILE:-${JUNCTION_TOKEN_FILE:-$root/agent-service/.data/token}}"
 export AURA_SIDECAR_MODEL="${AURA_SIDECAR_MODEL:-${JUNCTION_MODEL:-gemini-3.8-flash}}"
 
+# Local dev and demo run without request/upload caps (spend is still counted in /budget).
+# The code defaults stay bounded, so a deploy that forgets this is safe. Set AURA_UNLIMITED=0 to test caps.
+export AURA_UNLIMITED="${AURA_UNLIMITED:-1}"
+
 host="${HOST:-127.0.0.1}"
 port="${PORT:-8000}"
 

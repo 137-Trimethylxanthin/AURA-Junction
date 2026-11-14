@@ -220,15 +220,16 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
 
 
 def _tokens(request: Request, header: str) -> list[str]:
-    """One or more tokens in a header (comma-separated, e.g. every project the browser owns)."""
-    return [t.strip() for t in (request.headers.get(header) or "").split(",") if t.strip()][:50]
+    """One or more tokens in a header: comma-separated and/or the header repeated."""
+    return [t.strip() for v in request.headers.getlist(header) for t in v.split(",") if t.strip()][:50]
 
 
 def _project_access(s: Services, request: Request, floor_ids: list[str], token_hash: str | None) -> bool:
-    """The request owns the project: its owner token (`x-project-token`), or for a bundle built
-    from an upload (multi-page PDF), the delete token of one of its upload floors (`x-delete-token`)."""
-    if token_hash and any(uploads.token_ok(t, token_hash) for t in _tokens(request, "x-project-token")):
-        return True
+    """The request owns the project. A project with an owner token (`token_hash`) is reached only
+    with that token (`x-project-token`); a bundle auto-built from an upload (no owner token) is
+    reached with the delete token of one of its upload floors (`x-delete-token`)."""
+    if token_hash:
+        return any(uploads.token_ok(t, token_hash) for t in _tokens(request, "x-project-token"))
     given = _tokens(request, "x-delete-token")
     if given and s.store is not None:
         for did in floor_ids:
@@ -248,12 +249,18 @@ def _project_of(s: Services, project_id: str) -> ProjectBundle | None:
     return next((p for p in _synthesize_projects(s) if p.id == project_id), None)
 
 
-def _scope_refused(s: Services, drawing_id: str, scope: Any) -> JSONResponse | None:
+def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -> JSONResponse | None:
     """A project scope is used only as the server stored it: every drawing it names (and the
-    drawing asked about) must be a floor of that stored bundle."""
+    drawing asked about) must be a floor of that stored bundle, and a bundle with an upload floor
+    is private exactly as in GET /projects (unknown to anyone without its token)."""
     if scope is None or getattr(scope, "kind", None) != "project":
         return None
     proj = _project_of(s, scope.project_id)
+    if proj is not None and any(f.drawing_id.startswith("up-") for f in proj.floors):
+        row = s.store.project_row(proj.id) if s.store else None
+        if not _project_access(s, request, [f.drawing_id for f in proj.floors],
+                               row.get("token_hash") if row else None):
+            proj = None  # same answer as an unknown id: do not confirm it exists
     if proj is None:
         return _err("not_found", f"Unknown project '{scope.project_id}'.", 404)
     members = {f.drawing_id for f in proj.floors}
@@ -545,9 +552,22 @@ def create_app(
             })
         except ValidationError as e:
             return JSONResponse({"detail": jsonable_encoder(e.errors())}, status_code=422)
+        given = _tokens(request, "x-delete-token")
+        # Floors an already-owned project held before this save stay covered by its owner token;
+        # every other upload floor needs its own delete token (one token never covers another).
+        covered: set[str] = set()
+        if existing is not None and existing.get("token_hash") and _project_access(
+                s, request, [], existing["token_hash"]):
+            covered = {str(f.get("drawing_id", "")) for f in existing["floors"]}
         for fl in pb.floors:
             if s.registry.get(fl.drawing_id) is None:
                 return _err("unknown_drawing", f"Unknown drawing '{fl.drawing_id}'.", 404)
+            # An upload may only be bundled by whoever holds its delete token (library drawings
+            # are public); otherwise a project would expose someone else's upload.
+            row = s.store.drawing_row(fl.drawing_id) if (s.store and fl.drawing_id.startswith("up-")) else None
+            if (row is not None and fl.drawing_id not in covered
+                    and not any(uploads.token_ok(t, row["delete_token_hash"]) for t in given)):
+                return _err("bad_request", f"You do not own drawing '{fl.drawing_id}'.", 403)
         sorted_floors = sorted(pb.floors, key=lambda f: (float(f.order), f.label, f.drawing_id))
         pb = pb.model_copy(update={"floors": sorted_floors})
         dumped = pb.model_dump(exclude_none=True)
@@ -566,7 +586,7 @@ def create_app(
                 ),
             )
         # The owner token is shown once, on create; only its hash is stored.
-        return dumped | ({"project_token": new_token} if new_token else {})
+        return dumped | ({"token": new_token, "project_token": new_token} if new_token else {})
 
     @app.delete("/projects/{project_id}")
     async def delete_project(project_id: str, request: Request):
@@ -685,7 +705,7 @@ def create_app(
         size = f.size if f.size is not None else len(head)
         try:
             kind = uploads.validate(head, size, presenter_ok=presenter
-                                    or settings.raster_public_cap >= 0)
+                                    or settings.unlimited or settings.raster_public_cap > 0)
         except uploads.UploadError as e:
             return _err(e.code, str(e), e.status)
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -752,7 +772,7 @@ def create_app(
     async def post_ask(body: AskRequest, request: Request):
         if (r := not_ready(request, body.drawing_id)) is not None:
             return r
-        if (r := _scope_refused(svc(request), body.drawing_id, body.scope)) is not None:
+        if (r := _scope_refused(svc(request), request, body.drawing_id, body.scope)) is not None:
             return r
         meters = {"answer": Meter(), "check": Meter()}
         try:
@@ -768,7 +788,7 @@ def create_app(
         s = svc(request)
         if s.registry.get(body.drawing_id) is None:
             return _err("unknown_drawing", f"Unknown drawing '{body.drawing_id}'", 404)
-        if (r := _scope_refused(s, body.drawing_id, body.scope)) is not None:
+        if (r := _scope_refused(s, request, body.drawing_id, body.scope)) is not None:
             return r
         if body.conversation_id:
             conv = s.store.conversation(body.conversation_id) if s.store else None

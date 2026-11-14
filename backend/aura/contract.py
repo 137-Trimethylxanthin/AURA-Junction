@@ -341,6 +341,9 @@ class TraceNode(_M):
 
 class AskResponse(_M):
     contract_version: str = CONTRACT_VERSION
+    # 1.2 additive: set only when the deep agent failed (the answer is then an abstain); the
+    # frontend shows a neutral "Ask again" card instead of a verdict.
+    agent_failure: Literal["unavailable", "timeout", "error"] | None = None
     answer: Answer
     evidence: Evidence
     detected_lang: Lang
