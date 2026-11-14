@@ -27,6 +27,37 @@ Versions are those in `backend/uv.lock` at the time of writing. Licences are rea
 
 Regenerate: `cd backend && uv pip list`, then check each package's `importlib.metadata` licence fields.
 
+## Agent Service (`agent-service/`, Python 3.12 sidecar)
+
+`agent-service/` is authored by Team **KuK Hofclankerei** and published as part of AURA under the repository's **MIT** licence (forked from the teammate's `junction-service` on 14 Nov 2026 with explicit MIT consent; PyMuPDF and LibreDWG/`dwg2dxf` were removed so zero AGPL/GPL dependencies exist).
+
+Direct dependencies (`agent-service/requirements.txt`):
+
+| Package | Version | Licence |
+|---|---|---|
+| openai-agents | 0.24.0 | MIT |
+| openai | 3.51.0 | Apache-2.0 |
+| fastapi | 0.162.7 | MIT |
+| uvicorn | 0.54.0 | BSD-3-Clause |
+| python-multipart | 0.0.33 | Apache-2.0 |
+| httpx | 0.28.1 | BSD-3-Clause |
+| pydantic | 2.14.3 | MIT |
+| anyio | 4.16.0 | MIT |
+| ezdxf | 1.4.5 | MIT |
+| pdfplumber | 0.11.10 | MIT (uses `pdfminer.six` 20260107, MIT) |
+| pypdfium2 | 5.15.2 | BSD-3-Clause / Apache-2.0 (bundles PDFium, BSD-3-Clause) |
+| shapely | 2.2.0 | BSD-3-Clause |
+| numpy | 2.5.4 | BSD-3-Clause |
+| opencv-python-headless | 5.0.0.93 | Apache-2.0 |
+| scikit-image | 0.26.0 | BSD-3-Clause |
+| pillow | 13.0.0 | MIT-CMU (HPND-style) |
+| matplotlib | 3.11.2 | PSF-2.0 / BSD-compatible |
+| rapidocr-onnxruntime | 1.4.4 | Apache-2.0 |
+| onnxruntime | 1.32.0 | MIT |
+| pytesseract | 0.3.13 | Apache-2.0 |
+| ifcopenshell | 0.9.0.post1 | LGPL-3.0-or-later (imported dynamically as an unmodified library) |
+| pytest, pytest-asyncio (dev only) | 9.2.0, 1.5.0 | MIT, Apache-2.0 |
+
 ## Frontend (npm, production)
 
 `npx license-checker --production --summary` reports: MIT 124, OFL-1.1 2, Apache-2.0 2, MPL-2.0 2, ISC 2, 0BSD 2, BlueOak-1.0.0 1, BSD-3-Clause 1, plus the frontend package itself (private, "UNLICENSED"). No GPL or AGPL.
