@@ -220,7 +220,9 @@ def decision_node(hd, route: str) -> dict:
             ru = f", runner-up {probs[1][0]} {probs[1][1]:.2f}" if len(probs) > 1 else ""
             parts.append(f"{k} = {a[k]['choice']} ({a[k]['confidence']:.2f}{ru})")
     if "cache_match" in a:
-        parts.append(f"earlier question = {a['cache_match']['choice']} ({a['cache_match']['confidence']:.2f})")
+        cm = a["cache_match"]
+        parts.append(f"earlier answer = {('“' + cm['question'] + '”') if cm.get('question') else cm['choice']} "
+                     f"({cm['confidence']:.2f})")
     if route == "exact":
         chosen_conf, runner, runner_conf = ex, "agent", (None if ex is None else 1 - ex)
         matched = f"template {hd.intent}" + (f" · {hd.subject}" if hd.subject else "")
@@ -1192,7 +1194,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             gate_node = stats.get("decision_node")
             tools_built: A.Built | None = None
             try:
-                tools_built = await answer_with_tools(svc, d, question, lang, caller, stats, history)
+                tools_built = await answer_with_tools(svc, d, question, lang, caller, stats, history, eff_scope)
             except Exception:  # the tool path must never take the turn down; the agent still runs
                 log.exception("tool-step answerer failed; escalating to sidecar agent")
             if tools_built is not None:

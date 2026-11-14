@@ -96,9 +96,53 @@ async def test_numbers_come_from_tools_not_model_text(d):
 async def test_count_of_openings_uses_box_set(d):
     built, stats, _ = await ask(d, [[("list_openings", {"kind": "door", "finish_as": "count"})]])
     body = validated(built, stats)
-    n = len([b for b in d.drawing["evidence"]["door"] if not b.get("duplicate_of")])
+    n = tools.count_objects(d, "door").value  # same number as the exact template
     assert body["answer"] == {"kind": "count", "value": n, "subject": "door"}
     assert len(body["evidence"]["boxes"]) == n
+
+
+async def test_selected_scope_limits_the_room_pool(d):
+    client = FakeClient([[("list_rooms", {"room_type": "bedroom", "finish_as": "list"})]])
+    stats = {"meter": Meter(), "route": "template"}
+    scope = {"kind": "unit", "unit": "A"}
+    built = await steps.answer_with_tools(svc_for(client), d, "q", "en",
+                                          SimpleNamespace(ip_hash=None, presenter=False), stats,
+                                          None, scope)
+    body = validated(built, stats)
+    want = sorted(r["room_id"] for r in d.drawing["rooms"]
+                  if r.get("unit") == "A" and steps.room_type(r) == "bedroom")
+    assert want
+    assert sorted(r["room_id"] for r in body["evidence"]["rooms"]) == want
+    assert body["scope"] == scope
+
+
+async def test_failed_call_in_a_turn_blocks_finish_as(d):
+    turns = [[("rooms_containing", {"kind": "sauna"}), ("list_rooms", {"finish_as": "count"})],
+             [("rooms_containing", {"kind": "wc", "finish_as": "count"})]]
+    built, stats, _ = await ask(d, turns)
+    body = validated(built, stats)
+    assert stats["meter"].calls == 2  # re-planned instead of finishing on the unrestricted set
+    assert body["answer"]["value"] == len(wc_rooms(d))
+
+
+async def test_falling_back_to_all_rooms_is_not_an_answer(d):
+    turns = [[("find_text", {"text": "street"}), ("list_rooms", {"finish_as": "list"})]]
+    built, _, _ = await ask(d, turns)
+    assert built is None
+
+
+async def test_unfiltered_room_list_is_not_an_answer_unless_grouped(d):
+    assert (await ask(d, [[("list_rooms", {"finish_as": "count"})]]))[0] is None
+    built, stats, _ = await ask(d, [[("list_rooms", {"finish_as": "list", "group_by": "unit"})]])
+    assert validated(built, stats)["evidence"]["groups"]
+
+
+async def test_unrelated_judge_does_not_taint_an_exact_answer(d):
+    verdict = json.dumps({"rooms": []})
+    turns = [[("list_rooms", {"room_type": "bathroom"}), ("judge", {"set": "s1", "question": "x?"})],
+             verdict, [("finish", {"set": "s1", "answer": "count"})]]
+    built, stats, _ = await ask(d, turns)
+    assert validated(built, stats)["method"] == "cad_geometry"
 
 
 async def test_call_limit_returns_none(d):
@@ -157,6 +201,7 @@ async def test_judge_marks_method_as_model_estimate(d):
 
 async def test_trace_has_staged_nodes(d):
     built, stats, _ = await ask(d, [[("rooms_on_side", {"side": "north", "finish_as": "list"})]])
+    assert built is not None
     trace = validated(built, stats)["trace"]
     by_stage = {n.get("stage"): n for n in trace if n.get("stage")}
     assert set(by_stage) == {"decision", "resources", "filter", "answer"}
