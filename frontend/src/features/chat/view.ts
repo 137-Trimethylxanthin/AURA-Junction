@@ -1,7 +1,7 @@
 import { usableDisplay } from '@/api/contract'
 import type { AgentFailure, AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
-import { LOCALE, displayParts, fmtArea, fmtConverted, fmtCount, noun } from '@/lib/format'
+import { LOCALE, displayParts, fmtArea, fmtConverted, fmtCount, fmtRoomArea, noun } from '@/lib/format'
 import { t, type StringKey, type UiKey } from '@/i18n/strings'
 
 /** Pure view-model helpers for the answer card. Every number comes from the response or Derived. */
@@ -337,12 +337,15 @@ export function rows(
     const on = isRoomIncluded(r, toggles)
     const poly = byId.get(r.room_id)
     const conv = r.area_m2 === null ? null : displayParts(r.area_m2, 'm2', usableDisplay(resp.display), lang)
+    // an area measured under an estimated scale reads "≈ 12 m² (estimate)", as the headline does
+    const estimated = !r.edited && poly?.area_source === 'estimate'
+    const metric = r.area_m2 === null ? '' : fmtRoomArea(r.area_m2, estimated ? 'estimate' : undefined, lang)
     const area =
       r.area_m2 === null
         ? t(lang, 'area_not_printed')
         : conv
-          ? `${conv.join(' ')} (${fmtArea(r.area_m2, lang)} m²)`
-          : `${fmtArea(r.area_m2, lang)} m²`
+          ? `${estimated ? '≈ ' : ''}${conv.join(' ')} (${metric})`
+          : metric
     const rExtra = r as typeof r & { group_id?: string; drawing_id?: string }
     const grp = rExtra.group_id ? groupById.get(rExtra.group_id) : undefined
     const drawingId = rExtra.drawing_id

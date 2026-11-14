@@ -111,3 +111,20 @@ frontend (compare label, area formatting, `format.ts`) and the store (reader reg
 - Not built: width of a plan whose page has neither an overall dimension nor a frame (lower bound is
   stated); dimensions on other pages of a multi-page PDF are cited without a box; Finnish
   abbreviations the store vocabulary does not know (TUPAK, PH) still go to the tool steps.
+
+### 23:05–23:30 UTC — stream F: polish of the vector plans of image drawings (`on/f-scan-polish`)
+
+- Door symbols (`store/jstore/service/plan_symbols.py`): drawn from the detected shape and the walls. A single
+  leaf up to 1.25 m, a double door up to 2.1 m when a wall runs beside the opening, otherwise the wall's own gap
+  or a plain opening marker without a swing. Doors and windows away from every wall and room edge are not drawn
+  (they stay in the evidence). The detection rectangle is no longer drawn; the wall is cut at a placed door.
+- A room that lies mostly inside wall fill (a sauna or shaft drawn dark) opens the fill, in plan and 3D.
+- Label size follows the height of a tall sheet. Label collisions on dense plans are not solved.
+- Room lookup uses the store's room type: "living room / Wohnzimmer / séjour / soggiorno / olohuone" resolves to
+  the label the store typed as that room ("OH", "MH", "K") when no printed word matches.
+- Evidence rows of rooms measured under an estimated scale read "≈ 12 m² (estimate)".
+- 3D: a plan with an estimated scale starts with walls at a fifth of its shorter side (1.2–2.6 m); the camera
+  frames the walls as well as the footprint. Stated-scale plans keep 2.6 m.
+- Fresh upload (a CubiCasa PNG not in the store) through the upload page: indexed, plan, Compare, 3D, a room
+  area by room type and a door count all worked; nothing upload-specific had to be fixed.
+- Deploy: no schema change, no re-interpretation; the cached plan.svg name was bumped so plans are redrawn.

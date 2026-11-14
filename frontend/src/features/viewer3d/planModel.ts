@@ -11,6 +11,16 @@ const RAIL_H = 1.05
 const FIXTURE_H = 0.45
 const DOOR_LEAF_H = 2.05
 
+/**
+ * The wall height a plan starts with. A plan whose scale is an estimate (a scan that states none) has no
+ * trustworthy metres: its walls are held in proportion to its footprint, so a small flat does not read as a tower.
+ */
+export function initialWallHeight(drawing: Drawing, size: { w: number; d: number }): number {
+  if (!drawing.rooms.some((r) => r.area_source === 'estimate')) return DEFAULT_WALL_H
+  const h = Math.max(1.2, Math.min(DEFAULT_WALL_H, 0.2 * Math.min(size.w, size.d)))
+  return Math.round(h * 10) / 10
+}
+
 export const COLORS = {
   wallTop: '#2f343c',
   wallSide: '#f3f1ec',
@@ -368,7 +378,8 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
 
   const model: PlanModel = {
     group: root,
-    size: { w, d, radius: Math.hypot(w, d) / 2 },
+    // the walls rise towards the camera: a small plan needs that much more room to be framed whole
+    size: { w, d, radius: Math.hypot(w, d) / 2 + DEFAULT_WALL_H },
     contentCenter: new THREE.Vector3(center.x, 0, center.z),
     rooms,
     toWorld,

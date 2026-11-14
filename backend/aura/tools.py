@@ -28,7 +28,7 @@ from aura.contract import (
     EvidenceRoom,
     ToolResult,
 )
-from aura.router import LABEL_CONCEPTS, DrawingCtx
+from aura.router import LABEL_CONCEPTS, STORE_ROOM_CONCEPT, DrawingCtx
 
 log = logging.getLogger("aura.tools")
 
@@ -438,6 +438,8 @@ class LoadedDrawing:
             units=[u["id"] for u in self.drawing.get("units", [])],
             kind=self.drawing.get("kind", "cad_dxf"),
             printed_dimensions=int(self.drawing.get("printed_dimensions") or 0),
+            label_concepts={r["name"]: STORE_ROOM_CONCEPT[r["room_type"]] for r in rooms
+                            if r.get("room_type") in STORE_ROOM_CONCEPT},
         )
 
     def public_drawing(self) -> dict:
@@ -1104,7 +1106,7 @@ _CATEGORY_LABELS: dict[str, str] = {
 }
 
 
-def _room_category(name: str, outdoor: bool = False) -> tuple[str, str]:
+def _room_category(name: str, outdoor: bool = False, store_type: str | None = None) -> tuple[str, str]:
     if outdoor:
         return "cat-outdoor", "Balcony & Terrace"
     raw = (name or "").strip()
@@ -1113,6 +1115,9 @@ def _room_category(name: str, outdoor: bool = False) -> tuple[str, str]:
     for concept, rx, _printed in LABEL_CONCEPTS:
         if rx.search(raw):
             return f"cat-{concept}", _CATEGORY_LABELS.get(concept, concept.title())
+    if store_type in STORE_ROOM_CONCEPT:               # an abbreviation the store's vocabulary knows ("MH", "OH")
+        concept = STORE_ROOM_CONCEPT[store_type]
+        return f"cat-{concept}", _CATEGORY_LABELS.get(concept, concept.title())
     if raw:
         slug = re.sub(r"[^a-z0-9]+", "-", raw.casefold()).strip("-")[:24] or "other"
         return f"cat-{slug}", raw
@@ -1142,7 +1147,7 @@ def color_code_rooms(
             if not row.get("included", True):
                 continue
             rm = meta_by_id.get(row["room_id"], {})
-            gid, glabel = _room_category(rm.get("name", ""), bool(rm.get("outdoor")))
+            gid, glabel = _room_category(rm.get("name", ""), bool(rm.get("outdoor")), rm.get("room_type"))
             groups_map.setdefault(gid, glabel)
             row["group_id"] = gid
         # If every included room fell into a single category, color individual rooms distinctly

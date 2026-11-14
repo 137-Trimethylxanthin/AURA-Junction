@@ -258,7 +258,7 @@ def _box_pad(d, subject: str) -> float | None:
 
 
 def room_type(r: dict) -> str:
-    cat, _ = tools._room_category(r.get("name", ""), bool(r.get("outdoor")))
+    cat, _ = tools._room_category(r.get("name", ""), bool(r.get("outdoor")), r.get("room_type"))
     return cat.removeprefix("cat-") if cat.removeprefix("cat-") in ROOM_TYPES else "other"
 
 
