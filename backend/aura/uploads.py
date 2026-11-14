@@ -16,7 +16,9 @@ from pathlib import Path
 
 MB = 1024 * 1024
 BODY_CAP = 65 * MB
-CAPS = {"dxf": 20 * MB, "png": 15 * MB, "jpg": 15 * MB, "pdf": 40 * MB, "ifc": 60 * MB}
+CAPS = {"dxf": 20 * MB, "png": 15 * MB, "jpg": 15 * MB, "pdf": 40 * MB, "ifc": 60 * MB,
+        "svg": 20 * MB}
+LABEL = {"dxf": "DXF", "ifc": "IFC", "pdf": "PDF", "png": "PNG", "jpg": "JPG", "svg": "SVG"}
 MAX_PIXELS = 40_000_000
 TTL_S = 24 * 3600
 
@@ -29,7 +31,7 @@ class UploadError(Exception):
 
 
 def sniff(head: bytes) -> str | None:
-    """'dxf' | 'png' | 'jpg' | 'pdf' | 'ifc' | 'dwg' | 'zip' | None, from the first bytes."""
+    """'dxf' | 'png' | 'jpg' | 'pdf' | 'ifc' | 'svg' | 'dwg' | 'zip' | None, from the first bytes."""
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
     if head.startswith(b"\xff\xd8\xff"):
@@ -45,6 +47,10 @@ def sniff(head: bytes) -> str | None:
     text = head.lstrip(b"\xef\xbb\xbf").lstrip()
     if text.startswith(b"ISO-10303-21;"):
         return "ifc"
+    # SVG: XML whose root is <svg>. Untrusted: a DTD (entity expansion) is refused, the bytes go
+    # only to the drawing store's reader and are never served (SERVED_FILES has no source.svg).
+    if text.startswith((b"<?xml", b"<svg", b"<!--")) and b"<svg" in text[:4096]:
+        return None if b"<!DOCTYPE" in text[:4096].upper() and b"[" in text[:4096] else "svg"
     # ASCII DXF: group code 0, then SECTION (optionally preceded by 999 comments).
     lines = [ln.strip() for ln in text.split(b"\n")[:8]]
     while len(lines) >= 2 and lines[0] == b"999":
@@ -101,13 +107,38 @@ class Accepted:
     delete_token: str
 
 
-def validate(head: bytes, size: int, *, presenter_ok: bool) -> str:
-    """Raises UploadError; returns the sniffed kind."""
+def accepted(*, store_on: bool, images_open: bool) -> list[dict]:
+    """The upload types this server accepts right now, with their size caps (GET /uploads/accepted)."""
+    out = []
+    for kind in ("dxf", "ifc", "pdf", "png", "jpg", "svg"):
+        if kind == "svg" and not store_on:
+            continue
+        row: dict = {"type": LABEL[kind], "ext": [".jpg", ".jpeg"] if kind == "jpg" else [f".{kind}"],
+                     "max_mb": CAPS[kind] // MB}
+        if kind in ("png", "jpg") and not images_open:
+            row["presenter_only"] = True
+        out.append(row)
+    return out
+
+
+def _accepted_text(store_on: bool) -> str:
+    names = [LABEL[k] for k in ("dxf", "ifc", "pdf", "png", "jpg")] + (["SVG"] if store_on else [])
+    return ", ".join(names[:-1]) + " or " + names[-1]
+
+
+def validate(head: bytes, size: int, *, presenter_ok: bool, store_on: bool = False) -> str:
+    """Raises UploadError; returns the sniffed kind. `store_on`: the drawing store runs (SVG)."""
     kind = sniff(head)
-    if kind in (None, "dwg", "zip"):
-        what = {"dwg": "DWG files", "zip": "Archives"}.get(kind or "", "This file type")
+    if kind == "dwg":
+        raise UploadError("unsupported_type", "DWG needs the optional LibreDWG converter, which is "
+                          "off here. Export the drawing as DXF and upload that.", 415)
+    if kind == "svg" and not store_on:
+        raise UploadError("unsupported_type", "SVG plans need the full setup with the drawing store, "
+                          f"which is off here. Upload a {_accepted_text(False)} file.", 415)
+    if kind in (None, "zip"):
+        what = "Archives are" if kind == "zip" else "This file type is"
         raise UploadError(
-            "unsupported_type", f"{what} are not accepted. Upload a DXF, PDF, or IFC.", 415
+            "unsupported_type", f"{what} not accepted. Upload a {_accepted_text(store_on)} file.", 415
         )
     if size > CAPS[kind]:
         raise UploadError("too_large", f"{kind.upper()} uploads are limited to "

@@ -27,6 +27,7 @@ import os
 import shutil
 import tempfile
 import time
+from contextlib import suppress as contextlib_suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,8 +36,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("aura.drawing_store")
 
-STORE_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".dxf", ".ifc"}
-MATERIALISE_EXT = {".pdf", ".png", ".jpg", ".jpeg"}  # DXF/IFC: our own solvers stay the owner
+STORE_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".dxf", ".ifc", ".svg"}
+MATERIALISE_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".svg"}  # DXF/IFC: our own solvers stay the owner
 FINAL = {"indexed_store", "indexed_ours", "ready_unindexed", "partial", "store_failed", "failed"}
 NOTES = {
     "reading": "Reading the file into the drawing store",
@@ -64,11 +65,14 @@ def configure_env(settings: Settings) -> None:
     settings.store_data_dir.mkdir(parents=True, exist_ok=True)
     os.environ["JSTORE_DATA_DIR"] = str(settings.store_data_dir)
     os.environ["JSTORE_SHELL"] = "off"
-    # The ingest workers cap their data segment at 4 GB; one OCR/OpenCV thread per core breaks that cap.
-    os.environ.setdefault("OMP_NUM_THREADS", "4")
+    # A worker caps its data segment (RLIMIT_DATA 4 GB) after its first interpretation, for its whole
+    # life; one OCR/OpenCV/BLAS thread per core then fails in pthread_create (measured on 22 cores).
+    for k in THREAD_CAPS:
+        os.environ.setdefault(k, "4")
 
 
-WORKER_ENV_KEYS = ("GEMINI_API_KEY", "OMP_NUM_THREADS", "PATH", "HOME", "LANG", "TMPDIR")
+THREAD_CAPS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+WORKER_ENV_KEYS = ("GEMINI_API_KEY", "PATH", "HOME", "LANG", "TMPDIR", *THREAD_CAPS)
 
 
 def worker_env() -> dict[str, str]:
@@ -183,6 +187,7 @@ class DrawingStore:
         self.writer = writer
         self.store = store  # aura.store.Store (SQLite reads)
         self.on_materialised = on_materialised  # callable(drawing_id): evict caches
+        self.on_store_failed = None  # callable(drawing_id): our own detection as the fallback
         self.ok = False
         self.ingestor: Any = None
         self.jsettings: Any = None
@@ -250,6 +255,93 @@ class DrawingStore:
         st.update(fields)
         meta["store"] = st
         await self.writer.execute("UPDATE drawings SET meta=? WHERE id=?", (json.dumps(meta), drawing_id))
+        if (fields.get("state") in ("failed", "partial") and meta.get("kind") in ("pdf", "png", "jpg")
+                and self.on_store_failed is not None):
+            self.on_store_failed(drawing_id)
+        if meta.get("kind") == "svg" and fields.get("state") in ("failed", "partial"):
+            # an SVG has no parse of ours to fall back on
+            await self.writer.execute(
+                "UPDATE drawings SET status='failed', progress=NULL, error=? WHERE id=?",
+                ("The drawing store could not read this SVG.", drawing_id))
+
+    # -- retention: what may be deleted in the store
+    def permanent_file_ids(self) -> set[str]:
+        """Dataset files of the bundled drawings (build/store-map.json): never deleted with an upload,
+        even when an upload had the same bytes."""
+        out: set[str] = set()
+        for build in self.s.drawing_dirs():
+            p = Path(build).parent / "store-map.json"
+            for cand in (p, Path(build) / "store-map.json"):
+                if cand.is_file():
+                    with contextlib_suppress(OSError, ValueError, KeyError, AttributeError):
+                        for v in json.loads(cand.read_text(encoding="utf-8")).values():
+                            out |= {f["sha256_16"] for f in v.get("files") or [] if f.get("sha256_16")}
+        return out
+
+    def live_file_ids(self) -> set[str]:
+        out = set()
+        for r in self.store.upload_rows() if self.store else []:
+            fid = (self._json(r.get("meta")).get("store") or {}).get("file_id")
+            if fid:
+                out.add(fid)
+        return out
+
+    @staticmethod
+    def _json(v) -> dict:
+        try:
+            return json.loads(v or "{}")
+        except ValueError:
+            return {}
+
+    async def forget(self, file_ids: list[str]) -> None:
+        """Delete these store projects unless a live upload or the dataset still uses the bytes."""
+        keep = self.live_file_ids() | self.permanent_file_ids()
+        await self.delete([f for f in file_ids if f and f not in keep])
+
+    async def tombstone(self, drawing_id: str, file_id: str | None) -> None:
+        await self.writer.execute(
+            "INSERT OR REPLACE INTO store_tombstones(drawing_id, file_id, t) VALUES (?,?,?)",
+            (drawing_id, file_id, time.time()))
+
+    async def sweep(self) -> int:
+        """Startup and every 10 min: finish store deletes that were skipped (Postgres was down, or
+        the upload was deleted while it was being registered) and drop upload projects no live
+        upload references. Dataset projects are never touched."""
+        if not self.ok:
+            return 0
+        async with self.register_lock:  # no registration is between store_upload and its meta write
+            tomb = self.store._q("SELECT drawing_id, file_id FROM store_tombstones") if self.store else []
+
+            orphans = await asyncio.to_thread(self._upload_projects)
+            gone = [r["file_id"] for r in tomb if r["file_id"]] + orphans
+            keep = self.live_file_ids() | self.permanent_file_ids()
+            doomed = sorted({f for f in gone if f not in keep})
+            await self.delete(doomed)
+        for r in tomb:
+            await self.writer.execute("DELETE FROM store_tombstones WHERE drawing_id=?", (r["drawing_id"],))
+        return len(doomed)
+
+    def start_sweeper(self, every_s: float = 600.0) -> None:
+        async def loop():
+            while True:
+                try:
+                    n = await self.sweep()
+                    if n:
+                        log.info("store sweep removed %d upload project(s)", n)
+                except Exception:  # Postgres down: the tombstones wait for the next round
+                    log.warning("store sweep skipped", exc_info=True)
+                await asyncio.sleep(every_s)
+        self._spawn(loop())
+
+    def _upload_projects(self) -> list[str]:
+        """file_ids of every upload project in the store (`upload/<file_id>`)."""
+        from jstore.db import DB
+        with DB() as db:
+            return [r["project_id"].split("/", 1)[1] for r in
+                    db.run("select project_id from jstore.project where project_id like 'upload/%'")]
+
+    def _gone(self, drawing_id: str) -> bool:
+        return self.store is not None and self.store.drawing_row(drawing_id) is None
 
     # -- register
     def on_parsed(self, drawing_id: str, page_ids: list[str]) -> None:
@@ -280,16 +372,22 @@ class DrawingStore:
             await asyncio.to_thread(shutil.copy2, src, tmp)
             from jstore.service import files as jfiles
             async with self.register_lock:
+                if self._gone(drawing_id):  # deleted before we got here
+                    return None
                 row = await asyncio.to_thread(jfiles.store_upload, self.jsettings, tmp, original_name)
+                if self._gone(drawing_id):  # deleted while the store took the file: undo at once
+                    await self.forget([row["file_id"]])
+                    return None
+                await self._set_store_meta(drawing_id, file_id=row["file_id"],
+                                           drawing_key=row["drawing_key"], state="registered",
+                                           t0=time.time(), ext=src.suffix.lower(),
+                                           dataset=not str(row.get("project_id") or "").startswith("upload/"))
         except Exception as e:  # noqa: BLE001 - the upload stays usable from our parse
             log.warning("store register failed for %s: %s", drawing_id, type(e).__name__)
             await self._set_store_meta(drawing_id, state="failed", error="register", t0=time.time())
             return None
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
-        now = time.time()
-        await self._set_store_meta(drawing_id, file_id=row["file_id"], drawing_key=row["drawing_key"],
-                                   state="registered", t0=now, ext=src.suffix.lower())
         self._spawn(self._follow(drawing_id, row["file_id"], row["drawing_key"]))
         return row
 
@@ -330,6 +428,9 @@ class DrawingStore:
             else:
                 log.warning("store ingest %s: no job started (status %s)", file_id, status)
             status, _ = await self._db_status(file_id)
+            if self._gone(drawing_id):  # deleted during ingestion: nothing of it may stay
+                await self.forget([file_id])
+                return
             if status == "interpreted":
                 await self.materialise(drawing_id, file_id, key)
             elif status == "parsed":
@@ -363,14 +464,24 @@ class DrawingStore:
                              where f.drawing_key = :k and d.method = 'gemini_tiled_detection'
                              order by def_id limit 1""", k=key)
             calls = sum(int(p.get("requests") or 0) for p in ((spec or {}).get("spec") or {}).get("pages") or [])
+            page = M.page_path(self.jsettings.data_dir, m)
             return {"doc": M.drawing_doc(m), "evidence": M.evidence_doc(m), "model": M.model_doc(m),
-                        "sources": sources, "calls": calls}
+                    "sources": sources, "calls": calls, "page": str(page) if page else None}
 
     async def materialise(self, drawing_id: str, file_id: str, key: str) -> bool:
         meta = self._meta(drawing_id)
         ext = (meta.get("store") or {}).get("ext") or ""
         if ext not in MATERIALISE_EXT:  # DXF / IFC: ours stays the owner; the store serves the sql tool
+            path = self.s.uploads_dir / drawing_id / "drawing.json"
+            if path.is_file():  # only the reference the sql tool scopes by; our rooms and boxes stay
+                d = json.loads(path.read_text(encoding="utf-8"))
+                d["store"] = {"file_id": file_id, "drawing_key": key}
+                tmp = path.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, path)
             await self._set_store_meta(drawing_id, state="materialised", owner="ours")
+            if self.on_materialised:
+                self.on_materialised(drawing_id)
             return True
         await self._set_store_meta(drawing_id, state="materialising")
         built = await asyncio.to_thread(self._build, key)
@@ -380,6 +491,14 @@ class DrawingStore:
         out_dir = self.s.uploads_dir / drawing_id
         path = out_dir / "drawing.json"
         ours = json.loads(path.read_text(encoding="utf-8"))
+        if not (out_dir / "original.png").is_file():  # an SVG: no render of ours, use the store's page
+            if not built.get("page"):
+                await self._set_store_meta(drawing_id, state="partial")
+                return False
+            size = await asyncio.to_thread(_page_images, Path(built["page"]), out_dir)
+            ours["images"] = {"original": f"/drawings/{drawing_id}/original.png"}
+            ours["thumbnail"] = f"/drawings/{drawing_id}/thumb.png"
+            ours["frame"] = dict(ours.get("frame") or {}, px=list(size))
         doc = normalise(ours, built["doc"], built["evidence"], built["model"],
                         {int(k): v for k, v in built["sources"].items()})
         doc["store"] = {"file_id": file_id, "drawing_key": key}
@@ -391,6 +510,9 @@ class DrawingStore:
             os.replace(raster, out_dir / "raster.ours.json")
         await self._set_store_meta(drawing_id, state="materialised", owner="store", calls=built["calls"],
                                    counts=_counts(doc), methods=_methods(doc))
+        if meta.get("kind") == "svg":  # the row waited for this (no parse of ours)
+            await self.writer.execute("UPDATE drawings SET status='ready', progress=NULL WHERE id=?",
+                                      (drawing_id,))
         if self.on_materialised:
             self.on_materialised(drawing_id)
         return True
@@ -401,6 +523,11 @@ class DrawingStore:
         st = meta.get("store") or {}
         if row["status"] == "failed":
             return "failed", st
+        if meta.get("kind") == "svg" and row["status"] != "ready":  # no parse of ours: store stages
+            if st.get("state") == "failed":
+                return "store_failed", st
+            return ("materialising" if st.get("state") == "materialising" else
+                    st.get("db_stage", "reading") if st else "queued"), st
         if row["status"] in ("queued", "processing"):
             return ("queued" if row["status"] == "queued" else "parsing"), st
         if meta.get("kind") in ("dxf", "ifc") or st.get("ext") in (".dxf", ".ifc"):
@@ -421,6 +548,20 @@ class DrawingStore:
         if stage and stage != st.get("db_stage"):
             await self._set_store_meta(drawing_id, db_stage=stage, t_stage=time.time())
         return stage
+
+    async def reindex(self, page_ids: list[str]) -> int:
+        """Retry (POST /drawings/{id}/reindex): every page goes through the store again; a page the
+        store already has is re-followed (resubmitted when failed or only parsed)."""
+        if not self.ok:
+            return 0
+        for did in page_ids:
+            st = self._meta(did).get("store") or {}
+            if st.get("file_id"):
+                await self._set_store_meta(did, state="registered", error=None, db_stage="reading")
+                self._spawn(self._follow(did, st["file_id"], st["drawing_key"]))
+            else:
+                self._spawn(self._register_page(did))
+        return len(page_ids)
 
     # -- restart
     async def resume_all(self, rows: list[dict]) -> int:
@@ -466,6 +607,18 @@ class DrawingStore:
             if fut is not None:
                 fut.cancel()
         await asyncio.to_thread(run)
+
+
+def _page_images(page: Path, out_dir: Path) -> tuple[int, int]:
+    """original.png (the store's page render) and thumb.png for an upload without a render of ours."""
+    from PIL import Image
+    with Image.open(page) as im:
+        im = im.convert("RGB")
+        size = im.size
+        im.save(out_dir / "original.png", optimize=True)
+        im.thumbnail((640, 640))
+        im.save(out_dir / "thumb.png", optimize=True)
+    return size
 
 
 def _methods(doc: dict) -> dict:

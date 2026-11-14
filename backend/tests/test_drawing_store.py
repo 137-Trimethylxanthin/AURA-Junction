@@ -79,38 +79,90 @@ def test_quick_mode_upload_ends_ready_unindexed(tmp_path):
         assert st["pages"] == [{"drawing_id": did, "page": 1, "stage": "ready_unindexed"}]
 
 
-class _FakeStore:
-    def __init__(self):
-        self.deleted: list[list[str]] = []
+def _uploads_with_store_meta(c, n, fid="f" * 16):
+    ids = []
+    for _ in range(n):
+        r = upload_pdf(c, make_pdf(["EG"]), "a.pdf").json()
+        assert wait_status(c, r["drawing_id"])["status"] == "ready"
+        ids.append(r["drawing_id"])
+    s = c.app.state.svc
+    for did in ids:
+        meta = json.dumps({"kind": "pdf", "store": {"file_id": fid, "drawing_key": "k", "state": "materialised"}})
+        c.portal.call(s.writer.execute, "UPDATE drawings SET meta=? WHERE id=?", (meta, did))
+    return ids
 
-    def available(self):
-        return True
 
-    async def delete(self, file_ids):
-        self.deleted.append(sorted(file_ids))
+def _armed(c, monkeypatch, permanent=()):
+    """The app's DrawingStore, 'on', with its Postgres side recorded instead of executed."""
+    ds = c.app.state.drawing_store
+    ds.ok = True
+    deleted: list[list[str]] = []
+
+    async def delete(file_ids):
+        deleted.append(sorted(file_ids))
+    monkeypatch.setattr(ds, "delete", delete)
+    monkeypatch.setattr(ds, "permanent_file_ids", lambda: set(permanent))
+    return ds, deleted
 
 
-def test_store_project_is_deleted_only_when_no_upload_still_uses_it(tmp_path):
+def test_store_project_is_deleted_only_when_no_upload_still_uses_it(tmp_path, monkeypatch):
     """Two uploads with identical bytes share one store project: deleting one keeps it."""
     from aura.main import _remove_upload
 
     with TestClient(make_app(tmp_path)) as c:
-        s = c.app.state.svc
-        ids = []
-        for _ in range(2):
-            r = upload_pdf(c, make_pdf(["EG"]), "a.pdf").json()
-            assert wait_status(c, r["drawing_id"])["status"] == "ready"
-            ids.append(r["drawing_id"])
-        for did in ids:
-            meta = json.dumps({"kind": "pdf", "store": {"file_id": "f" * 16, "drawing_key": "k", "state": "materialised"}})
-            c.portal.call(s.writer.execute, "UPDATE drawings SET meta=? WHERE id=?", (meta, did))
-        fake = _FakeStore()
-        c.portal.call(_remove_upload, s, ids[0], fake)
-        assert fake.deleted == [[]]  # the other upload still uses those bytes
-        c.portal.call(_remove_upload, s, ids[1], fake)
-        assert fake.deleted[-1] == ["f" * 16]
+        ids = _uploads_with_store_meta(c, 2)
+        ds, deleted = _armed(c, monkeypatch)
+        c.portal.call(_remove_upload, c.app.state.svc, ids[0], ds)
+        assert deleted == [[]]  # the other upload still uses those bytes
+        c.portal.call(_remove_upload, c.app.state.svc, ids[1], ds)
+        assert deleted[-1] == ["f" * 16]
 
 
+def test_dataset_bytes_are_never_deleted_with_an_upload(tmp_path, monkeypatch):
+    """An upload identical to a bundled twin reuses the dataset row; deleting it keeps the row."""
+    from aura.main import _remove_upload
+
+    with TestClient(make_app(tmp_path)) as c:
+        (did,) = _uploads_with_store_meta(c, 1, fid="0590bbb6eb080328")
+        ds, deleted = _armed(c, monkeypatch, permanent={"0590bbb6eb080328"})
+        c.portal.call(_remove_upload, c.app.state.svc, did, ds)
+        assert deleted == [[]]
+
+
+def test_delete_while_the_store_is_down_is_finished_by_the_sweep(tmp_path, monkeypatch):
+    from aura.main import _remove_upload
+
+    with TestClient(make_app(tmp_path)) as c:
+        (did,) = _uploads_with_store_meta(c, 1)
+        ds = c.app.state.drawing_store
+        ds.ok = False  # Postgres down: the store side is skipped, a tombstone stays
+        c.portal.call(_remove_upload, c.app.state.svc, did, ds)
+        st = c.app.state.svc.store
+        assert [r["file_id"] for r in st._q("SELECT file_id FROM store_tombstones")] == ["f" * 16]
+        ds, deleted = _armed(c, monkeypatch)  # Postgres is back
+        monkeypatch.setattr(ds, "_upload_projects", list)
+        assert c.portal.call(ds.sweep) == 1 and deleted == [["f" * 16]]
+        assert st._q("SELECT count(*) n FROM store_tombstones")[0]["n"] == 0
+
+
+def test_orphan_upload_projects_are_swept_but_live_and_dataset_ones_stay(tmp_path, monkeypatch):
+    """A store project created for an upload deleted during ingestion has no live row: swept."""
+    with TestClient(make_app(tmp_path)) as c:
+        _uploads_with_store_meta(c, 1, fid="a" * 16)
+        ds, deleted = _armed(c, monkeypatch, permanent={"b" * 16})
+        monkeypatch.setattr(ds, "_upload_projects", lambda: ["a" * 16, "b" * 16, "c" * 16])
+        c.portal.call(ds.sweep)
+        assert deleted == [["c" * 16]]  # a: live upload, b: dataset bytes, c: orphan
+
+
+def test_registration_of_a_deleted_upload_is_undone(tmp_path, monkeypatch):
+    """Deleted before or while the store takes the file: nothing of it stays."""
+    with TestClient(make_app(tmp_path)) as c:
+        ds, deleted = _armed(c, monkeypatch)
+        src = tmp_path / "x.pdf"
+        src.write_bytes(make_pdf(["EG"]))
+        assert c.portal.call(ds.register_upload, "up-gone", src, "x.pdf") is None
+        assert deleted == []  # never reached the store
 def test_jobs_hand_every_parsed_page_to_the_store(tmp_path):
     """The Jobs hook signature (drawing_id, page_ids) matches DrawingStore.on_parsed."""
     seen = []
@@ -145,3 +197,44 @@ def test_store_workers_get_the_store_environment_even_after_a_scrubbed_parse(tmp
 def _env_of(name: str) -> str | None:
     import os
     return os.environ.get(name)
+
+
+def _store_app(tmp_path, gemini=None):
+    """An app serving the materialised store fixture as drawing `store-fixture` (no sidecar)."""
+    from aura.config import Settings
+    from aura.main import create_app
+    from tests.test_agent_client import MockGeminiDecisionsTransport
+
+    d = _materialised() | {"id": "store-fixture"}
+    ld = tools.LoadedDrawing(id="store-fixture", dir=None, drawing=d, engine=tools.BundleEngine(d))
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild")
+    gem = gemini or MockGeminiDecisionsTransport()
+    return create_app(s, transport=gem, extra_drawings=[ld]), gem
+
+
+def test_store_indexed_subjects_answer_from_the_index_not_image_scoring(tmp_path):
+    """Labelled rooms and WCs on a store-indexed PDF come from its index (truth 4 WCs here)."""
+    app, _gem = _store_app(tmp_path)
+    with TestClient(app) as c:
+        wc = c.post("/ask", json={"drawing_id": "store-fixture", "question": "how many toilets"}).json()
+        assert wc["answer"] == {"kind": "count", "value": 4, "subject": "wc"}
+        assert wc["method"] == "vision" and wc["calls"] == 0
+        k = c.post("/ask", json={"drawing_id": "store-fixture", "question": "how many kitchens"}).json()
+        assert k["answer"]["kind"] == "count" and k["method"] == "pdf_vector"
+
+
+def test_full_mode_skips_our_detection_in_the_parse_slot(tmp_path):
+    """The store indexes the page (more accurate, M3); our detection runs only in quick mode."""
+    calls = []
+    with TestClient(make_app(tmp_path)) as c:
+        jobs = c.app.state.jobs
+
+        async def detect(did, out, ctx):
+            calls.append(did)
+        jobs.after_raster = detect
+        jobs.store_on = lambda: True
+        did = upload_pdf(c, make_pdf(["EG"]), "a.pdf").json()["drawing_id"]
+        assert wait_status(c, did)["status"] == "ready" and calls == []
+        jobs.store_on = lambda: False
+        did = upload_pdf(c, make_pdf(["OG"]), "b.pdf").json()["drawing_id"]
+        assert wait_status(c, did)["status"] == "ready" and calls == [did]

@@ -83,6 +83,7 @@ class Services:
     answers: AnswerCache
     checks: CheckCache
     agent: AgentClient | None = None
+    drawing_store: Any = None  # aura.drawing_store.DrawingStore; available() = Postgres up and ready
     heartbeat_s: float = HEARTBEAT_INTERVAL_S
     check_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     check_failures: dict[str, float] = field(default_factory=dict)  # key → time of last failure
@@ -1002,7 +1003,12 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
     # ---- Sidecar-enabled `hybrid` / `agent` modes ----
     mode = svc.settings.answerer
-    if svc.agent is not None and mode in ("hybrid", "agent"):
+    # The single answering path: router -> exact -> gate -> tool steps -> (sidecar, only when one is
+    # configured) -> abstain. Without a sidecar it runs in full mode (the drawing store is on: the
+    # merged backend). Quick mode without a sidecar (e.g. Modal) keeps the legacy path below, which
+    # has its own choice step, in-backend agent and image scoring.
+    full = svc.drawing_store is not None and svc.drawing_store.available()
+    if mode in ("hybrid", "agent") and (svc.agent is not None or full):
         lang = r_pre.lang if r_pre.lang_signal else (req.lang_hint or "en")
 
         # 1. `<2ms` deterministic color-coding follow-up on prior rooms (`0` model calls)
@@ -1037,12 +1043,14 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         overrides = [o.model_dump() for o in req.overrides or []]
         is_project = eff_scope.get("kind") == "project"
         dkind = d.drawing.get("kind")
+        # A PDF/image the drawing store indexed answers exact templates from its index like CAD.
+        indexed = dkind in ("cad_dxf", "ifc") or bool(d.drawing.get("evidence_method"))
         is_pdf = d.drawing.get("source_ext") == ".pdf"
         is_deictic_region = eff_scope.get("kind") == "region" and bool(DEICTIC_SIMILARITY.search(question))
 
         # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
         if mode == "hybrid" and not is_project and not has_followup_semantics:
-            if (dkind in ("cad_dxf", "ifc") and r.intent in (
+            if (indexed and r.intent in (
                     "count", "area", "quantity", "find_text", "room_rank", "adjacent")) or (
                     # Detected image/PDF page: door/window counts (and show/list variants) come from
                     # raster.json at 0 calls, as a model estimate; never the sidecar.
@@ -1098,7 +1106,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             or r.topic == "length"
             or bool({"qualifier_guard", "stair_escalate", "deictic_similarity", "needs_model"} & set(r.matched))
         )
-        check_exact = (not hard_guard) and dkind in ("cad_dxf", "ifc")
+        check_exact = (not hard_guard) and indexed
         skip_on_drawing = has_followup_semantics or is_deictic_region
         cached_candidates = (
             [] if (has_followup_semantics or is_deictic_region or ov_dump)
@@ -1127,7 +1135,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 if hd.on_drawing is not None:
                     intent_tag = f"Decisions API · {hd.on_drawing:.2f}"
                 stats["decision_node"] = decision_node(hd, "agent")  # refined below
-                if hd.off_drawing:
+                # On a drawing with an index the tool steps try first: the gate looks at a picture
+                # and was measured to reject answerable filters ("rooms larger than 15.5 m²").
+                if hd.off_drawing and not d.drawing.get("rooms"):
                     stats["decision_node"] = decision_node(hd, "abstain")
                     stats["route"] = "choice"
                     off_b = A.abstain(
@@ -1229,6 +1239,22 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
         if deferred_agent_hit is not None:  # tools declined: the cached sidecar answer stands
             for ev in replay(deferred_agent_hit):
+                yield ev
+            return
+
+        if svc.agent is None:  # no sidecar: what the drawing's data cannot answer is said plainly
+            stats["no_cache"] = True
+            nothing = A.abstain(
+                question, lang, eff_scope, "not_answerable", question,
+                "Tried: the exact templates and the tool steps over this drawing's indexed rooms, "
+                "openings and texts. None of them gives this answer.",
+                intent_body="abstain · not answerable from the drawing's data",
+                intent_tag=intent_tag)
+            nothing.body["trace"][-1]["body"] = "I cannot answer this from the drawing's data."
+            yield "understood", {"detected_lang": nothing.body["detected_lang"],
+                                 "canonical_en": nothing.body["canonical_en"], "route": stats["route"]}
+            async for ev in _finalize_and_emit(svc, d, req, nothing, caller, stats, meters, t0, key,
+                                               allow_cache=False):
                 yield ev
             return
 

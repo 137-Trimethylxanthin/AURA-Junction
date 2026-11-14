@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 4  # 4: tool-step tier (aura/steps.py) before the sidecar
+ROUTER_VERSION = 5  # 4: tool-step tier before the sidecar; 5: store-indexed uploads answer exactly
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
@@ -548,6 +548,10 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
             return Routed("abstain", lang, signal, reason="not_on_drawing", topic=topic,
                           matched=[topic])
     if LENGTH.search(s):
+        # "which rooms have a door wider than 0.92 m": a filter over measured items is for the
+        # tool steps; only a plain length question ("how long is the corridor") is not supported.
+        if SELECTOR.search(s) or QUALIFIER_GUARD.search(s) or ROOMS_WITH.search(s):
+            return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["length_filter"])
         return Routed("abstain", lang, signal, reason="not_supported_yet", topic="length",
                       matched=["length"])
 

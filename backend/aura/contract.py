@@ -24,10 +24,12 @@ TextSubject = Literal["label", "fire_rating"]
 BoxSubject = Subject | TextSubject
 BOX_SUBJECTS: tuple[str, ...] = ("window", "door", "washbasin", "wc", "bathtub", "shower")
 # pdf_vector (1.2 additive): read from a PDF's vector paths and text by the drawing store (no model).
-Method = Literal["cad_geometry", "ocr", "detector", "vision", "agent_estimate", "pdf_vector", "none"]
+Method = Literal["cad_geometry", "ocr", "detector", "vision", "agent_estimate", "pdf_vector",
+                 "store_sql", "none"]  # store_sql (1.2): an exact SQL answer over the drawing store
 TraceKind = Literal["exact", "model", "warn", "info"]
 AbstainReason = Literal["not_on_drawing", "not_supported_yet", "unclear_question",
-                        "low_confidence"]  # 1.1: a model estimate below its confidence gate
+                        "low_confidence",  # 1.1: a model estimate below its confidence gate
+                        "not_answerable"]  # 1.2: no tier could answer from the drawing's data
 ErrorCode = Literal[
     "bad_request",
     "unknown_drawing",
@@ -52,6 +54,7 @@ ToolName = Literal[
     "what_if",
     "find_text",
     "deep_agent",
+    "sql",  # 1.2: a guarded SELECT over the drawing store (tool steps)
 ]
 Route = Literal["template", "choice", "agent", "cache"]
 

@@ -364,6 +364,14 @@ def create_app(
         jobs = Jobs(writer, **(job_options or {}))
         jobs.on_done = registry.evict
         jobs.on_ready = drawing_store.on_parsed
+        jobs.store_on = drawing_store.available
+
+        def store_failed(did: str) -> None:  # no store index for this page: our detection instead
+            task = asyncio.create_task(jobs.detect_later(did, settings.uploads_dir / did))
+            jobs.tasks.add(task)
+            task.add_done_callback(jobs.tasks.discard)
+
+        drawing_store.on_store_failed = store_failed
         jobs.after_raster = _raster_hook(client)
         app.state.jobs = jobs
         app.state.svc = Services(
@@ -376,6 +384,7 @@ def create_app(
             answers=AnswerCache(ttl_s=settings.upload_ttl_s, store=store, writer=writer),
             checks=CheckCache(store, writer),
             agent=agent,
+            drawing_store=drawing_store,
         )
         holder["svc"] = app.state.svc
 
@@ -389,6 +398,7 @@ def create_app(
         # re-followed now, never read as "not pending" by a status poll.
         if drawing_store.available():
             await drawing_store.resume_all(store.upload_rows())
+            drawing_store.start_sweeper()
         cleanup = asyncio.create_task(_cleanup_loop(app.state.svc, drawing_store), name="aura-cleanup")
         try:
             async with mcp_app.router.lifespan_context(mcp_app):
@@ -644,6 +654,36 @@ def create_app(
         return {"contract_version": CONTRACT_VERSION, "id": d.id,
                 "status": d.drawing.get("status", "ready")}
 
+    @app.get("/uploads/accepted")
+    async def uploads_accepted(request: Request) -> dict:
+        """What the upload page may offer right now: types, extensions and size caps."""
+        ds = request.app.state.drawing_store
+        images_open = (is_presenter(request, settings) or settings.unlimited
+                       or settings.raster_public_cap > 0)
+        return {"contract_version": CONTRACT_VERSION, "mode": ds.mode,
+                "types": uploads.accepted(store_on=ds.available(), images_open=images_open),
+                "ttl_hours": int(settings.upload_ttl_s // 3600)}
+
+    @app.post("/drawings/{drawing_id}/reindex")
+    @app.post("/drawings/{drawing_id}/store/retry")
+    async def reindex_drawing(drawing_id: str, request: Request):
+        """Retry the drawing store for an upload (all its pages); owner only (x-delete-token)."""
+        row = upload_row(request, drawing_id)
+        if row is None:
+            return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
+        if not uploads.token_ok(request.headers.get("x-delete-token"), row["delete_token_hash"]):
+            return _err("bad_request", "Wrong delete token.", 403)
+        ds = request.app.state.drawing_store
+        if not ds.available():
+            return _err("bad_request", "The drawing store is off (quick mode); nothing to retry.", 409)
+        s = svc(request)
+        pages = [drawing_id] + ([r["id"] for r in s.store.upload_rows() if r["id"].startswith(f"{drawing_id}-p")]
+                                if s.store and not re.search(r"-p\d+$", drawing_id) else [])
+        await ds.reindex(pages)
+        row = upload_row(request, drawing_id)
+        body = {"contract_version": CONTRACT_VERSION, "id": drawing_id, "status": row["status"]}
+        return JSONResponse(body | await _store_status(s, ds, row), status_code=202)
+
     @app.get("/drawings/{drawing_id}")
     async def get_drawing(drawing_id: str, request: Request):
         row = upload_row(request, drawing_id)
@@ -725,7 +765,8 @@ def create_app(
         size = f.size if f.size is not None else len(head)
         try:
             kind = uploads.validate(head, size, presenter_ok=presenter
-                                    or settings.unlimited or settings.raster_public_cap > 0)
+                                    or settings.unlimited or settings.raster_public_cap > 0,
+                                    store_on=request.app.state.drawing_store.available())
         except uploads.UploadError as e:
             return _err(e.code, str(e), e.status)
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -748,6 +789,19 @@ def create_app(
              json.dumps({"kind": kind})))
         meta = {"title": title, "created_at": _iso(now),
                 "expires_at": _iso(exp_ts)}
+        if kind == "svg":
+            # No parse of ours: the drawing store reads the SVG; materialise writes the page image
+            # and marks the row ready. The SVG itself is never served (SERVED_FILES).
+            await s.writer.execute(  # type: ignore[union-attr]
+                "UPDATE drawings SET status='processing', progress=NULL WHERE id=?", (acc.drawing_id,))
+            skeleton = {"contract_version": CONTRACT_VERSION, "id": acc.drawing_id, "kind": "raster",
+                        "source": "upload", "status": "ready", "rooms": [], "units": [],
+                        "frame": {}, **meta}
+            (acc.dir / "drawing.json").write_text(json.dumps(skeleton), encoding="utf-8")
+            request.app.state.drawing_store.on_parsed(acc.drawing_id, [acc.drawing_id])
+            return JSONResponse({"contract_version": CONTRACT_VERSION, "drawing_id": acc.drawing_id,
+                                 "delete_token": acc.delete_token, "status": "queued"},
+                                status_code=202)
         request.app.state.jobs.submit(
             acc.drawing_id, worker_kind, acc.src, acc.dir, meta,
             {"presenter": presenter, "ip_hash": client_ip_hash(request, settings),
@@ -1029,6 +1083,10 @@ async def _remove_single_upload(s: Services, drawing_id: str) -> None:
     await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     await w.execute("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     await w.execute("DELETE FROM answer_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
+    # Saved chat sessions on the upload (aura/sessions.py) go too; the table exists once sessions ran.
+    if s.store is not None and s.store._q(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_sessions'"):
+        await w.execute("DELETE FROM chat_sessions WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     s.answers.drop_drawing(drawing_id)
     s.checks.forget_drawing(drawing_id)
 
@@ -1083,6 +1141,9 @@ async def _store_status(s: Services, ds: DrawingStore, row: dict) -> dict:
                            "stage_s": max(0, int(now - float(top_st.get("t_stage") or row["t"])))}
     if counts:
         out["counts"] = {"pages": len(pages)} | counts
+    est = sorted({k for _, st in stages for k, v in (st.get("methods") or {}).items() if v == "vision"})
+    if est:
+        out["estimates"] = est  # subjects whose counts come from a model (label them "estimate")
     if note:
         out["note"] = note
     if ds.available() or calls:
@@ -1107,13 +1168,23 @@ def _store_file_ids(s: Services, ids: set[str] | None = None) -> dict[str, set[s
 
 
 async def _remove_upload(s: Services, drawing_id: str, ds: DrawingStore | None = None) -> None:
-    before = _store_file_ids(s) if ds is not None and ds.available() else {}
+    """Delete an upload (and its pages) everywhere: our files and rows, then the drawing store.
+    A tombstone per page is kept until the store side is done, so a delete while Postgres is down
+    (or while the page is still being registered) is finished by the store sweep."""
+    removing = {drawing_id}
+    if s.store is not None and not re.search(r"-p\d+$", drawing_id):
+        removing |= {r["id"] for r in s.store.upload_rows() if r["id"].startswith(f"{drawing_id}-p")}
+    refs = _store_file_ids(s, removing)
+    fids = sorted(refs)
+    if ds is not None:
+        for fid, rows in refs.items():
+            for rid in rows:
+                await ds.tombstone(rid, fid)
     await _remove_upload_rows(s, drawing_id)
-    if before:
-        # Delete a store project only when no remaining upload of ours still uses those bytes.
-        remaining = {r["id"] for r in s.store.upload_rows()} if s.store else set()
-        gone = [fid for fid, rows in before.items() if rows and not (rows & remaining)]
-        await ds.delete(gone)
+    if ds is not None and ds.available() and fids:
+        await ds.forget(fids)  # keeps bytes a live upload or the bundled dataset still uses
+        for rid in removing:
+            await s.writer.execute("DELETE FROM store_tombstones WHERE drawing_id=?", (rid,))  # type: ignore[union-attr]
 
 
 async def _remove_upload_rows(s: Services, drawing_id: str) -> None:

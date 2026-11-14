@@ -35,6 +35,10 @@ class Jobs:
         # (drawing_id, page_ids) after a successful parse: hands the pages to the drawing store.
         # Must return at once (it only schedules work); the parse slot is not held for it.
         self.on_ready = None
+        # () -> bool: the drawing store indexes uploads (full mode). Then our own image detection
+        # is skipped in the parse slot (the store took 20-35 s per page and measured more accurate,
+        # M2/M3); it runs later only if the store fails (see detect_later).
+        self.store_on = None
 
     def submit(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict,
                ctx: dict | None = None) -> None:
@@ -139,7 +143,9 @@ class Jobs:
                 res = conn.recv() if conn.poll() else {
                     "ok": False, "error": "The parser stopped unexpectedly (memory or CPU limit)."}
                 note = None
-                if res.get("ok") and kind in ("raster", "pdf") and self.after_raster is not None:
+                store_indexes = self.store_on is not None and self.store_on()
+                if (res.get("ok") and kind in ("raster", "pdf") and self.after_raster is not None
+                        and not store_indexes):
                     await self._set(drawing_id, "processing", 0.5)
                     # PDF: every page of a multi-page bundle (siblings sit next to `out`).
                     pages = [(drawing_id, out)] + ([(sib["id"], out.parent / sib["id"])
@@ -169,6 +175,16 @@ class Jobs:
                 conn.close()
                 if self.on_done:
                     self.on_done(drawing_id)
+
+    async def detect_later(self, drawing_id: str, out: Path, ctx: dict | None = None) -> None:
+        """Our image detection as the fallback when the drawing store could not index a page."""
+        if self.after_raster is None:
+            return
+        err = await self._detect(drawing_id, out, ctx or {})
+        if err:
+            log.warning("fallback detection on %s: %s", drawing_id, err)
+        if self.on_done:
+            self.on_done(drawing_id)
 
     async def cancel_all(self) -> None:
         for t in list(self.tasks):

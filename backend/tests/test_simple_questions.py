@@ -143,3 +143,76 @@ def test_cached_sidecar_answer_never_outranks_the_tool_tier(tmp_path, monkeypatc
         replay = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
         assert replay["route"] == "cache" and replay["method"] == "agent_estimate"
         assert len(sc.runs) == 1  # the cached sidecar answer replaced a new sidecar run
+
+
+def test_without_sidecar_tools_answer_and_the_rest_abstains_honestly(tmp_path, monkeypatch):
+    """The plan's path with the sidecar retired: tool steps answer; else an honest abstain."""
+    import aura.pipeline as P
+    from aura import answer as A
+    from aura import tools
+
+    sc = MockSidecarState()
+
+    async def answers(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        stats["route"] = "choice"
+        tr = tools.count_objects(d, "door", {"kind": "floor"})
+        return A.count(question, lang, d, tr, {"kind": "floor"}, None, intent_tag="tool steps")
+
+    async def declines(*a, **k):
+        return None
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc)) as c:
+        c.app.state.svc.agent = None  # AURA_SIDECAR_URL unset
+        c.app.state.drawing_store.ok = True  # full mode (the store's own calls are not reached here)
+        monkeypatch.setattr(P, "answer_with_tools", answers)
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "doors next to something odd"}).json()
+        assert r["route"] == "choice" and r["method"] == "cad_geometry"
+        monkeypatch.setattr(P, "answer_with_tools", declines)
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "what colour is the front door"}).json()
+        assert r["answer"]["kind"] == "abstain" and "agent_failure" not in r
+        assert r["answer"]["reason"] in ("not_answerable", "not_on_drawing")
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "how many lifts lead to the roof garden"}).json()
+        assert r["answer"] == {"kind": "abstain", "reason": "not_answerable"} or r["answer"]["kind"] == "abstain"
+        assert sc.runs == []  # no agent run at all
+        for q, kind, _ in BATTERY:  # exact questions are unchanged without the sidecar
+            b = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
+            assert b["route"] in ("template", "cache") and b["answer"]["kind"] == kind, (q, b["answer"])
+
+
+@pytest.mark.parametrize("q", ["which rooms have a door wider than 0.92 m",
+                               "which of them are wider than 0.95 m",
+                               "which rooms are larger than 15.5 m²",
+                               "which bedrooms are bigger than 11 m2 on this plan",
+                               "show only doors that are in rooms that have toilets"])
+def test_qualified_filters_are_for_the_tool_tier_not_a_template_abstain(q):
+    r = route(q)
+    assert r.intent == "unknown", (q, r.intent, r.matched)
+
+
+def test_gate_off_drawing_verdict_does_not_stop_the_tool_tier_on_an_indexed_drawing(tmp_path, monkeypatch):
+    """gemini-decision-1 said 'not shown on the drawing' (p = 0.24) on an answerable filter: the
+    tool steps still try first, because the drawing has rooms indexed."""
+    import aura.pipeline as P
+    from aura import answer as A
+    from aura import tools
+
+    def off(path, body):
+        q = body.get("questions") or {}
+        if "on_drawing" not in q:
+            return None
+        ans = {k: {"choice": "other", "confidence": 0.9, "probabilities": {"other": 0.9}}
+               for k in ("intent", "subject", "scope", "cache_match") if k in q}
+        ans |= {"on_drawing": {"noul": 0.24}, "exact_sufficient": {"noul": 0.05}}
+        return 200, {"answers": ans, "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1}}
+
+    async def answers(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        stats["route"] = "choice"
+        tr = tools.room_areas(d, {"kind": "floor"})
+        return A.area(question, lang, d, tr, {"kind": "floor"}, None, intent_tag="tool steps")
+
+    sc = MockSidecarState()
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc, gemini=MockGeminiDecisionsTransport(off))) as c:
+        monkeypatch.setattr(P, "answer_with_tools", answers)
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "which rooms are larger than 15.5 m²"}).json()
+        assert r["route"] == "choice" and r["answer"]["kind"] == "area"
+        assert sc.runs == []
