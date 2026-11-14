@@ -78,7 +78,8 @@ async def detect(client, image: bytes, *, mime_type: str = 'image/png', bucket: 
     """One generateContent call (purpose 'raster_detect', so the budget's raster rules apply)."""
     g = await client.generate(build_contents(image, mime_type), purpose='raster_detect', bucket=bucket,
                               presenter=presenter, ip_hash=ip_hash, model=model,
-                              config={'responseMimeType': 'application/json'})
+                              config={'responseMimeType': 'application/json',
+                                      'thinkingConfig': {'thinkingLevel': 'low'}})
     items = parse_items(g.text)
     boxes = boxes_from_items(items)
     return {'boxes': boxes, 'counts': {s: len(v) for s, v in boxes.items()}, 'items': items,

@@ -17,7 +17,7 @@ import resource
 import sys
 from pathlib import Path
 
-AS_LIMIT = 1536 * 1024 * 1024
+AS_LIMIT = 4096 * 1024 * 1024
 CPU_LIMIT_S = 60
 MAX_PIXELS = 40_000_000
 
@@ -26,7 +26,7 @@ FSIZE_LIMIT = 200 * 1024 * 1024  # no single output file (plan.svg, model.json) 
 NOFILE_LIMIT = 64
 MAX_ITEMS = 3000  # countable objects in one uploaded DXF (the dataset's largest has ~600)
 MAX_TEXTS = 20000
-KEEP_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONPATH", "TMPDIR")
+KEEP_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONPATH", "TMPDIR", "OMP_NUM_THREADS")
 
 
 class TooLarge(ValueError):
@@ -37,6 +37,7 @@ def _limits() -> None:
     """M4: the child holds no secrets (it never needs Settings) and gets hard resource limits."""
     for k in [k for k in os.environ if k not in KEEP_ENV]:  # second line of defence
         os.environ.pop(k, None)
+    os.environ["OMP_NUM_THREADS"] = "1"
     try:  # not dumpable: no core dump, /proc/<pid>/{environ,mem} unreadable to the same UID
         import ctypes
 
@@ -115,10 +116,48 @@ def parse_raster(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
     return {"px": [w, h]}
 
 
+def parse_pdf(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
+    from aura.solvers.pdf import render_pdf
+
+    return render_pdf(src, out, drawing_id, meta)
+
+
+def parse_ifc(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
+    from aura.contract import CONTRACT_VERSION
+    from aura.render.ifc import build_drawing, render_svg
+    from aura.solvers import ifc
+
+    model = ifc.load(src, storey=None, drawing_id=drawing_id, geometry=True)
+    if sum(len(v) for v in model.elements.values()) > MAX_ITEMS * 4:
+        raise TooLarge
+    if model.frame is None:
+        model.frame = {"min": [0.0, 0.0], "max": [20.0, 20.0], "scale": 40.0, "px": [800, 800]}
+    credit = {
+        "text": "Uploaded IFC building model; deleted after 24 hours or when you delete it.",
+        "license": "user upload",
+        "license_name": "Your upload",
+    }
+    drawing = build_drawing(model, source="upload", credit=credit)
+    drawing["contract_version"] = CONTRACT_VERSION
+    drawing.update(meta)
+    raw_title = meta.get("title")
+    if raw_title:
+        drawing["title"] = f"{raw_title} · {model.storey}" if model.storey else raw_title
+    drawing["source_ext"] = ".ifc"
+    (out / "plan.svg").write_text(render_svg(model), encoding="utf-8")
+    _write_json(out / "model.json", model.to_json())
+    _write_json(out / "drawing.json", drawing)
+    return {"rooms": len(model.rooms), "capabilities": drawing.get("capabilities") or []}
+
+
 def _child(kind: str, src: str, out: str, drawing_id: str, meta: dict, conn) -> None:
     try:
         _limits()
-        fn = parse_dxf if kind == "dxf" else parse_raster
+        fn = {
+            "dxf": parse_dxf,
+            "pdf": parse_pdf,
+            "ifc": parse_ifc,
+        }.get(kind, parse_raster)
         res = fn(Path(src), Path(out), drawing_id, meta)
         conn.send({"ok": True, **res})
     except MemoryError:

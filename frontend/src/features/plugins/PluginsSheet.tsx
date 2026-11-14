@@ -3,11 +3,12 @@ import { useUi } from '@/i18n/uiLang'
 import type { UiKey } from '@/i18n/strings'
 import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
+import { apiBase } from '@/api/library'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import { actions, selectActiveTurn, selectDrawing, useAppStore } from '@/store'
-import { PROMPT_BLOCKS, fillBlock } from '@/features/chat/draft'
+import { fillBlock, promptBlocksFor } from '@/features/chat/draft'
 import { downloadText, evidenceCsv } from './csv'
 
 const PB_LABEL: Record<string, UiKey> = { Count: 'pb_count', Area: 'pb_area', 'Where is': 'pb_where', Check: 'pb_check', List: 'pb_list' }
@@ -21,16 +22,13 @@ const STATE_STYLE: Record<State, string> = {
   planned: 'border border-border text-muted-foreground',
 }
 
-const MCP_SNIPPET = `{
-  "mcpServers": {
-    "aura": { "url": "https://<your-backend>/mcp" }
+function resolveLiveBase(): string {
+  const raw = apiBase()
+  if (raw?.startsWith('/') && typeof window !== 'undefined') {
+    return `${window.location.origin}${raw}`.replace(/\/+$/, '')
   }
-}`
-
-const REST_SNIPPET = `curl -X POST https://<your-backend>/ask \\
-  -H 'content-type: application/json' \\
-  -d '{ "drawing_id": "swiss-46639",
-        "question": "Montako ikkunaa?" }'`
+  return (raw || 'https://<your-backend>').replace(/\/+$/, '')
+}
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const { tu } = useUi()
@@ -81,8 +79,15 @@ export function PluginsSheet() {
   const open = useAppStore((s) => s.ui.pluginsOpen)
   const turn = useAppStore(selectActiveTurn)
   const drawing = useAppStore(selectDrawing)
+  const activeProject = useAppStore((s) => s.activeProject)
   const resp = turn?.response
-  const evidenceCount = resp ? resp.evidence.boxes.length + resp.evidence.rooms.length : 0
+  const evidenceCount = resp
+    ? resp.evidence.boxes.length + resp.evidence.rooms.length + (resp.evidence.rows?.length ?? 0)
+    : 0
+  const base = resolveLiveBase()
+  const mcpSnippet = `{\n  "mcpServers": {\n    "aura": { "url": "${base}/mcp/" }\n  }\n}`
+  const restSnippet = `curl -X POST ${base}/ask \\\n  -H 'content-type: application/json' \\\n  -d '{ "drawing_id": "${drawing.id}",\n        "question": "Montako ikkunaa?" }'`
+  const blocks = promptBlocksFor(drawing, activeProject)
 
   const download = () => {
     if (!turn || !resp) return
@@ -124,9 +129,9 @@ export function PluginsSheet() {
             state="backend"
             desc={tu('pl_mcp_desc')}
           >
-            <Code>{MCP_SNIPPET}</Code>
+            <Code>{mcpSnippet}</Code>
             <div>
-              <CopyButton text={MCP_SNIPPET} label={tu('pl_mcp_copy')} />
+              <CopyButton text={mcpSnippet} label={tu('pl_mcp_copy')} />
             </div>
           </Card>
           <Card
@@ -134,9 +139,9 @@ export function PluginsSheet() {
             state="backend"
             desc={tu('pl_rest_desc')}
           >
-            <Code>{REST_SNIPPET}</Code>
+            <Code>{restSnippet}</Code>
             <div>
-              <CopyButton text={REST_SNIPPET} label={tu('pl_rest_copy')} />
+              <CopyButton text={restSnippet} label={tu('pl_rest_copy')} />
             </div>
           </Card>
           <Card name={tu('pl_bots_name')} state="planned" desc={tu('pl_bots_desc')} />
@@ -144,14 +149,14 @@ export function PluginsSheet() {
             <h3 className="text-sm font-semibold">{tu('pl_prompts_title')}</h3>
             <p className="text-sm text-muted-foreground">{tu('pl_prompts_desc')}</p>
             <ul className="flex flex-wrap gap-1.5">
-              {PROMPT_BLOCKS.map((b) => (
+              {blocks.map((b) => (
                 <li key={b.label}>
                   <SheetClose asChild>
                     <button
                       type="button"
                       title={b.text}
                       onClick={() => fillBlock(b)}
-                      className="inline-flex min-h-10 items-center rounded-lg border border-info/25 bg-info-surface px-3 text-xs font-semibold text-info outline-none hover:border-info/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+                      className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-info/25 bg-info-surface px-3 text-xs font-semibold text-info outline-none hover:border-info/50 focus-visible:ring-3 focus-visible:ring-ring/50"
                     >
                       {tu(PB_LABEL[b.label] ?? 'pb_list')}
                     </button>

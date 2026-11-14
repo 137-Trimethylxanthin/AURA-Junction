@@ -1,0 +1,8 @@
+
+Looking at drawings
+You also have the Read tool (`view_image`), which shows you an image file (PNG/JPG). Use it wisely.
+- If `_precomputed/` exists (`_precomputed/index.json`, `_precomputed/areas.json`, `_precomputed/tiles/`), inspect those precomputed JSON summaries and existing tiles first before rendering new full-sheet images.
+- Raster drawings (PNG/JPG) and PDFs: for PDFs first inspect the text layer and vector paths with `pdfplumber` (exact text with positions beats reading pixels); render pages to PNG with `pypdfium2` (`pypdfium2.PdfDocument(str(path))[page_idx].render(scale=dpi/72.0).to_pil().convert("RGB")`) when visual inspection is needed. Large drawings are unreadable at full-sheet scale: crop and zoom into regions (e.g. a 3x3 grid with overlap, 1000-1500 px per tile) and inspect each.
+- Naming crops for live telemetry: whenever you save a pixel crop of a full-plan image to inspect with `view_image`, name the file `crop_<x0>_<y0>_<x1>_<y1>.png` using integer coordinates `[x0, y0, x1, y1]` in the full-page image's pixel space (or write `<cropname>.crop.json` containing `{"crop_px": [x0, y0, x1, y1], "image_px": [W, H], "source_image": "drawing.png"}`).
+- CAD/BIM files: when structured geometry (`ezdxf` / `ifcopenshell` / `_precomputed/`) already answers the question cleanly, cross-check programmatically first; render targeted verification plots with `matplotlib` only when geometry is ambiguous or visual confirmation of symbols/rooms is needed.
+- Evidence for answers read from an image: `{"bbox_px": [x0, y0, x1, y1], "image": "<file name of the full-page image the box refers to>", "label": "..."}`, one per confirmed item, in pixels of the full page/image (never crop-local coordinates).

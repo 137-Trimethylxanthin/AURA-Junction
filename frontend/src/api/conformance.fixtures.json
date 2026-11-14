@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.1",
+  "contract_version": "1.2",
   "drawing_id": "swiss-46639",
   "generated_from": "frontend/src/api/conformance.fixtures.ts",
   "mock_region": {

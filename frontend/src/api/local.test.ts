@@ -120,3 +120,24 @@ describe('integrity', () => {
     expect(bundledDrawing.evidence.door.filter((d) => d.note)).toHaveLength(4)
   })
 })
+
+describe('offline guard', () => {
+  it('abstains on qualified or back-referring questions instead of returning the unqualified count', () => {
+    for (const q of [
+      'ok, now show only double doors',
+      'show only doors that are in rooms that have toilets',
+      'doors leading to that room',
+      'how many windows without a sill',
+    ]) {
+      const r = ask(req(q))
+      expect(r.answer, q).toMatchObject({ kind: 'abstain', reason: 'not_supported_yet' })
+      expect(r.evidence.boxes).toHaveLength(0)
+    }
+  })
+
+  it('still answers plain counts and areas', () => {
+    expect(ask(req('How many doors are there?')).answer.kind).toBe('count')
+    expect(ask(req('What is the net floor area of apartment A?')).answer.kind).toBe('area')
+  })
+})
+

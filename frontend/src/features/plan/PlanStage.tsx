@@ -5,20 +5,40 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react"
-import { AnimatePresence, motion, useReducedMotion } from "motion/react"
+import { AnimatePresence, motion } from "motion/react"
 import { ImageOffIcon, MousePointerClickIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
+import { myProjects } from "@/api/library"
+import type { Drawing } from "@/api/contract"
+import type { UiKey } from "@/i18n/strings"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { cn } from "@/lib/utils"
-import { actions, selectZoom, useAppStore } from "@/store"
-import { EvidenceLayer } from "./EvidenceLayer"
+import { ZOOM_MAX, ZOOM_MIN, actions, selectZoom, useActiveTurn, useAppStore } from "@/store"
+import { EvidenceLayer, StageEvidenceControls } from "./EvidenceLayer"
+import { FloorSwitcher } from "./FloorSwitcher"
+import { LiveAgentHud, LiveAgentReticle } from "./LiveAgentOverlay"
 import { MarkCapture, MarksLayer } from "./MarkTool"
 import { PlanContextMenu } from "./PlanContextMenu"
-import { isEditable, overlayOpen, pctPoint, planAspect } from "./shared"
+import {
+  parseSpotHash,
+  readActiveProject,
+  readFocusedGroupId,
+  resolveProjectForDrawing,
+  writeFocusedGroupId,
+} from "./badges"
+import {
+  STAGE_COMMAND_EVENT,
+  isEditable,
+  overlayOpen,
+  pctPoint,
+  planAspect,
+  type StageCommand,
+} from "./shared"
 import { useEver } from "@/hooks/use-ever"
 
 // Loaded on first use: compare and what-if are not needed for the first paint of a drawing.
@@ -37,6 +57,16 @@ const WhatIfPicker = lazy(() =>
 
 const PAD = 30 // px around the plan inside the scroller: room for edge badges
 const HINT_KEY = "aura.plan.menuHintSeen"
+const SPOT_MIN_ZOOM = 190
+
+interface ZoomAnchor {
+  /** Cursor stage fraction in `[0, 1]`. */
+  fx: number
+  fy: number
+  /** Desired viewport offset inside `scrollRef` in px. */
+  vx: number
+  vy: number
+}
 
 function readHintSeen(): boolean {
   try {
@@ -44,6 +74,11 @@ function readHintSeen(): boolean {
   } catch {
     return false
   }
+}
+
+function readInitialSpot(): [number, number] | null {
+  if (typeof window === "undefined") return null
+  return parseSpotHash(window.location.hash)
 }
 
 /** Width of the plan at 100 %: the whole drawing fits the stage region. */
@@ -75,12 +110,16 @@ export function PlanStage() {
   const whatIfRoom = useAppStore((s) => s.ui.whatIf.roomId !== null)
   const whatIfUsed = useEver(tool === "whatif" || whatIfRoom)
   const selected = useAppStore((s) => s.ui.selectedEvidenceId)
-  const reduce = useReducedMotion()
+  const turn = useActiveTurn()
+  const storeProject = useAppStore(readActiveProject)
+  const storeFocusedGroupId = useAppStore(readFocusedGroupId)
+  const reduce = useMediaQuery("(prefers-reduced-motion: reduce)")
   const coarse = useMediaQuery("(pointer: coarse)")
 
+  const aspect = planAspect(drawing)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
-  const fit = useFitWidth(scrollRef, planAspect(drawing))
+  const fit = useFitWidth(scrollRef, aspect)
   const width = Math.round((fit * zoom) / 100)
 
   const [img, setImg] = useState<"loading" | "ok" | "error">("loading")
@@ -88,24 +127,283 @@ export function PlanStage() {
   const [menuPoint, setMenuPoint] = useState<[number, number] | null>(null)
   const lastPoint = useRef<[number, number] | null>(null)
   const [hintSeen, setHintSeen] = useState(readHintSeen)
+  const [spotTarget, setSpotTarget] = useState<[number, number] | null>(readInitialSpot)
 
-  // Keep the view centred on the same spot of the drawing when zooming.
+  // Shared dropped-candidates toggle & focused group fallback scoped to `(turn.id, drawing.id)`.
+  const turnScopeKey = `${turn?.id ?? "none"}:${drawing.id}`
+  const [droppedState, setDroppedState] = useState<{ key: string; on: boolean }>({ key: "", on: false })
+  const [localGroupState, setLocalGroupState] = useState<{ key: string; id: string | null }>({
+    key: "",
+    id: null,
+  })
+  const [hoveredGroupState, setHoveredGroupState] = useState<{ key: string; id: string | null }>({
+    key: "",
+    id: null,
+  })
+  const [projRev, setProjRev] = useState(0)
+
+  useEffect(() => myProjects.subscribe(() => setProjRev((r) => r + 1)), [])
+
+  const showDropped = droppedState.key === turnScopeKey ? droppedState.on : false
+  const toggleShowDropped = useCallback(() => {
+    setDroppedState((prev) => ({
+      key: turnScopeKey,
+      on: prev.key === turnScopeKey ? !prev.on : true,
+    }))
+  }, [turnScopeKey])
+
+  // Peek: hide the evidence overlays (rooms, boxes, links, marks) to read the raw linework; evidence stays in the store.
+  const [peek, setPeek] = useState(false)
+  const [handPan, setHandPan] = useState(false)
+
+  const effectiveFocusedGroupId =
+    storeFocusedGroupId ?? (localGroupState.key === turnScopeKey ? localGroupState.id : null)
+
+  const hoveredGroupId = hoveredGroupState.key === turnScopeKey ? hoveredGroupState.id : null
+
+  const selectGroup = useCallback(
+    (nextId: string | null) => {
+      if (!writeFocusedGroupId(nextId)) {
+        setLocalGroupState({ key: turnScopeKey, id: nextId })
+      }
+    },
+    [turnScopeKey],
+  )
+
+  const hoverGroup = useCallback(
+    (nextId: string | null) => {
+      setHoveredGroupState({ key: turnScopeKey, id: nextId })
+    },
+    [turnScopeKey],
+  )
+
+  const hasMultiFloorProject = useMemo(() => {
+    void projRev
+    const resolved = resolveProjectForDrawing(storeProject, drawing.id)
+    return Boolean(resolved && resolved.floors.length >= 2)
+  }, [storeProject, drawing.id, projRev])
+
+  // Keep the view centred on the same spot of the drawing when zooming via toolbar, or anchored to cursor on wheel/pinch.
   const centre = useRef<[number, number]>([0.5, 0.5])
+  const fitRef = useRef<number>(fit)
+  const zoomFloatRef = useRef<number>(zoom)
+  const zoomAnchorRef = useRef<ZoomAnchor | null>(null)
+  const appliedSpotRef = useRef<string | null>(null)
+
+  useLayoutEffect(() => {
+    fitRef.current = fit
+  }, [fit])
+
+  const scrollToStageFraction = useCallback(
+    (el: HTMLDivElement, st: HTMLDivElement | null, anchor: ZoomAnchor, stageW: number) => {
+      const scRect = el.getBoundingClientRect()
+      const stRect = st?.getBoundingClientRect()
+      let contentX: number
+      let contentY: number
+      if (stRect && stRect.width > 0 && stRect.height > 0) {
+        const originX = stRect.left - scRect.left + el.scrollLeft
+        const originY = stRect.top - scRect.top + el.scrollTop
+        contentX = originX + anchor.fx * stRect.width
+        contentY = originY + anchor.fy * stRect.height
+      } else {
+        const stageH = stageW / (aspect > 0 ? aspect : 1)
+        contentX = PAD + anchor.fx * stageW
+        contentY = PAD + anchor.fy * stageH
+      }
+      el.scrollLeft = Math.max(0, contentX - anchor.vx)
+      el.scrollTop = Math.max(0, contentY - anchor.vy)
+      if (el.scrollWidth > 0 && el.scrollHeight > 0) {
+        centre.current = [
+          (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth,
+          (el.scrollTop + el.clientHeight / 2) / el.scrollHeight,
+        ]
+      }
+    },
+    [aspect],
+  )
+
   const onScroll = () => {
     const el = scrollRef.current
-    if (!el || el.scrollWidth === 0) return
+    if (!el || el.scrollWidth === 0 || el.scrollHeight === 0) return
     centre.current = [
       (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth,
       (el.scrollTop + el.clientHeight / 2) / el.scrollHeight,
     ]
   }
+
+  useLayoutEffect(() => {
+    if (Math.abs(zoomFloatRef.current - zoom) >= 1) {
+      zoomFloatRef.current = zoom
+    }
+  }, [zoom])
+
   useLayoutEffect(() => {
     const el = scrollRef.current
-    if (!el) return
+    if (!el || width <= 0) return
+    const anchor = zoomAnchorRef.current
+    if (anchor) {
+      zoomAnchorRef.current = null
+      scrollToStageFraction(el, stageRef.current, anchor, width)
+      return
+    }
     const [cx, cy] = centre.current
     el.scrollLeft = cx * el.scrollWidth - el.clientWidth / 2
     el.scrollTop = cy * el.scrollHeight - el.clientHeight / 2
-  }, [width])
+  }, [width, scrollToStageFraction])
+
+  // Cursor-centered Ctrl/Cmd + Wheel zoom & two-finger touch pinch+pan zoom up to 450%.
+  useEffect(() => {
+    const sc = scrollRef.current
+    if (!sc) return
+
+    const captureAnchorAtClient = (clientX: number, clientY: number): ZoomAnchor => {
+      const scRect = sc.getBoundingClientRect()
+      const stRect = stageRef.current?.getBoundingClientRect()
+      if (stRect && stRect.width > 0 && stRect.height > 0) {
+        const clampedX = Math.min(stRect.right, Math.max(stRect.left, clientX))
+        const clampedY = Math.min(stRect.bottom, Math.max(stRect.top, clientY))
+        const fx = Math.min(1, Math.max(0, (clampedX - stRect.left) / stRect.width))
+        const fy = Math.min(1, Math.max(0, (clampedY - stRect.top) / stRect.height))
+        const vx = scRect.width > 0 ? clampedX - scRect.left : sc.clientWidth / 2
+        const vy = scRect.height > 0 ? clampedY - scRect.top : sc.clientHeight / 2
+        return { fx, fy, vx, vy }
+      }
+      const vx = scRect.width > 0 ? clientX - scRect.left : sc.clientWidth / 2
+      const vy = scRect.height > 0 ? clientY - scRect.top : sc.clientHeight / 2
+      return { fx: centre.current[0], fy: centre.current[1], vx, vy }
+    }
+
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      e.preventDefault()
+      const curZoom = actions().ui.zoom
+      if (Math.abs(zoomFloatRef.current - curZoom) >= 1) {
+        zoomFloatRef.current = curZoom
+      }
+      const scaleMode = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1
+      const dy = e.deltaY * scaleMode
+      const nextFloat = Math.min(
+        ZOOM_MAX,
+        Math.max(ZOOM_MIN, zoomFloatRef.current * Math.exp(-dy * 0.0025)),
+      )
+      zoomFloatRef.current = nextFloat
+      const nextZoom = Math.round(nextFloat)
+      if (nextZoom === curZoom) return
+      zoomAnchorRef.current = captureAnchorAtClient(e.clientX, e.clientY)
+      actions().setZoom(nextZoom)
+    }
+
+    let pinchStartDist = 0
+    let pinchStartZoom = ZOOM_MIN
+    let pinchFx = 0.5
+    let pinchFy = 0.5
+
+    const touchDist = (t0: Touch, t1: Touch) =>
+      Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY)
+
+    const beginPinch = (t0: Touch, t1: Touch) => {
+      const d = touchDist(t0, t1)
+      if (d <= 0) return false
+      pinchStartDist = d
+      const curZoom = actions().ui.zoom
+      if (Math.abs(zoomFloatRef.current - curZoom) >= 1) {
+        zoomFloatRef.current = curZoom
+      }
+      pinchStartZoom = zoomFloatRef.current
+      const startMidX = (t0.clientX + t1.clientX) / 2
+      const startMidY = (t0.clientY + t1.clientY) / 2
+      const startAnchor = captureAnchorAtClient(startMidX, startMidY)
+      pinchFx = startAnchor.fx
+      pinchFy = startAnchor.fy
+      return true
+    }
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || actions().ui.tool !== "select") return
+      beginPinch(e.touches[0], e.touches[1])
+    }
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || actions().ui.tool !== "select") return
+      if (pinchStartDist <= 0 && !beginPinch(e.touches[0], e.touches[1])) return
+      e.preventDefault()
+      const d = touchDist(e.touches[0], e.touches[1])
+      if (d <= 0) return
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2
+      const scRect = sc.getBoundingClientRect()
+      const anchor: ZoomAnchor = {
+        fx: pinchFx,
+        fy: pinchFy,
+        vx: scRect.width > 0 ? midX - scRect.left : sc.clientWidth / 2,
+        vy: scRect.height > 0 ? midY - scRect.top : sc.clientHeight / 2,
+      }
+      const nextFloat = Math.min(
+        ZOOM_MAX,
+        Math.max(ZOOM_MIN, pinchStartZoom * (d / pinchStartDist)),
+      )
+      zoomFloatRef.current = nextFloat
+      const nextZoom = Math.round(nextFloat)
+      if (nextZoom === actions().ui.zoom) {
+        const curWidth = Math.round((fitRef.current * nextZoom) / 100)
+        if (curWidth > 0) scrollToStageFraction(sc, stageRef.current, anchor, curWidth)
+        return
+      }
+      zoomAnchorRef.current = anchor
+      actions().setZoom(nextZoom)
+    }
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinchStartDist = 0
+    }
+
+    sc.addEventListener("wheel", onWheel, { passive: false })
+    sc.addEventListener("touchstart", onTouchStart, { passive: true })
+    sc.addEventListener("touchmove", onTouchMove, { passive: false })
+    sc.addEventListener("touchend", onTouchEnd)
+    sc.addEventListener("touchcancel", onTouchEnd)
+    return () => {
+      sc.removeEventListener("wheel", onWheel)
+      sc.removeEventListener("touchstart", onTouchStart)
+      sc.removeEventListener("touchmove", onTouchMove)
+      sc.removeEventListener("touchend", onTouchEnd)
+      sc.removeEventListener("touchcancel", onTouchEnd)
+    }
+  }, [scrollToStageFraction])
+
+  // Parse `#spot=x,y` on hashchange and pan/zoom to centre `(x%, y%)` once `fit > 0`.
+  useEffect(() => {
+    const onHashChange = () => {
+      appliedSpotRef.current = null
+      setSpotTarget(parseSpotHash(window.location.hash))
+    }
+    window.addEventListener("hashchange", onHashChange)
+    return () => window.removeEventListener("hashchange", onHashChange)
+  }, [])
+
+  useLayoutEffect(() => {
+    const sc = scrollRef.current
+    if (!spotTarget || fit <= 0 || !sc) return
+    const spotKey = `${drawing.id}:${spotTarget[0]},${spotTarget[1]}`
+    if (appliedSpotRef.current === spotKey) return
+    appliedSpotRef.current = spotKey
+
+    const anchor: ZoomAnchor = {
+      fx: spotTarget[0] / 100,
+      fy: spotTarget[1] / 100,
+      vx: sc.clientWidth / 2,
+      vy: sc.clientHeight / 2,
+    }
+    const curZoom = actions().ui.zoom
+    if (curZoom < SPOT_MIN_ZOOM) {
+      zoomFloatRef.current = SPOT_MIN_ZOOM
+      zoomAnchorRef.current = anchor
+      actions().setZoom(SPOT_MIN_ZOOM)
+    } else {
+      const curWidth = Math.round((fit * curZoom) / 100)
+      scrollToStageFraction(sc, stageRef.current, anchor, curWidth)
+    }
+  }, [spotTarget, fit, drawing.id, scrollToStageFraction])
 
   // Located evidence scrolls into view inside the stage (never the page).
   useEffect(() => {
@@ -132,8 +430,76 @@ export function PlanStage() {
     })
   }, [selected, reduce])
 
-  // Escape peels one layer: what-if, else the selection. Never when something else already handled it
-  // (an open menu or dialog, an input, the Mark tool which owns Escape while active).
+  // Stage commands from keyboard shortcuts / the palette (pan, fit, peek, dropped candidates).
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const cmd = (e as CustomEvent<StageCommand>).detail
+      const sc = scrollRef.current
+      if (!cmd) return
+      if (cmd.type === "pan") {
+        sc?.scrollBy({ left: cmd.dx, top: cmd.dy, behavior: reduce ? "auto" : "smooth" })
+      } else if (cmd.type === "fit") {
+        centre.current = [0.5, 0.5]
+        actions().resetZoom()
+        if (sc) {
+          sc.scrollLeft = (sc.scrollWidth - sc.clientWidth) / 2
+          sc.scrollTop = (sc.scrollHeight - sc.clientHeight) / 2
+        }
+      } else if (cmd.type === "peek") {
+        setPeek((p) => !p)
+      } else if (cmd.type === "dropped") {
+        toggleShowDropped()
+      }
+    }
+    window.addEventListener(STAGE_COMMAND_EVENT, onCommand)
+    return () => window.removeEventListener(STAGE_COMMAND_EVENT, onCommand)
+  }, [reduce, toggleShowDropped])
+
+  // Space + drag: momentary hand-pan, even while Mark or What-If is active (a capture layer sits over the stage).
+  useEffect(() => {
+    const interactive = "button,a,summary,[role=button],[role=checkbox],[role=switch],[role=menuitem]"
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return
+      if (isEditable(e.target) || overlayOpen()) return
+      if (e.target instanceof Element && e.target.closest(interactive)) return
+      e.preventDefault()
+      setHandPan(true)
+    }
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") setHandPan(false)
+    }
+    const off = () => setHandPan(false)
+    window.addEventListener("keydown", onDown)
+    window.addEventListener("keyup", onUp)
+    window.addEventListener("blur", off)
+    return () => {
+      window.removeEventListener("keydown", onDown)
+      window.removeEventListener("keyup", onUp)
+      window.removeEventListener("blur", off)
+    }
+  }, [])
+
+  const panDrag = useRef<{ x: number; y: number; l: number; t: number } | null>(null)
+  const onPanDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const sc = scrollRef.current
+    if (!sc) return
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    panDrag.current = { x: e.clientX, y: e.clientY, l: sc.scrollLeft, t: sc.scrollTop }
+  }
+  const onPanMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = panDrag.current
+    const sc = scrollRef.current
+    if (!d || !sc) return
+    sc.scrollLeft = d.l - (e.clientX - d.x)
+    sc.scrollTop = d.t - (e.clientY - d.y)
+  }
+  const onPanUp = () => {
+    panDrag.current = null
+  }
+
+  // Escape peels one layer: what-if, else the selection, else focused group spotlight, else #spot target ring.
+  // Never when something else already handled it (an open menu or dialog, an input, the Mark tool).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (
@@ -154,11 +520,21 @@ export function PlanStage() {
       if (s.ui.selectedEvidenceId && s.ui.activeTurnId) {
         e.preventDefault()
         s.select(s.ui.activeTurnId, null)
+        return
+      }
+      if (effectiveFocusedGroupId) {
+        e.preventDefault()
+        selectGroup(null)
+        return
+      }
+      if (spotTarget) {
+        e.preventDefault()
+        setSpotTarget(null)
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [])
+  }, [effectiveFocusedGroupId, selectGroup, spotTarget])
 
   const recordPoint = useCallback(
     (e: React.PointerEvent | React.MouseEvent) => {
@@ -254,8 +630,15 @@ export function PlanStage() {
     if (e.target !== e.currentTarget && !(e.target instanceof HTMLImageElement))
       return
     const s = actions()
-    if (s.ui.tool === "select" && s.ui.selectedEvidenceId && s.ui.activeTurnId)
-      s.select(s.ui.activeTurnId, null)
+    if (s.ui.tool === "select") {
+      if (s.ui.selectedEvidenceId && s.ui.activeTurnId) {
+        s.select(s.ui.activeTurnId, null)
+      } else if (effectiveFocusedGroupId) {
+        selectGroup(null)
+      } else if (spotTarget) {
+        setSpotTarget(null)
+      }
+    }
   }
 
   // Only at 100 %: zoomed in, the drawing fills the frame and the pill would cover badges.
@@ -306,7 +689,7 @@ export function PlanStage() {
                   <img
                     key={imgKey}
                     src={drawing.images.rebuilt}
-                    alt={`${drawing.title}: floor plan rebuilt from the CAD geometry`}
+                    alt={tu(planAltKey(drawing), { title: drawing.title })}
                     draggable={false}
                     onLoad={() => setImg("ok")}
                     onError={() => setImg("error")}
@@ -329,14 +712,50 @@ export function PlanStage() {
                       <CompareLayer stageRef={stageRef} />
                     </Suspense>
                   ) : null}
-                  {tool === "whatif" ? (
-                    <Suspense fallback={<EvidenceLayer stageW={width} />}>
+                  {peek ? null : tool === "whatif" ? (
+                    <Suspense
+                      fallback={
+                        <EvidenceLayer
+                          stageW={width}
+                          showDropped={showDropped}
+                          onToggleShowDropped={toggleShowDropped}
+                          focusedGroupId={effectiveFocusedGroupId}
+                          onSelectGroup={selectGroup}
+                          hoveredGroupId={hoveredGroupId}
+                          onHoverGroup={hoverGroup}
+                          externalControls
+                        />
+                      }
+                    >
                       <WhatIfPicker />
                     </Suspense>
                   ) : (
-                    <EvidenceLayer stageW={width} />
+                    <EvidenceLayer
+                      stageW={width}
+                      showDropped={showDropped}
+                      onToggleShowDropped={toggleShowDropped}
+                      focusedGroupId={effectiveFocusedGroupId}
+                      onSelectGroup={selectGroup}
+                      hoveredGroupId={hoveredGroupId}
+                      onHoverGroup={hoverGroup}
+                      externalControls
+                    />
                   )}
-                  <MarksLayer />
+                  {peek ? null : <LiveAgentReticle stageW={width} aspect={aspect} />}
+                  {spotTarget ? (
+                    <span
+                      aria-hidden="true"
+                      data-spot-ring=""
+                      style={{ left: `${spotTarget[0]}%`, top: `${spotTarget[1]}%` }}
+                      className="pointer-events-none absolute z-[14] size-8 -translate-1/2 rounded-full border-2 border-user bg-user/10 opacity-90 shadow-[0_0_0_2px_var(--background)] ring-4 ring-user/20"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="plan-pulse absolute -inset-1.5 rounded-full border-2 border-user"
+                      />
+                    </span>
+                  ) : null}
+                  {peek ? null : <MarksLayer />}
                   {whatIfUsed ? (
                     <Suspense fallback={null}>
                       <WhatIfBox stageRef={stageRef} />
@@ -354,6 +773,36 @@ export function PlanStage() {
           ) : null}
         </div>
       </div>
+
+      {handPan ? (
+        <div
+          data-hand-pan
+          aria-hidden="true"
+          className="absolute inset-0 z-40 cursor-grab touch-none active:cursor-grabbing"
+          onPointerDown={onPanDown}
+          onPointerMove={onPanMove}
+          onPointerUp={onPanUp}
+          onPointerCancel={onPanUp}
+        />
+      ) : null}
+      {peek ? (
+        <div
+          role="status"
+          data-peek-badge
+          className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background shadow-md"
+        >
+          {tu("sc_peek")}
+        </div>
+      ) : null}
+      <FloorSwitcher />
+      <LiveAgentHud offsetTop={hasMultiFloorProject} />
+      <StageEvidenceControls
+        showDropped={showDropped}
+        onToggleShowDropped={toggleShowDropped}
+        focusedGroupId={effectiveFocusedGroupId}
+        onSelectGroup={selectGroup}
+        onHoverGroup={hoverGroup}
+      />
 
       <AnimatePresence>
         {showHint ? (
@@ -407,6 +856,13 @@ export function PlanStage() {
   )
 }
 
+/** The plan image's alt text names where the drawing came from (CAD, IFC, PDF or an uploaded image). */
+function planAltKey(d: Drawing): UiKey {
+  if (d.kind === "ifc") return "alt_plan_ifc"
+  if (d.kind === "raster") return d.source_ext?.toLowerCase() === ".pdf" ? "alt_plan_pdf" : "alt_plan_raster"
+  return "alt_plan_cad"
+}
+
 function ImageState({
   state,
   onRetry,
@@ -414,13 +870,14 @@ function ImageState({
   state: "loading" | "error"
   onRetry: () => void
 }) {
+  const { tu } = useUi()
   if (state === "loading")
     return (
       <div
         className="absolute inset-0 grid place-items-center bg-muted/60"
         role="status"
       >
-        <span className="text-sm text-muted-foreground">Loading drawing…</span>
+        <span className="text-sm text-muted-foreground">{tu("plan_loading")}</span>
       </div>
     )
   return (
@@ -431,10 +888,10 @@ function ImageState({
       <div className="flex flex-col items-center gap-3 text-center">
         <ImageOffIcon aria-hidden className="size-6 text-muted-foreground" />
         <span className="text-sm text-muted-foreground">
-          The drawing couldn’t be loaded.
+          {tu("plan_load_failed")}
         </span>
         <Button variant="outline" onClick={onRetry}>
-          Try again
+          {tu("vo_retry")}
         </Button>
       </div>
     </div>

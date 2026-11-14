@@ -1,0 +1,3 @@
+#!/bin/sh
+# Room areas of a floor plan (PDF, DXF, PNG/JPG) as JSON - see areas/cli.py
+exec python "$(dirname "$(readlink -f "$0")")/../areas/cli.py" "$@"

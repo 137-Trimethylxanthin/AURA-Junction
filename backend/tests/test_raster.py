@@ -33,7 +33,8 @@ async def result():
     r = await raster.detect(c, b'\x89PNG fake', bucket='measurement', presenter=True)
     contents, kw = c.calls[0]
     assert kw['purpose'] == 'raster_detect' and kw['model'] == raster.DETECT_MODEL
-    assert kw['config'] == {'responseMimeType': 'application/json'}
+    assert kw['config'] == {'responseMimeType': 'application/json',
+                            'thinkingConfig': {'thinkingLevel': 'low'}}
     parts = contents[0]['parts']
     assert 'inline_data' in parts[0] and parts[1]['text'] == raster.DETECT_PROMPT
     return r

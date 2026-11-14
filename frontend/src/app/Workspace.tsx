@@ -2,6 +2,8 @@ import { Suspense, lazy, useEffect } from "react"
 import { useUi } from "@/i18n/uiLang"
 import { Link, useParams } from "react-router"
 import { AlertTriangleIcon, CloudOffIcon, FileQuestionIcon } from "lucide-react"
+import { ApiError, getDrawingStatus } from "@/api/client"
+import { apiBase, myProjects } from "@/api/library"
 import { AppShell } from "@/components/shell"
 import { SiteHeader } from "@/components/shell/SiteHeader"
 import { Button } from "@/components/ui/button"
@@ -23,7 +25,15 @@ import {
   HeaderActions,
   SidebarOverlay,
 } from "@/features/chat"
+import { SessionHistorySheet } from "@/features/history/SessionHistorySheet"
+import { VoiceCopilotBar } from "@/features/voice/VoiceCopilotBar"
 import { Credit, PlanStage, PlanToolbar } from "@/features/plan"
+import { CommandPaletteDialog } from "@/features/shortcuts/CommandPaletteDialog"
+import { ShortcutHelpDialog } from "@/features/shortcuts/ShortcutHelpDialog"
+import {
+  hydrateActiveProject,
+  useWorkspaceShortcuts,
+} from "@/features/shortcuts/useWorkspaceShortcuts"
 import { useTitle } from "@/hooks/use-title"
 import { BUNDLED_DRAWING_ID } from "@/data/ids"
 import {
@@ -33,6 +43,9 @@ import {
   useAppStore,
   type DrawingLoad,
 } from "@/store"
+
+/** Set once the stored projects were checked for expired floors on this page load. */
+let prunedThisPage = false
 
 // three.js is only fetched when someone opens the 3D view.
 const Viewer3D = lazy(() => import("@/features/viewer3d/Viewer3D"))
@@ -64,18 +77,68 @@ export default function Workspace() {
     }
   }, [])
   useEffect(() => {
+    // Prime local project membership BEFORE `loadDrawing` so same-project floor switches keep chat turns & cached drawings.
+    const saved = myProjects.forDrawing(drawingId)
+    if (saved && saved.floors.length >= 2) actions().setActiveProject(saved)
     void actions().loadDrawing(drawingId)
     return () => actions().stopLoading()
   }, [drawingId])
 
   const ready =
     load.id === drawingId && load.state === "ready" && drawing.id === drawingId
+  const readyDrawingId = ready ? drawing.id : null
   useTitle(ready ? drawing.title : "Drawing")
   const sourceKind = useAppStore((s) => (s.session.source.state === 'ready' ? s.session.source.kind : null))
-  // After a reload: bring back this drawing's last conversation from the API (kept by id in localStorage).
+  const traceOpen = useAppStore((s) => s.ui.traceOpen)
+  const activeProjectId = useAppStore((s) => s.activeProject?.id ?? null)
+
+  // Hydrate House / Project bundle context from localStorage (`aura.projects`), `/projects`, or sibling plans.
+  useEffect(() => {
+    let controller = new AbortController()
+    const sync = () => {
+      controller.abort()
+      controller = new AbortController()
+      void hydrateActiveProject({
+        drawingId,
+        // Read at call time: depending on the drawing object re-fetched /projects and /drawings on every change.
+        drawing: ready ? actions().session.drawing : undefined,
+        sourceKind,
+        signal: controller.signal,
+      })
+    }
+    sync()
+    const unsub = myProjects.subscribe(sync)
+    return () => {
+      controller.abort()
+      unsub()
+    }
+  }, [drawingId, ready, readyDrawingId, sourceKind])
+
+  // Expired uploads (404 after 24 h) leave dead floor pills: prune them once per page load, and at once
+  // when the open drawing itself is gone.
+  useEffect(() => {
+    if (sourceKind !== "api" || prunedThisPage) return
+    const base = apiBase()
+    if (!base) return
+    prunedThisPage = true
+    void myProjects.pruneExpired(async (id) => {
+      if (id === BUNDLED_DRAWING_ID) return false
+      try {
+        await getDrawingStatus({ baseUrl: base }, id)
+        return false
+      } catch (e) {
+        return e instanceof ApiError && e.status === 404
+      }
+    })
+  }, [sourceKind])
+  useEffect(() => {
+    if (load.id === drawingId && load.state === "not_found") myProjects.pruneFloors([drawingId])
+  }, [load.id, load.state, drawingId])
+
+  // After a reload: bring back this drawing's (or hydrated House Project's) last conversation from the API.
   useEffect(() => {
     if (ready && sourceKind === 'api') void actions().restoreConversation()
-  }, [ready, sourceKind, drawingId])
+  }, [ready, sourceKind, drawingId, activeProjectId])
 
   if (!ready)
     return (
@@ -87,6 +150,7 @@ export default function Workspace() {
     )
   return (
     <TooltipProvider delayDuration={400}>
+      <WorkspaceShortcutsBinding />
       <AppShell
         title={<DrawingTitle />}
         headerActions={<HeaderActions />}
@@ -108,11 +172,25 @@ export default function Workspace() {
         }
         credit={<Credit />}
         chat={<ChatPanel />}
-        composer={<Composer />}
+        composer={
+          <div className="flex flex-col gap-2">
+            <VoiceCopilotBar />
+            <Composer />
+          </div>
+        }
         sidebarOverlay={<SidebarOverlay />}
+        sidebarOverlayOpen={traceOpen}
       />
+      <CommandPaletteDialog />
+      <ShortcutHelpDialog />
+      <SessionHistorySheet />
     </TooltipProvider>
   )
+}
+
+function WorkspaceShortcutsBinding() {
+  useWorkspaceShortcuts()
+  return null
 }
 
 function LoadState({ load }: { load: DrawingLoad }) {
@@ -221,7 +299,9 @@ function LoadState({ load }: { load: DrawingLoad }) {
     <div className="flex min-h-dvh flex-col bg-background">
       <SiteHeader />
       <main
-        className="flex flex-1 items-center justify-center p-6"
+        id="main"
+        tabIndex={-1}
+        className="flex flex-1 items-center justify-center p-6 outline-none"
         aria-live="polite"
         data-drawing-load={load.state}
       >

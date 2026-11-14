@@ -20,7 +20,12 @@ import {
   type DrawingStatusBody,
   type ErrorCode,
   type Health,
+  type ProjectBundle,
+  type ProjectFloor,
+  type ProjectList,
 } from './contract'
+
+export type { ProjectBundle, ProjectFloor, ProjectList }
 
 /** The presenter token, when this browser has one: the server lets only presenters spend model calls on uploads. */
 export function presenterHeader(): Record<string, string> {
@@ -200,5 +205,112 @@ export async function deleteDrawing(opts: ClientOptions, id: string, deleteToken
     `/drawings/${encodeURIComponent(id)}`,
     { method: 'DELETE', headers: { 'X-Delete-Token': deleteToken } },
     timeoutMs,
+  )
+}
+
+const isObjRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+export function isProjectFloor(v: unknown): v is ProjectFloor {
+  return (
+    isObjRecord(v) &&
+    typeof v.drawing_id === 'string' &&
+    v.drawing_id.length > 0 &&
+    typeof v.label === 'string' &&
+    typeof v.order === 'number' &&
+    Number.isFinite(v.order)
+  )
+}
+
+export function isProjectBundle(v: unknown): v is ProjectBundle {
+  return (
+    isObjRecord(v) &&
+    typeof v.id === 'string' &&
+    v.id.length > 0 &&
+    typeof v.title === 'string' &&
+    Array.isArray(v.floors) &&
+    v.floors.every(isProjectFloor) &&
+    (v.auto_matched === undefined || typeof v.auto_matched === 'boolean') &&
+    (v.created_at === undefined || typeof v.created_at === 'string')
+  )
+}
+
+/**
+ * Per-call extras for the `/projects` calls. Ownership headers (a project token, an upload's
+ * `x-delete-token`) go in `headers`, so adding one is a one-line change at the call site.
+ */
+export interface ProjectCallOptions {
+  timeoutMs?: number
+  headers?: Record<string, string>
+}
+
+/** A saved project plus the ownership token the server returned with it, when it returns one. */
+export interface SavedProject {
+  project: ProjectBundle
+  token?: string
+}
+
+/** Response fields that may carry the project's ownership token (none is part of the bundle itself). */
+const PROJECT_TOKEN_FIELDS = ['token', 'owner_token', 'project_token'] as const
+
+const withoutTokens = (v: Record<string, unknown>): Record<string, unknown> => {
+  const out = { ...v }
+  for (const k of PROJECT_TOKEN_FIELDS) delete out[k]
+  return out
+}
+
+/** `GET /projects` (1.2): multi-plan house / project bundles stored or auto-grouped by the server. */
+export async function listProjects(opts: ClientOptions, call: ProjectCallOptions = {}): Promise<ProjectBundle[]> {
+  const body = await request(
+    opts,
+    '/projects',
+    { method: 'GET', headers: { ...presenterHeader(), ...call.headers } },
+    call.timeoutMs ?? 15_000,
+  )
+  if (Array.isArray(body)) return body.filter(isProjectBundle)
+  if (isObjRecord(body)) {
+    if (typeof body.contract_version === 'string') checkVersion(body.contract_version, body)
+    if (Array.isArray(body.projects)) return body.projects.filter(isProjectBundle)
+  }
+  throw new ApiError('The project list does not match the contract', 200, 'invalid_response', body)
+}
+
+/** `POST /projects` (1.2): create or update a multi-plan house / project bundle. */
+export async function saveProject(
+  opts: ClientOptions,
+  bundle: ProjectBundle,
+  call: ProjectCallOptions = {},
+): Promise<SavedProject> {
+  const body = await request(
+    opts,
+    '/projects',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...presenterHeader(), ...call.headers },
+      // Client-side fields (a stored token) never go into the body.
+      body: JSON.stringify(withoutTokens(bundle as unknown as Record<string, unknown>)),
+    },
+    call.timeoutMs ?? 15_000,
+  )
+  if (isObjRecord(body) && typeof body.contract_version === 'string') checkVersion(body.contract_version, body)
+  const outer = isObjRecord(body) ? body : {}
+  const candidate = isObjRecord(body) && 'project' in body ? body.project : body
+  if (!isProjectBundle(candidate))
+    throw new ApiError('The saved project does not match the contract', 200, 'invalid_response', body)
+  const inner = candidate as unknown as Record<string, unknown>
+  const token = [...PROJECT_TOKEN_FIELDS.map((k) => outer[k]), ...PROJECT_TOKEN_FIELDS.map((k) => inner[k])].find(
+    (v): v is string => typeof v === 'string' && v.length > 0,
+  )
+  const project = withoutTokens(inner) as unknown as ProjectBundle
+  return token ? { project, token } : { project }
+}
+
+/** `DELETE /projects/:id` (1.2): ungroup/delete a server-stored project bundle. */
+export async function deleteProject(opts: ClientOptions, id: string, call: ProjectCallOptions = {}): Promise<void> {
+  await request(
+    opts,
+    `/projects/${encodeURIComponent(id)}`,
+    { method: 'DELETE', headers: { ...presenterHeader(), ...call.headers } },
+    call.timeoutMs ?? 15_000,
   )
 }

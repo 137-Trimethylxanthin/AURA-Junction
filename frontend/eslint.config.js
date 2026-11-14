@@ -19,6 +19,12 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
+      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+    },
+  },
+  {
+    files: ['src/components/ui/**/*.{ts,tsx}', 'src/app/router.tsx'],
+    rules: {
       'react-refresh/only-export-components': 'off',
     },
   },

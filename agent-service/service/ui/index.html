@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drawing Q&amp;A</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --ink:#1d2433; --muted:#6b7385; --line:#e3e6ec; --accent:#2f6fde; --ok:#1f8a4c; --warn:#b26b00; --bad:#c23b3b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg); }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  header input { width:260px; }
+  input, textarea, button { font:inherit; }
+  input, textarea { border:1px solid var(--line); border-radius:6px; padding:7px 9px; background:#fff; }
+  button { border:0; border-radius:6px; padding:8px 14px; background:var(--accent); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:none; color:var(--accent); padding:4px 6px; }
+  main { display:grid; grid-template-columns:minmax(320px, 46%) 1fr; height:calc(100vh - 53px); }
+  .viewer { border-right:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0; }
+  .viewer .bar { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:center; }
+  .viewer .stage { flex:1; overflow:auto; padding:12px; position:relative; }
+  .drop { border:2px dashed var(--line); border-radius:10px; padding:40px; text-align:center; color:var(--muted); margin:12px; }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
+  .imgwrap { position:relative; display:inline-block; }
+  .imgwrap img { max-width:100%; display:block; }
+  .imgwrap svg { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  iframe { width:100%; height:100%; border:0; }
+  .chat { display:flex; flex-direction:column; min-height:0; }
+  .msgs { flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:14px; }
+  .q { align-self:flex-end; background:var(--accent); color:#fff; padding:8px 12px; border-radius:12px 12px 2px 12px; max-width:80%; }
+  .a { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; max-width:95%; }
+  .big { font-size:22px; font-weight:600; }
+  .muted { color:var(--muted); }
+  .small { font-size:12px; }
+  .conf { font-size:12px; padding:2px 7px; border-radius:10px; color:#fff; margin-left:8px; vertical-align:middle; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .chip { font-size:12px; border:1px solid var(--line); border-radius:10px; padding:2px 8px; background:#fafbfc; cursor:default; }
+  .chip.hl { border-color:var(--accent); }
+  details { margin-top:8px; }
+  summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  .step { font-size:12px; border-left:2px solid var(--line); padding:2px 0 2px 8px; margin:4px 0; }
+  .step pre { margin:2px 0 0; white-space:pre-wrap; word-break:break-word; max-height:160px; overflow:auto; background:#f3f4f7; padding:6px; border-radius:4px; }
+  .step img { max-width:220px; border:1px solid var(--line); border-radius:4px; margin-top:4px; }
+  .composer { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); background:var(--panel); }
+  .composer textarea { flex:1; resize:none; height:44px; }
+  .err { color:var(--bad); }
+  .spin { display:inline-block; width:10px; height:10px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:s 1s linear infinite; margin-right:6px; vertical-align:middle; }
+  @keyframes s { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+import React, { useState, useRef, useEffect } from "https://esm.sh/react@18.3.1";
+import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
+import htm from "https://esm.sh/htm@3.1.1";
+const html = htm.bind(React.createElement);
+
+// ---- API helpers: bearer token from the header field, remembered in this browser only ----------------------
+const store = { get: k => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+const authed = (token, init = {}) => ({ ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } });
+const withToken = (token, url) => url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
+
+async function api(token, path, init) {
+  const r = await fetch(path, authed(token, init));
+  if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 300)}`);
+  return r.json();
+}
+
+// Server-Sent Events over fetch (EventSource cannot send an Authorization header).
+async function streamEvents(token, runId, onEvent) {
+  const r = await fetch(`/runs/${runId}/events`, authed(token));
+  if (!r.ok) throw new Error(`events ${r.status}`);
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, i); buf = buf.slice(i + 2);
+      const data = block.split("\n").filter(l => l.startsWith("data: ")).map(l => l.slice(6)).join("\n");
+      if (data) { const e = JSON.parse(data); onEvent(e); if (e.type === "run_finished") return; }
+    }
+  }
+}
+
+const confColor = c => c >= 0.85 ? "var(--ok)" : c >= 0.6 ? "var(--warn)" : "var(--bad)";
+const fmt = v => typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : String(v);
+const isImage = n => /\.(png|jpe?g)$/i.test(n || "");
+
+// ---- Left: the drawing, with evidence boxes drawn on images --------------------------------------------------
+function Viewer({ token, file, onFile, boxes }) {
+  const [over, setOver] = useState(false), [busy, setBusy] = useState(false), [err, setErr] = useState("");
+  const [url, setUrl] = useState(null), [size, setSize] = useState(null);
+  const input = useRef();
+
+  async function upload(f) {
+    setBusy(true); setErr("");
+    try {
+      const fd = new FormData(); fd.append("file", f);
+      const meta = await api(token, "/files", { method: "POST", body: fd });
+      onFile({ ...meta, local: URL.createObjectURL(f), type: f.type });
+    } catch (e) { setErr(String(e.message || e)); } finally { setBusy(false); }
+  }
+  useEffect(() => { setUrl(file ? file.local : null); setSize(null); }, [file]);
+
+  const pick = html`<input ref=${input} type="file" style=${{ display: "none" }}
+    accept=".pdf,.png,.jpg,.jpeg,.dxf,.ifc,.svg" onChange=${e => e.target.files[0] && upload(e.target.files[0])} />`;
+  return html`<section class="viewer">
+    <div class="bar">
+      ${pick}
+      <button onClick=${() => input.current.click()} disabled=${!token || busy}>${busy ? "Uploading…" : file ? "Replace file" : "Upload file"}</button>
+      <span class="muted">${file ? `${file.name} · ${(file.size / 1e6).toFixed(1)} MB` : "PDF, PNG/JPG, DXF or IFC"}</span>
+      ${err && html`<span class="err small">${err}</span>`}
+    </div>
+    <div class="stage">
+      ${!file && html`<div class=${"drop" + (over ? " over" : "")}
+          onDragOver=${e => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)}
+          onDrop=${e => { e.preventDefault(); setOver(false); token && e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]); }}>
+          ${token ? "Drop a drawing here or use Upload file" : "Enter the access token at the top first"}</div>`}
+      ${file && isImage(file.name) && html`<div class="imgwrap">
+          <img src=${url} onLoad=${e => setSize([e.target.naturalWidth, e.target.naturalHeight])} />
+          ${size && boxes.length > 0 && html`<svg viewBox=${`0 0 ${size[0]} ${size[1]}`} preserveAspectRatio="none">
+            ${boxes.map((b, i) => html`<g key=${i}>
+              <rect x=${b[0]} y=${b[1]} width=${b[2] - b[0]} height=${b[3] - b[1]} fill="rgba(47,111,222,.12)"
+                    stroke="#2f6fde" stroke-width=${Math.max(2, size[0] / 600)} />
+              <text x=${b[0]} y=${b[1] - 4} fill="#2f6fde" font-size=${Math.max(14, size[0] / 90)}>${i + 1}</text></g>`)}
+          </svg>`}
+        </div>`}
+      ${file && /\.pdf$/i.test(file.name) && html`<iframe src=${url} title="drawing"></iframe>`}
+      ${file && !isImage(file.name) && !/\.pdf$/i.test(file.name) && html`<div class="drop">
+          ${file.name}<br/><span class="small">No preview for this format; answers cite model element ids or CAD handles.</span></div>`}
+    </div>
+  </section>`;
+}
+
+// ---- Right: one exchange = one question, the live trace and the grounded answer ------------------------------
+function Steps({ token, events }) {
+  // one row per tool call (start and finish paired by call_id, so parallel calls stay apart), plus model notes
+  const rows = [], byCall = {};
+  for (const e of events) {
+    if (e.type === "tool_started") { byCall[e.call_id] = { start: e, seq: e.seq }; rows.push(byCall[e.call_id]); }
+    else if (e.type === "tool_finished") { if (byCall[e.call_id]) byCall[e.call_id].end = e; else rows.push({ end: e, seq: e.seq }); }
+    else if (e.type === "message" || e.type === "reasoning") rows.push({ note: e, seq: e.seq });
+  }
+  const done = rows.filter(r => r.end).length;
+  return html`<details><summary>${rows.length ? `How it was answered (${done} steps)` : "Working…"}</summary>
+    ${rows.map(r => {
+      const s = r.start || {}, e = r.end || {};
+      if (r.note) return html`<div class="step" key=${r.seq}><span class="muted">${r.note.text.slice(0, 600)}</span></div>`;
+      return html`<div class="step" key=${r.seq}>
+        <b>${s.tool || e.tool}</b> <span class="muted">${(s.tool || e.tool) === "view_image" ? (s.path || e.path || "") : ""}
+          ${r.end ? `${e.seconds ?? ""}s${e.exit_code != null && e.tool === "shell" ? `, exit ${e.exit_code}` : ""}` : "running…"}</span>
+        ${s.command && html`<pre>${s.command.slice(0, 1500)}</pre>`}
+        ${e.tool === "shell" && e.output && html`<pre>${e.output.slice(0, 2000)}</pre>`}
+        ${e.view && html`<div><img src=${withToken(token, e.view)} /></div>`}
+      </div>`;
+    })}
+  </details>`;
+}
+
+function Exchange({ token, ex, onShowBoxes }) {
+  const a = ex.answer;
+  const boxes = a ? (a.evidence || []).filter(e => e.bbox_px).map(e => e.bbox_px) : [];
+  useEffect(() => { if (boxes.length) onShowBoxes(boxes); }, [a]);
+  return html`<${React.Fragment}>
+    <div class="q">${ex.question}</div>
+    <div class="a">
+      ${ex.status === "running" && !a && html`<div><span class="spin"></span><span class="muted">${ex.lastStep || "Starting…"}</span></div>`}
+      ${ex.error && html`<div class="err">Failed: ${ex.error}</div>`}
+      ${a && html`<div>
+        <span class="big">${a.answer === null ? "Cannot be answered from this file" : fmt(a.answer)}</span>
+        ${a.answer !== null && a.unit && a.unit !== "count" && html` <span class="muted">${a.unit}</span>`}
+        <span class="conf" style=${{ background: confColor(a.confidence) }}>confidence ${Math.round(a.confidence * 100)}%</span>
+      </div>
+      <div style=${{ marginTop: 6 }}>${a.method}</div>
+      ${a.check && a.check !== "none" && html`<div class="small muted" style=${{ marginTop: 4 }}>Cross-check: ${a.check}</div>`}
+      ${a.evidence && a.evidence.length > 0 && html`<div class="small muted" style=${{ marginTop: 8 }}>
+          Evidence (${a.evidence_total ?? a.evidence.length})${boxes.length ? html` · <button class="ghost" onClick=${() => onShowBoxes(boxes)}>show on drawing</button>` : ""}</div>
+        <div class="chips">${a.evidence.slice(0, 40).map((e, i) => html`<span class="chip" key=${i}
+            title=${JSON.stringify(e)}>${e.label || e.name || e.text || e.handle || e.guid || e.kind}${e.ifc_class ? " · " + e.ifc_class : ""}</span>`)}</div>`}`}
+      ${ex.events.length > 0 && html`<${Steps} token=${token} events=${ex.events} />`}
+      ${ex.seconds && html`<div class="small muted" style=${{ marginTop: 6 }}>${Math.round(ex.seconds)} s${ex.usage && ex.usage.total_tokens ? ` · ${ex.usage.total_tokens.toLocaleString()} tokens` : ""}</div>`}
+    </div><//>`;
+}
+
+function App() {
+  const [token, setToken] = useState(store.get("junction_token"));
+  const [file, setFile] = useState(null), [boxes, setBoxes] = useState([]);
+  const [exchanges, setEx] = useState([]), [q, setQ] = useState(""), [health, setHealth] = useState(null);
+  const bottom = useRef();
+  useEffect(() => { store.set("junction_token", token); if (token) api(token, "/health").then(setHealth).catch(() => setHealth(null)); }, [token]);
+  useEffect(() => { bottom.current && bottom.current.scrollIntoView({ behavior: "smooth" }); }, [exchanges]);
+  const update = (id, f) => setEx(xs => xs.map(x => x.id === id ? { ...x, ...f(x) } : x));
+
+  async function ask() {
+    const question = q.trim(); if (!question || !file) return;
+    setQ(""); setBoxes([]);
+    const id = Date.now();
+    setEx(xs => [...xs, { id, question, status: "running", events: [] }]);
+    try {
+      const { run_id } = await api(token, "/runs", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                       body: JSON.stringify({ file_ids: [file.file_id], questions: [question] }) });
+      await streamEvents(token, run_id, e => update(id, x => {
+        const out = { events: [...x.events, e] };
+        if (e.type === "tool_started") out.lastStep = e.tool === "view_image" ? `Looking at ${e.path}` : `Running: ${(e.command || "").split("\n")[0].slice(0, 90)}`;
+        if (e.type === "answers") out.answer = e.answers[0];
+        if (e.type === "run_finished") Object.assign(out, { status: e.status, seconds: e.seconds, usage: e.usage, error: e.status === "error" ? e.error : null });
+        return out;
+      }));
+    } catch (err) { update(id, () => ({ status: "error", error: String(err.message || err) })); }
+  }
+
+  const running = exchanges.some(x => x.status === "running");
+  return html`<${React.Fragment}>
+    <header>
+      <h1>Drawing Q&A</h1>
+      <input type="password" placeholder="Access token" value=${token} onChange=${e => setToken(e.target.value.trim())} />
+      <span class="small muted">${health ? `model: ${health.model?.name || "?"}` : token ? "not connected (check token)" : ""}</span>
+    </header>
+    <main>
+      <${Viewer} token=${token} file=${file} onFile=${f => { setFile(f); setEx([]); setBoxes([]); }} boxes=${boxes} />
+      <section class="chat">
+        <div class="msgs">
+          ${exchanges.length === 0 && html`<div class="muted">${file ? "Ask a question about the drawing, e.g. “How many doors are on this floor?” or “What is the area of room 2.10?”. Each question is answered independently and takes a few minutes; every answer shows where it came from."
+                                                                  : "Upload a drawing to start."}</div>`}
+          ${exchanges.map(ex => html`<${Exchange} key=${ex.id} token=${token} ex=${ex} onShowBoxes=${setBoxes} />`)}
+          <div ref=${bottom}></div>
+        </div>
+        <div class="composer">
+          <textarea placeholder=${file ? "Ask about the drawing…" : "Upload a drawing first"} value=${q} disabled=${!file}
+            onChange=${e => setQ(e.target.value)} onKeyDown=${e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } }} />
+          <button onClick=${ask} disabled=${!file || !q.trim()}>${running ? "Ask (queued)" : "Ask"}</button>
+        </div>
+      </section>
+    </main><//>`;
+}
+
+createRoot(document.getElementById("root")).render(html`<${App} />`);
+</script>
+</body>
+</html>

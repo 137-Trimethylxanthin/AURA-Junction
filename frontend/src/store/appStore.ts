@@ -1,15 +1,36 @@
 import { tu } from '@/i18n/uiLang'
 import { createStore, type StoreApi } from 'zustand/vanilla'
-import type { AskResponse, AskRoute, Box, ChatEvent, Check, Drawing, EvidenceRoom, Lang, Override, PctRect, RankedCheck, Scope, TraceNode } from '@/api/contract'
+import type {
+  AnswererMode,
+  AskResponse,
+  AskRoute,
+  Box,
+  ChatEvent,
+  Check,
+  Drawing,
+  EvidenceGroup,
+  EvidenceLink,
+  EvidenceRoom,
+  Lang,
+  Override,
+  PctRect,
+  ProjectBundle,
+  ProjectFloor,
+  RankedCheck,
+  Scope,
+  TraceNode,
+} from '@/api/contract'
 import { ApiError, TransportError, spentOf } from '@/api/client'
 import { createSource, type Source, type SourceStatus } from '@/api/source'
 import { BUNDLED_DRAWING_ID, bundledDrawing } from '@/data/drawing'
-import { emptyToggles, isRoomEvidenceId, roomIdOfEvidence, type Toggles } from '@/lib/answer'
+import { emptyToggles, isRoomEvidenceId, roomEvidenceId, roomIdOfEvidence, type Toggles } from '@/lib/answer'
 import { detect } from '@/lib/detect'
 import { clampRect } from '@/lib/geometry'
 import { t } from '@/i18n/strings'
 
-export const ZOOM_STEPS = [100, 140, 180, 240] as const
+export const ZOOM_MIN = 100
+export const ZOOM_MAX = 450
+export const ZOOM_STEPS = [100, 140, 190, 260, 350, 450] as const
 
 export type Tool = 'select' | 'mark' | 'whatif'
 /** The plan as the flat drawing or as a 3D model built from it. */
@@ -47,56 +68,99 @@ export interface AgentTurn {
 /** What the /chat stream has told us so far about one answer. */
 export interface StreamState {
   phase: 'sent' | 'understood' | 'working' | 'checking'
+  /** 1.2: 1-based queue position while waiting for a deep-agent slot; cleared once execution starts. */
+  queuePosition?: number
   understood?: { canonical_en: string; detected_lang?: Lang; route?: AskRoute }
   /** Tool-call trace nodes in arrival order. */
   nodes: TraceNode[]
   /** Ids of nodes whose result has arrived. */
   resolved: string[]
   /** Evidence collected from tool results (lit on the plan before the answer lands). */
-  evidence: { boxes: Box[]; rooms: EvidenceRoom[] }
+  evidence: { boxes: Box[]; rooms: EvidenceRoom[]; groups?: EvidenceGroup[]; links?: EvidenceLink[] }
   check?: Check & Partial<Omit<RankedCheck, keyof Check>>
 }
 
 export type Turn = UserTurn | AgentTurn
 
-const CONVERSATION_KEY = (drawingId: string) => `aura.conversation.${drawingId}`
-const readConversation = (drawingId: string): string | null => {
+export const CONVERSATION_KEY = (drawingId: string, projectId?: string | null) =>
+  projectId ? `aura.conversation.project.${projectId}` : `aura.conversation.${drawingId}`
+
+const readConversation = (drawingId: string, projectId?: string | null): string | null => {
   try {
+    if (projectId) {
+      const projConv = globalThis.localStorage?.getItem(CONVERSATION_KEY(drawingId, projectId))
+      if (projConv) return projConv
+    }
     return globalThis.localStorage?.getItem(CONVERSATION_KEY(drawingId)) ?? null
   } catch {
     return null
   }
 }
-const writeConversation = (drawingId: string, id: string | null) => {
+const writeConversation = (drawingId: string, id: string | null, projectId?: string | null) => {
   try {
-    if (id) globalThis.localStorage?.setItem(CONVERSATION_KEY(drawingId), id)
-    else globalThis.localStorage?.removeItem(CONVERSATION_KEY(drawingId))
+    const key = CONVERSATION_KEY(drawingId, projectId)
+    if (id) globalThis.localStorage?.setItem(key, id)
+    else globalThis.localStorage?.removeItem(key)
   } catch {
     /* storage unavailable: the conversation lives for this page only */
   }
 }
 
+function sortBundleFloors(floors: readonly ProjectFloor[]): ProjectFloor[] {
+  return [...floors].sort((a, b) => a.order - b.order || a.drawing_id.localeCompare(b.drawing_id))
+}
+
+function projectIdForDrawing(project: ProjectBundle | null, drawingId: string): string | null {
+  return project && project.floors.some((f) => f.drawing_id === drawingId) ? project.id : null
+}
+
 /** Fold one chat event into the stream state (pure; exported for tests). */
 export function reduceStream(st: StreamState, e: ChatEvent): StreamState {
   switch (e.event) {
+    case 'progress':
+      return { ...st, queuePosition: e.data.queue_position }
     case 'understood':
-      return { ...st, phase: 'understood', understood: e.data }
+      return { ...st, queuePosition: undefined, phase: 'understood', understood: e.data }
     case 'tool_call':
-      return { ...st, phase: 'working', nodes: [...st.nodes.filter((n) => n.id !== e.data.node.id), e.data.node] }
+      return {
+        ...st,
+        queuePosition: undefined,
+        phase: 'working',
+        nodes: [...st.nodes.filter((n) => n.id !== e.data.node.id), e.data.node],
+      }
     case 'tool_result': {
       const ids = new Set(st.evidence.boxes.map((b) => b.id))
       const rooms = new Set(st.evidence.rooms.map((r) => r.room_id))
+      const prevGroups = st.evidence.groups ?? []
+      const incomingGroups = e.data.evidence.groups ?? []
+      let mergedGroups: EvidenceGroup[] | undefined
+      if (prevGroups.length > 0 || incomingGroups.length > 0) {
+        const byId = new Map<string, EvidenceGroup>(prevGroups.map((g) => [g.id, g]))
+        for (const g of incomingGroups) byId.set(g.id, g)
+        mergedGroups = [...byId.values()]
+      }
+      const prevLinks = st.evidence.links ?? []
+      const incomingLinks = e.data.evidence.links ?? []
+      let mergedLinks: EvidenceLink[] | undefined
+      if (prevLinks.length > 0 || incomingLinks.length > 0) {
+        const byId = new Map<string, EvidenceLink>(prevLinks.map((l) => [l.id, l]))
+        for (const l of incomingLinks) byId.set(l.id, l)
+        mergedLinks = [...byId.values()]
+      }
       return {
         ...st,
+        queuePosition: undefined,
         resolved: st.resolved.includes(e.data.node_id) ? st.resolved : [...st.resolved, e.data.node_id],
         evidence: {
           boxes: [...st.evidence.boxes, ...(e.data.evidence.boxes ?? []).filter((b) => !ids.has(b.id))],
           rooms: [...st.evidence.rooms, ...(e.data.evidence.rooms ?? []).filter((r) => !rooms.has(r.room_id))],
+          ...(mergedGroups ? { groups: mergedGroups } : {}),
+          ...(mergedLinks ? { links: mergedLinks } : {}),
         },
       }
     }
     case 'check':
-      return { ...st, phase: 'checking', check: e.data.check }
+      return { ...st, queuePosition: undefined, phase: 'checking', check: e.data.check }
     default:
       return st
   }
@@ -138,6 +202,8 @@ export const POLL_DEADLINE_MS = 3 * 60_000
 export interface AppState {
   session: {
     source: SourceStatus
+    /** 1.2: active backend answerer mode reported by /health ('hybrid' by default). */
+    answererMode: AnswererMode
     drawing: Drawing
     lang: Lang
     load: DrawingLoad
@@ -145,27 +211,51 @@ export interface AppState {
     /** Model use outside answers (e.g. /rewrite), counted in the session total. */
     spend: { calls: number; cost_usd: number }
   }
+  /** Top-level alias mirrored with `session.answererMode` for ergonomic selector access. */
+  answererMode: AnswererMode
+  /** 1.2: Active multi-plan house/project bundle when the open drawing belongs to one. */
+  activeProject: ProjectBundle | null
+  /** 1.2: When true on a `>=2`-floor `activeProject`, `ask()` sends `ScopeProject` across all floors. */
+  crossPlanScope: boolean
+  /** 1.2: Spotlighted categorical `EvidenceGroup.id` (mirrored on `ui.focusedGroupId`). */
+  focusedGroupId: string | null
+  /** 1.2: Loaded/warmed `Drawing` cache keyed by `drawing.id` for `<50ms` floor switches & cross-floor crops. */
+  drawingById: Record<string, Drawing>
   turns: Turn[]
   ui: {
     activeTurnId: string | null
     selectedEvidenceId: string | null
     hoveredEvidenceIds: string[]
+    focusedGroupId: string | null
     tool: Tool
+    /** Continuous zoom percentage in `[ZOOM_MIN, ZOOM_MAX]` (`100..450`). */
+    zoom: number
+    /** Nearest step index in `ZOOM_STEPS`, kept synchronized with `zoom`. */
     zoomIndex: number
     compare: { on: boolean; mode: 'swipe' | 'blend'; opacity: number }
     marks: Mark[]
     attachedMarkId: string | null
     traceOpen: boolean
     pluginsOpen: boolean
+    shortcutsOpen: boolean
+    commandOpen: boolean
     whatIf: { roomId: string | null; w: number; h: number }
     /** Kept across conversations and drawings: a presenter who switched to 3D stays there. */
     view: PlanView
   }
   undoStack: UndoEntry[]
 
-  // session
+  // session & multi-plan project bundles
   initSource(): Promise<void>
   retrySource(): Promise<void>
+  setAnswererMode(mode: AnswererMode): void
+  setActiveProject(bundle: ProjectBundle | null): void
+  setCrossPlanScope(on: boolean): void
+  setFocusedGroup(groupId: string | null): void
+  /** Step `+1` (up) or `-1` (down) through `activeProject.floors` ordered by `order`; returns target `drawing_id` or `null`. */
+  stepFloor(delta: number): string | null
+  /** Pre-fetch and cache a sibling floor `Drawing` without swapping `session.drawing`. */
+  warmDrawing(id: string): Promise<Drawing | null>
   /** Show drawing `id`: the bundled one instantly, others from the API (polling while processing). */
   loadDrawing(id: string): Promise<void>
   /** Stop polling (route left). */
@@ -176,8 +266,10 @@ export interface AppState {
   cancel(): void
   /** Restore the drawing's last conversation from the API (after a reload); no-op when there are turns. */
   restoreConversation(): Promise<void>
-  /** Forget the conversation: a fresh start on the same drawing. */
-  newConversation(): void
+  /** Forget the conversation: a fresh start on the same drawing. Returns a 1-click restore callback. */
+  newConversation(): () => void
+  /** Restore the last cleared conversation on the current drawing, if no new turns were added. */
+  undoNewConversation(): boolean
   /** Record model use that is not part of an answer (a rewrite), so the session total stays honest. */
   addSpend(calls: number, cost_usd: number): void
   setActive(turnId: string | null): void
@@ -186,6 +278,8 @@ export interface AppState {
   setFeedback(turnId: string, feedback: Feedback): void
   // evidence
   select(turnId: string, evidenceId: string | null): void
+  /** Cycle through evidence items (`+1` next, `-1` previous) on the active or latest answered turn. */
+  stepEvidence(delta: number): string | null
   toggle(turnId: string, evidenceId: string): void
   /** First tap selects/locates; a second tap on the selected evidence toggles it. */
   tap(turnId: string, evidenceId: string): 'selected' | 'toggled'
@@ -194,6 +288,8 @@ export interface AppState {
   resetTurn(turnId: string): void
   // tools and view
   setTool(tool: Tool): void
+  setZoom(zoom: number): void
+  resetZoom(): void
   setView(view: PlanView): void
   setZoomIndex(i: number): void
   zoomIn(): void
@@ -204,6 +300,8 @@ export interface AppState {
   attachMark(id: string | null): void
   setTraceOpen(open: boolean): void
   setPluginsOpen(open: boolean): void
+  setShortcutsOpen(open: boolean): void
+  setCommandOpen(open: boolean): void
   // what-if
   startWhatIf(roomId: string): void
   setWhatIfDraft(w: number, h: number): void
@@ -225,6 +323,20 @@ let seq = 0
 const nextId = (p: string) => `${p}-${++seq}`
 
 const clampZoom = (i: number) => Math.min(ZOOM_STEPS.length - 1, Math.max(0, Math.round(i)))
+const clampZoomPct = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z)))
+const nearestZoomIndex = (z: number) =>
+  ZOOM_STEPS.reduce((best, step, i) => (Math.abs(step - z) < Math.abs(ZOOM_STEPS[best] - z) ? i : best), 0)
+
+function canToggleEvidence(x: AgentTurn | undefined, evidenceId: string): boolean {
+  if (!x?.response) return false
+  if (x.response.method === 'agent_estimate' && (x.response.answer.kind !== 'count' || isRoomEvidenceId(evidenceId))) {
+    return false
+  }
+  if (isRoomEvidenceId(evidenceId)) {
+    return x.response.evidence.rooms.some((r) => r.room_id === roomIdOfEvidence(evidenceId))
+  }
+  return x.response.evidence.boxes.some((b) => b.id === evidenceId)
+}
 
 export function createAppStore(deps: StoreDeps = {}): AppStore {
   const source = deps.source ?? createSource()
@@ -253,20 +365,29 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         return { toggles: { ...x.toggles, [key]: map } }
       })
 
-    source.subscribe((st) => set((s) => ({ session: { ...s.session, source: st } })))
+    source.subscribe((st) =>
+      set((s) => {
+        const mode = (st as { answerer?: AnswererMode }).answerer ?? s.session.answererMode
+        return { answererMode: mode, session: { ...s.session, source: st, answererMode: mode } }
+      }),
+    )
 
     const freshUi = (view: PlanView = get()?.ui?.view ?? '2d'): AppState['ui'] => ({
         view,
         activeTurnId: null,
         selectedEvidenceId: null,
         hoveredEvidenceIds: [],
+        focusedGroupId: null,
         tool: 'select',
+        zoom: ZOOM_MIN,
         zoomIndex: 0,
         compare: { on: false, mode: 'swipe', opacity: 55 },
         marks: [],
         attachedMarkId: null,
         traceOpen: false,
         pluginsOpen: false,
+        shortcutsOpen: false,
+        commandOpen: false,
         whatIf: { roomId: null, w: 0, h: 0 },
       })
 
@@ -275,16 +396,51 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
     /** The answer currently streaming; a new question or Stop aborts it. */
     let inflight: AbortController | null = null
     let pollTimer: ReturnType<typeof setTimeout> | undefined
+    let lastClearedRestore: (() => boolean) | null = null
     const setLoad = (load: DrawingLoad) => set((s) => ({ session: { ...s.session, load } }))
-    /** Swap in a ready drawing; a different drawing starts a clean conversation. */
+    /** Swap in a ready drawing; sibling floors in `activeProject` keep the shared conversation & evidence. */
     const showDrawing = (d: Drawing) => {
-      const session = { ...get().session, drawing: d, load: { id: d.id, state: 'ready' } as DrawingLoad }
-      if (get().session.drawing.id === d.id) return set({ session })
-      // Another drawing: an answer still streaming for the old one must not land here (its conversation id
+      const cur = get()
+      const nextMap = { ...cur.drawingById, [d.id]: d }
+      const session = { ...cur.session, drawing: d, load: { id: d.id, state: 'ready' } as DrawingLoad }
+      if (cur.session.drawing.id === d.id) return set({ session, drawingById: nextMap })
+
+      const oldProjId = projectIdForDrawing(cur.activeProject, cur.session.drawing.id)
+      const newProjId = projectIdForDrawing(cur.activeProject, d.id)
+      const isSameProjectSwitch = Boolean(oldProjId && newProjId && oldProjId === newProjId)
+
+      if (isSameProjectSwitch) {
+        set({
+          session,
+          drawingById: nextMap,
+          ui: {
+            ...cur.ui,
+            compare: d.images.original ? cur.ui.compare : { ...cur.ui.compare, on: false },
+            hoveredEvidenceIds: [],
+            marks: [],
+            attachedMarkId: null,
+            tool: cur.ui.tool === 'whatif' ? 'select' : cur.ui.tool,
+            whatIf: { roomId: null, w: 0, h: 0 },
+          },
+        })
+        return
+      }
+
+      // Unrelated drawing: an answer still streaming for the old one must not land here (its conversation id
       // belongs to the old drawing; the next question would be rejected).
       inflight?.abort()
       inflight = null
-      set({ session: { ...session, conversationId: null }, turns: [], undoStack: [], ui: freshUi() })
+      lastClearedRestore = null
+      set({
+        session: { ...session, conversationId: null },
+        drawingById: nextMap,
+        activeProject: newProjId ? cur.activeProject : null,
+        crossPlanScope: newProjId ? cur.crossPlanScope : false,
+        focusedGroupId: null,
+        turns: [],
+        undoStack: [],
+        ui: freshUi(),
+      })
     }
     const loadError = (id: string, e: unknown): DrawingLoad => {
       if (e instanceof ApiError && e.code === 'unknown_drawing') return { id, state: 'not_found' }
@@ -296,15 +452,24 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       return { id, state: 'error', message: e instanceof Error ? e.message : tu('load_error') }
     }
 
+    const initialSource = source.status()
+    const initialMode: AnswererMode = (initialSource as { answerer?: AnswererMode }).answerer ?? 'hybrid'
+
     return {
       session: {
-        source: source.status(),
+        source: initialSource,
+        answererMode: initialMode,
         drawing: initial,
         lang: 'en',
         load: { id: initial.id, state: 'ready' },
         conversationId: null,
         spend: { calls: 0, cost_usd: 0 },
       },
+      answererMode: initialMode,
+      activeProject: null,
+      crossPlanScope: false,
+      focusedGroupId: null,
+      drawingById: { [BUNDLED_DRAWING_ID]: bundledDrawing, [initial.id]: initial },
       turns: [],
       ui: freshUi(),
       undoStack: [],
@@ -315,6 +480,62 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       async retrySource() {
         await source.retry()
       },
+      setAnswererMode(mode) {
+        set((s) => ({ answererMode: mode, session: { ...s.session, answererMode: mode } }))
+      },
+      setActiveProject(bundle) {
+        const normalized = bundle ? { ...bundle, floors: sortBundleFloors(bundle.floors) } : null
+        set((s) => ({
+          activeProject: normalized,
+          crossPlanScope: normalized && normalized.floors.length >= 2 ? s.crossPlanScope : false,
+        }))
+        const after = get()
+        const projId = projectIdForDrawing(normalized, after.session.drawing.id)
+        if (!projId) return
+        if (after.session.conversationId) {
+          writeConversation(after.session.drawing.id, after.session.conversationId, projId)
+        } else if (
+          after.turns.length === 0 &&
+          after.session.load.state === 'ready' &&
+          source.status().kind === 'api' &&
+          readConversation(after.session.drawing.id, projId)
+        ) {
+          void after.restoreConversation()
+        }
+      },
+      setCrossPlanScope(on) {
+        set({ crossPlanScope: Boolean(on) })
+      },
+      setFocusedGroup(groupId) {
+        set((s) => ({ focusedGroupId: groupId, ui: { ...s.ui, focusedGroupId: groupId } }))
+      },
+      stepFloor(delta) {
+        if (!delta) return null
+        const s = get()
+        if (!s.activeProject || s.activeProject.floors.length < 2) return null
+        const floors = sortBundleFloors(s.activeProject.floors)
+        const curIdx = floors.findIndex((f) => f.drawing_id === s.session.drawing.id)
+        if (curIdx === -1) return null
+        const nextIdx = curIdx + (delta > 0 ? 1 : -1)
+        if (nextIdx < 0 || nextIdx >= floors.length) return null
+        return floors[nextIdx].drawing_id
+      },
+      async warmDrawing(id) {
+        const cached = get().drawingById[id]
+        if (cached) return cached
+        if (id === BUNDLED_DRAWING_ID) {
+          set((s) => ({ drawingById: { ...s.drawingById, [BUNDLED_DRAWING_ID]: bundledDrawing } }))
+          return bundledDrawing
+        }
+        if (!source.hasApi()) return null
+        try {
+          const d = await source.drawing(id)
+          set((s) => ({ drawingById: { ...s.drawingById, [d.id]: d } }))
+          return d
+        } catch {
+          return null
+        }
+      },
 
       async loadDrawing(id) {
         const my = ++ticket
@@ -322,6 +543,13 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         const live = () => my === ticket
         if (id === BUNDLED_DRAWING_ID || id === get().session.drawing.id) {
           showDrawing(id === BUNDLED_DRAWING_ID ? bundledDrawing : get().session.drawing)
+          return
+        }
+        const cur = get()
+        const cachedSibling =
+          projectIdForDrawing(cur.activeProject, id) && cur.drawingById[id] ? cur.drawingById[id] : undefined
+        if (cachedSibling) {
+          showDrawing(cachedSibling)
           return
         }
         if (!source.hasApi()) {
@@ -364,8 +592,17 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       async ask(text, opts = {}) {
         const s = get()
         const mark = s.ui.marks.find((m) => m.id === s.ui.attachedMarkId)
+        const activeProjId = projectIdForDrawing(s.activeProject, s.session.drawing.id)
+        const projectScope: Scope | undefined =
+          s.crossPlanScope && activeProjId && s.activeProject && s.activeProject.floors.length >= 2
+            ? {
+                kind: 'project',
+                project_id: s.activeProject.id,
+                drawing_ids: sortBundleFloors(s.activeProject.floors).map((f) => f.drawing_id),
+              }
+            : undefined
         const scope: Scope | undefined =
-          opts.scope ?? (mark ? { kind: 'region', rect: mark.rect, label: mark.label } : undefined)
+          opts.scope ?? (mark ? { kind: 'region', rect: mark.rect, label: mark.label } : projectScope)
         const user: UserTurn = {
           id: nextId('u'),
           role: 'user',
@@ -390,13 +627,29 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
             : {}),
         }
         set((st) => ({
+          focusedGroupId: null,
           turns: [...st.turns.map((x) => (x.role === 'agent' ? { ...x, listOpen: false } : x)), user, pending],
-          ui: { ...st.ui, activeTurnId: pending.id, selectedEvidenceId: null, hoveredEvidenceIds: [], attachedMarkId: null },
+          ui: {
+            ...st.ui,
+            activeTurnId: pending.id,
+            selectedEvidenceId: null,
+            hoveredEvidenceIds: [],
+            focusedGroupId: null,
+            attachedMarkId: null,
+          },
         }))
         inflight?.abort()
         const ctrl = new AbortController()
         inflight = ctrl
         const drawingId = get().session.drawing.id
+        let streamAnswered = false
+        const currentProjId = () => projectIdForDrawing(get().activeProject, drawingId) ?? activeProjId
+        const stillInContext = () => {
+          const cur = get()
+          if (cur.session.drawing.id === drawingId) return true
+          const pid = currentProjId()
+          return Boolean(pid && projectIdForDrawing(cur.activeProject, cur.session.drawing.id) === pid)
+        }
         try {
           const { response, fellBack } = await source.chat(
             {
@@ -408,10 +661,12 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
               lang_hint: get().session.lang,
             },
             (e) => {
+              if (e.event === 'answer') streamAnswered = true
               if (ctrl.signal.aborted) return
               if (e.event === 'turn') {
-                writeConversation(drawingId, e.data.conversation_id)
-                if (get().session.drawing.id !== drawingId) return
+                const projNow = currentProjId()
+                writeConversation(drawingId, e.data.conversation_id, projNow)
+                if (!stillInContext()) return
                 set((st) => ({ session: { ...st.session, conversationId: e.data.conversation_id } }))
                 return
               }
@@ -421,10 +676,14 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
             },
             ctrl.signal,
           )
-          // Stopped after the answer arrived: keep the answer (it is complete); Stop only ends a pending one.
-          if (ctrl.signal.aborted && get().session.drawing.id !== drawingId) throw new DOMException('Stopped', 'AbortError')
+          // Stopped after the SSE `answer` event arrived: keep the answer (it is complete); Stop ends pending/non-SSE turns.
+          if (ctrl.signal.aborted && (!stillInContext() || !streamAnswered)) {
+            throw new DOMException('Stopped', 'AbortError')
+          }
           patchAgent(pending.id, () => ({ status: 'done', response, ...(fellBack ? { fellBack: true } : {}) }))
-          set((st) => ({ session: { ...st.session, lang: response.detected_lang } }))
+          if (stillInContext() && agent(pending.id)) {
+            set((st) => ({ session: { ...st.session, lang: response.detected_lang } }))
+          }
         } catch (e) {
           if (inflight === ctrl) inflight = null
           const spent = spentOf(e)
@@ -462,7 +721,8 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         const s = get()
         if (s.turns.length) return
         const drawingId = s.session.drawing.id
-        const id = readConversation(drawingId)
+        const projId = projectIdForDrawing(s.activeProject, drawingId)
+        const id = readConversation(drawingId, projId)
         if (!id) return
         let conv
         try {
@@ -470,9 +730,13 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         } catch {
           return
         }
-        if (get().turns.length || get().session.drawing.id !== drawingId) return
+        const after = get()
+        const sameCtx =
+          after.session.drawing.id === drawingId ||
+          Boolean(projId && projectIdForDrawing(after.activeProject, after.session.drawing.id) === projId)
+        if (after.turns.length || !sameCtx) return
         if (!conv) {
-          writeConversation(drawingId, null)
+          writeConversation(drawingId, null, projId)
           return
         }
         const turns: Turn[] = []
@@ -512,14 +776,67 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
 
       newConversation() {
+        const cur = get()
+        const projId = projectIdForDrawing(cur.activeProject, cur.session.drawing.id)
+        const snap =
+          cur.turns.length > 0 || cur.ui.marks.length > 0
+            ? {
+                drawingId: cur.session.drawing.id,
+                projId,
+                turns: cur.turns.filter((x) => !(x.role === 'agent' && x.status === 'pending')),
+                undoStack: cur.undoStack,
+                conversationId: cur.session.conversationId,
+                focusedGroupId: cur.focusedGroupId,
+                ui: cur.ui,
+              }
+            : null
         inflight?.abort()
         inflight = null
-        writeConversation(get().session.drawing.id, null)
-        set((st) => ({ turns: [], undoStack: [], session: { ...st.session, conversationId: null }, ui: freshUi() }))
+        writeConversation(cur.session.drawing.id, null, projId)
+        if (projId && cur.activeProject) {
+          for (const f of cur.activeProject.floors) {
+            writeConversation(f.drawing_id, null, null)
+          }
+        }
+        set((st) => ({
+          focusedGroupId: null,
+          turns: [],
+          undoStack: [],
+          session: { ...st.session, conversationId: null },
+          ui: freshUi(),
+        }))
+        const restore = (): boolean => {
+          if (!snap) return false
+          const now = get()
+          const sameCtx =
+            now.session.drawing.id === snap.drawingId ||
+            Boolean(snap.projId && projectIdForDrawing(now.activeProject, now.session.drawing.id) === snap.projId)
+          if (!sameCtx || now.turns.length > 0) return false
+          lastClearedRestore = null
+          writeConversation(snap.drawingId, snap.conversationId, snap.projId)
+          set((st) => ({
+            focusedGroupId: snap.focusedGroupId,
+            turns: snap.turns,
+            undoStack: snap.undoStack,
+            session: { ...st.session, conversationId: snap.conversationId },
+            ui: { ...snap.ui, shortcutsOpen: false, commandOpen: false },
+          }))
+          return true
+        }
+        lastClearedRestore = snap ? restore : null
+        return () => {
+          restore()
+        }
+      },
+      undoNewConversation() {
+        return lastClearedRestore ? lastClearedRestore() : false
       },
 
       setActive(turnId) {
-        ui({ activeTurnId: turnId, selectedEvidenceId: null, hoveredEvidenceIds: [] })
+        set((s) => ({
+          focusedGroupId: null,
+          ui: { ...s.ui, activeTurnId: turnId, selectedEvidenceId: null, hoveredEvidenceIds: [], focusedGroupId: null },
+        }))
       },
       setListOpen(turnId, open) {
         patchAgent(turnId, () => ({ listOpen: open }))
@@ -534,9 +851,46 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       select(turnId, evidenceId) {
         ui({ activeTurnId: turnId, selectedEvidenceId: evidenceId })
       },
+      stepEvidence(delta) {
+        const s = get()
+        const candidates: AgentTurn[] = []
+        if (s.ui.activeTurnId) {
+          const act = agent(s.ui.activeTurnId)
+          if (act) candidates.push(act)
+        }
+        for (let i = s.turns.length - 1; i >= 0; i--) {
+          const t = s.turns[i]
+          if (t.role === 'agent' && !candidates.some((c) => c.id === t.id)) candidates.push(t)
+        }
+        const target = candidates.find((t) => {
+          const ev = t.response?.evidence ?? t.stream?.evidence
+          return !!ev && (ev.boxes.length > 0 || ev.rooms.length > 0)
+        })
+        if (!target) return null
+        const ev = (target.response?.evidence ?? target.stream?.evidence)!
+        const curDrawingId = s.session.drawing.id
+        const floorIds = [
+          ...ev.boxes.filter((b) => !b.drawing_id || b.drawing_id === curDrawingId).map((b) => b.id),
+          ...ev.rooms.filter((r) => !r.drawing_id || r.drawing_id === curDrawingId).map((r) => roomEvidenceId(r.room_id)),
+        ]
+        const allIds = [...ev.boxes.map((b) => b.id), ...ev.rooms.map((r) => roomEvidenceId(r.room_id))]
+        const ids = floorIds.length > 0 ? floorIds : allIds
+        if (ids.length === 0) return null
+        const cur = s.ui.activeTurnId === target.id ? s.ui.selectedEvidenceId : null
+        const curIdx = cur ? ids.indexOf(cur) : -1
+        const nextIdx =
+          curIdx === -1
+            ? delta < 0
+              ? ids.length - 1
+              : 0
+            : (((curIdx + delta) % ids.length) + ids.length) % ids.length
+        const chosen = ids[nextIdx]
+        get().select(target.id, chosen)
+        return chosen
+      },
       toggle(turnId, evidenceId) {
         const x = agent(turnId)
-        if (!x || !x.response) return
+        if (!x || !x.response || !canToggleEvidence(x, evidenceId)) return
         let prev: boolean | undefined
         let next: boolean | undefined
         if (isRoomEvidenceId(evidenceId)) {
@@ -556,6 +910,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       tap(turnId, evidenceId) {
         const { ui: u } = get()
         if (u.activeTurnId === turnId && u.selectedEvidenceId === evidenceId) {
+          if (!canToggleEvidence(agent(turnId), evidenceId)) return 'selected'
           get().toggle(turnId, evidenceId)
           return 'toggled'
         }
@@ -581,19 +936,38 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       setTool(tool) {
         ui({ tool })
       },
+      setZoom(zoom) {
+        const z = clampZoomPct(zoom)
+        ui({ zoom: z, zoomIndex: nearestZoomIndex(z) })
+      },
+      resetZoom() {
+        ui({ zoom: ZOOM_MIN, zoomIndex: 0 })
+      },
       setView(view) {
         // What-if and the mark tool are 2D-only: leave them. An attached mark stays (the composer shows its chip).
         if (view === '3d' && get().ui.tool === 'whatif') get().cancelWhatIf()
         ui({ view, tool: view === '3d' ? 'select' : get().ui.tool })
       },
       setZoomIndex(i) {
-        ui({ zoomIndex: clampZoom(i) })
+        const idx = clampZoom(i)
+        ui({ zoomIndex: idx, zoom: ZOOM_STEPS[idx] })
       },
       zoomIn() {
-        ui({ zoomIndex: clampZoom(get().ui.zoomIndex + 1) })
+        const cur = get().ui.zoom
+        const nextIdx = ZOOM_STEPS.findIndex((step) => step > cur)
+        const idx = nextIdx === -1 ? ZOOM_STEPS.length - 1 : nextIdx
+        ui({ zoomIndex: idx, zoom: ZOOM_STEPS[idx] })
       },
       zoomOut() {
-        ui({ zoomIndex: clampZoom(get().ui.zoomIndex - 1) })
+        const cur = get().ui.zoom
+        let idx = 0
+        for (let i = ZOOM_STEPS.length - 1; i >= 0; i--) {
+          if (ZOOM_STEPS[i] < cur) {
+            idx = i
+            break
+          }
+        }
+        ui({ zoomIndex: idx, zoom: ZOOM_STEPS[idx] })
       },
       setCompare(patch) {
         const c = { ...get().ui.compare, ...patch }
@@ -621,6 +995,12 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
       setPluginsOpen(open) {
         ui({ pluginsOpen: open })
+      },
+      setShortcutsOpen(open) {
+        ui(open ? { shortcutsOpen: true, commandOpen: false } : { shortcutsOpen: false })
+      },
+      setCommandOpen(open) {
+        ui(open ? { commandOpen: true, shortcutsOpen: false } : { commandOpen: false })
       },
 
       startWhatIf(roomId) {

@@ -3,7 +3,6 @@ import { Link } from "react-router"
 import {
   MotionConfig,
   motion,
-  useReducedMotion,
   useScroll,
   useSpring,
   useTransform,
@@ -26,7 +25,8 @@ import {
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
-import { PAGE_BTN, PageFrame, WRAP, useTitle } from "./chrome"
+import { useTitle } from "@/hooks/use-title"
+import { PAGE_BTN, PageFrame, WRAP } from "./chrome"
 import {
   LIMIT_FACTS,
   RESULTS,
@@ -37,6 +37,7 @@ import {
 } from "./facts"
 import { DEMO_ROUTE } from "./links"
 import { CountUp, Reveal, RevealItem } from "./motion"
+import { usePrefersReducedMotion } from "./springs"
 
 // The replay and the story pull in the drawing data and the local answer code: load them after the shell.
 const HeroDemo = lazy(() => import("./HeroDemo"))
@@ -70,7 +71,9 @@ const PLUGINS: { name: string; body: string; status: "ready" | "building" }[] =
   ]
 
 export default function LandingPage() {
-  useTitle("AURA: answers from construction drawings, drawn on the plan")
+  useTitle("AURA: answers from construction drawings, drawn on the plan", {
+    exact: true,
+  })
   return (
     <MotionConfig reducedMotion="user">
       <PageFrame nav={NAV}>
@@ -89,7 +92,7 @@ export default function LandingPage() {
 function Hero() {
   const swiss = factById("swiss-full")
   const ref = useRef<HTMLElement>(null)
-  const reduce = useReducedMotion()
+  const reduce = usePrefersReducedMotion()
   // Scroll-linked: as the hero leaves, the live demo sinks back a little (transform only, springed).
   const { scrollYProgress } = useScroll({
     target: ref,
@@ -136,10 +139,15 @@ function Hero() {
                 {swiss.value}
               </span>{" "}
               of <span className="tabular-nums">{fmtInt(swiss.n)}</span> Swiss
-              dataset questions answered correctly from the DXF geometry, on the
-              set the solver was built against, with{" "}
+              dataset questions answered by{" "}
+              <strong className="font-medium text-foreground">
+                AURA’s CAD geometry engine
+              </strong>{" "}
+              from the DXF geometry, on the set the solver was built against,
+              with{" "}
               <span className="tabular-nums">{swiss.model_calls ?? 0}</span>{" "}
-              model calls.{" "}
+              model calls. PDFs, scans and open-ended questions run as labelled
+              Gemini estimates with every call and cost shown.{" "}
               <a
                 href="#measured"
                 className="text-muted-foreground underline decoration-border underline-offset-4 outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring"
@@ -224,7 +232,7 @@ function Section({
       className="border-b py-16 sm:py-20 lg:py-24"
     >
       <div className={cn(WRAP, "flex flex-col gap-10")}>
-        <Reveal className="flex max-w-[44rem] flex-col gap-3" amount={0.6}>
+        <Reveal className="flex max-w-[44rem] flex-col gap-3" amount={0.2}>
           <RevealItem>
             <h2
               id={`${id}-h`}
@@ -340,7 +348,9 @@ function FactCard({
   fact: Fact
   tone?: "success" | "warning"
 }) {
+  const reduce = usePrefersReducedMotion()
   const [t, setT] = useState(0)
+  const progressT = reduce ? 1 : t
   const frac =
     fact.numerator !== undefined && fact.denominator
       ? fact.numerator / fact.denominator
@@ -361,7 +371,7 @@ function FactCard({
         {frac !== null ? (
           <div className="flex flex-col gap-2">
             <Progress
-              value={frac * 100 * t}
+              value={frac * 100 * progressT}
               aria-label={`${fmtInt(fact.numerator!)} of ${fmtInt(fact.denominator!)} ${fact.n_unit}`}
               className={cn(
                 "h-2",
@@ -392,7 +402,7 @@ function Measured() {
     <Section
       id="measured"
       title="Accuracy and cost, measured with their n"
-      lead="Only numbers we measured appear here, with the sample size and the date. Results still being measured stay off this page until they have an n."
+      lead="These CAD and IFC accuracy figures were measured on AURA’s deterministic geometry engine (0 model calls), with sample size and date shown; scanned and open-ended model estimates are reported separately under Limits."
     >
       <Reveal
         as="ul"

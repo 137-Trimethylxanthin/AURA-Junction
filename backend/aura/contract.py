@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-CONTRACT_VERSION = "1.1"
+CONTRACT_VERSION = "1.2"
 
 Lang = Literal["en", "fr", "fi", "de"]
 LANGS: tuple[str, ...] = ("en", "fr", "fi", "de")
+GroupColor = Literal["c1", "c2", "c3", "c4", "c5", "c6"]
+GROUP_COLORS: tuple[GroupColor, ...] = ("c1", "c2", "c3", "c4", "c5", "c6")
 Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "room", "apartment",
                   # 1.1: image-only plans, Decisions score estimates (no boxes)
                   "bedroom", "kitchen", "bathroom", "wc_room", "sauna", "sink",
@@ -21,7 +23,7 @@ Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "roo
 TextSubject = Literal["label", "fire_rating"]
 BoxSubject = Subject | TextSubject
 BOX_SUBJECTS: tuple[str, ...] = ("window", "door", "washbasin", "wc", "bathtub", "shower")
-Method = Literal["cad_geometry", "ocr", "detector", "vision", "none"]
+Method = Literal["cad_geometry", "ocr", "detector", "vision", "agent_estimate", "none"]
 TraceKind = Literal["exact", "model", "warn", "info"]
 AbstainReason = Literal["not_on_drawing", "not_supported_yet", "unclear_question",
                         "low_confidence"]  # 1.1: a model estimate below its confidence gate
@@ -48,6 +50,7 @@ ToolName = Literal[
     "check_boxes_with_decisions",
     "what_if",
     "find_text",
+    "deep_agent",
 ]
 Route = Literal["template", "choice", "agent", "cache"]
 
@@ -63,6 +66,11 @@ class _Open(BaseModel):
 
 
 # ---- shared -----------------------------------------------------------------------------
+
+Pct = Annotated[float, Field(allow_inf_nan=False, ge=0.0, le=100.0)]
+PctPoint = tuple[Pct, Pct]
+NonEmptyId = Annotated[str, Field(min_length=1, max_length=200)]
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 
 
 class PctRect(_M):
@@ -83,6 +91,8 @@ class Box(_M):
     unit: str | None = None
     note: str | None = None
     duplicate_of: str | None = None  # second copy of an object drawn twice (Swiss CAD only)
+    group_id: str | None = None
+    drawing_id: str | None = None
 
 
 class ScopeFloor(_M):
@@ -116,8 +126,16 @@ class ScopeRegion(_M):
     label: str
 
 
+class ScopeProject(_M):
+    """1.2: multi-plan house/project bundle scope across multiple floor drawings."""
+
+    kind: Literal["project"] = "project"
+    project_id: NonEmptyId
+    drawing_ids: list[NonEmptyId] = Field(min_length=1, max_length=50)
+
+
 Scope = Annotated[
-    ScopeFloor | ScopeModel | ScopeUnit | ScopeRoom | ScopeLabel | ScopeRegion,
+    ScopeFloor | ScopeModel | ScopeUnit | ScopeRoom | ScopeLabel | ScopeRegion | ScopeProject,
     Field(discriminator="kind"),
 ]
 
@@ -185,8 +203,17 @@ class AnswerQuantity(_M):
     unit: Literal["m", "m2", "m3"]
 
 
+class AnswerNote(_M):
+    """1.2: open-ended answer from the deep agent (unmapped unit, text/comparison, or open subject)."""
+
+    kind: Literal["note"] = "note"
+    value: str
+    number: float | None = None
+    unit: str | None = None
+
+
 Answer = Annotated[
-    AnswerCount | AnswerArea | AnswerAbstain | AnswerQuantity | AnswerText,
+    AnswerCount | AnswerArea | AnswerAbstain | AnswerQuantity | AnswerText | AnswerNote,
     Field(discriminator="kind"),
 ]
 
@@ -196,6 +223,8 @@ class EvidenceRoom(_M):
     included: bool
     area_m2: float | None = None  # None: no printed area and no outline (never 0)
     edited: bool | None = None
+    group_id: str | None = None
+    drawing_id: str | None = None
 
 
 class EvidenceRow(_M):
@@ -206,10 +235,34 @@ class EvidenceRow(_M):
     value: float | None = None
 
 
+class EvidenceGroup(_M):
+    """1.2: categorical color-coded evidence group (e.g. Apartment A, Stair S1 -> 1. OG)."""
+
+    id: NonEmptyId
+    label: Annotated[str, Field(min_length=1, max_length=200)]
+    color: GroupColor
+    target_drawing_id: str | None = None
+
+
+class EvidenceLink(_M):
+    """1.2: directional vector on a plan (e.g. stair/ramp/circulation lead-to route)."""
+
+    id: NonEmptyId
+    from_pos: PctPoint
+    to_pos: PctPoint
+    waypoints: list[PctPoint] | None = None
+    group_id: str | None = None
+    label: str | None = None
+    drawing_id: str | None = None
+    target_drawing_id: str | None = None
+
+
 class Evidence(_M):
     boxes: list[Box] = Field(default_factory=list)
     rooms: list[EvidenceRoom] = Field(default_factory=list)
     rows: list[EvidenceRow] | None = None  # counted elements that have no 2D box (IFC)
+    groups: list[EvidenceGroup] | None = None
+    links: list[EvidenceLink] | None = None
 
 
 class Recall(_M):
@@ -277,6 +330,13 @@ class TraceNode(_M):
     evidence_ids: list[str] | None = None
     confidence: float | Literal["sample"] | None = None
     tool: TraceTool | None = None
+    # 1.2 additive (AURA_TRACE_DETAIL=dev): which answering stage this node is, plus its
+    # structured detail. stage 'decision' = the routing decision (rules or gemini-decision-1);
+    # its detail: {decider, model?, question?, options?, chosen, confidence?, runner_up?,
+    # runner_up_confidence?, matched, route}. 'resources': {tables, grabbed, ms}.
+    # 'filter': {rule, kept, dropped[{id, reason}]}. 'answer': {source, calls, cost_usd}.
+    stage: Literal["resources", "decision", "filter", "answer"] | None = None
+    detail: dict[str, Any] | None = None
 
 
 class AskResponse(_M):
@@ -380,6 +440,11 @@ class Drawing(_Open):
     created_at: str | None = None
     expires_at: str | None = None
     facts: Facts | None = None
+    # 1.2
+    source_ext: str | None = None
+    project_id: str | None = None
+    floor_label: str | None = None
+    floor_order: int | FiniteFloat | None = None
 
 
 class DrawingSummary(_M):
@@ -396,11 +461,37 @@ class DrawingSummary(_M):
     error: str | None = None
     created_at: str | None = None
     expires_at: str | None = None
+    source_ext: str | None = None
+    project_id: str | None = None
+    floor_label: str | None = None
+    floor_order: int | FiniteFloat | None = None
+
+
+class ProjectFloor(_M):
+    drawing_id: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=100)
+    order: int | FiniteFloat
+
+
+class ProjectBundle(_M):
+    id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+    floors: list[ProjectFloor] = Field(default_factory=list, max_length=50)
+    auto_matched: bool | None = None
+    created_at: str | None = None
+
+
+class ProjectList(_M):
+    contract_version: str = CONTRACT_VERSION
+    projects: list[ProjectBundle] = Field(default_factory=list)
 
 
 class Health(_M):
     ok: bool
     contract_version: str = CONTRACT_VERSION
+    checks: dict[str, Any] | None = None
+    answerer: Literal["hybrid", "agent", "exact"] | None = None
+    agent_ok: bool | None = None
 
 
 # ---- tool results (shared with L1's solvers) --------------------------------------------
@@ -418,13 +509,15 @@ class ToolResult(BaseModel):
     result_id: str
     tool: ToolName
     args: dict[str, Any] = Field(default_factory=dict)
-    kind: Literal["count", "area", "text", "quantity", "rooms", "boxes", "check", "none"]
+    kind: Literal["count", "area", "text", "quantity", "note", "rooms", "boxes", "check", "none"]
     subject: str | None = None
     value: float | None = None
     text: str | None = None
     numbers: list[float] = Field(default_factory=list)
     boxes: list[Box] = Field(default_factory=list)
     rooms: list[EvidenceRoom] = Field(default_factory=list)
+    groups: list[EvidenceGroup] = Field(default_factory=list)
+    links: list[EvidenceLink] = Field(default_factory=list)
     summary: str = ""
     method: Method = "cad_geometry"
     supported: bool = True  # False: the drawing has no layer for this subject
@@ -432,3 +525,8 @@ class ToolResult(BaseModel):
     calls: int = 0
     cost_usd: float = 0.0
     meta: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("groups", "links", mode="before")
+    @classmethod
+    def _none_to_list(cls, v: Any) -> Any:
+        return [] if v is None else v

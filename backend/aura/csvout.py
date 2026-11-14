@@ -17,6 +17,15 @@ def safe(v: object) -> object:
     return v
 
 
+def _summary_text(ans: dict) -> str:
+    kind = ans.get("kind")
+    if kind in ("count", "area", "text", "quantity"):
+        return f"{ans.get('value')} {ans.get('subject') or ans.get('unit') or ''}".strip()
+    if kind == "note":
+        return str(ans.get("value") or "").strip()
+    return f"abstain: {ans.get('reason')}"
+
+
 def evidence_csv(response: dict, rooms_by_id: dict[str, dict] | None = None) -> str:
     rooms_by_id = rooms_by_id or {}
     per_box = (response.get("check") or {}).get("per_box") or {}
@@ -24,22 +33,27 @@ def evidence_csv(response: dict, rooms_by_id: dict[str, dict] | None = None) -> 
     w = csv.writer(buf, lineterminator="\r\n")
     w.writerow(COLUMNS)
     ans = response.get("answer", {})
-    for b in response.get("evidence", {}).get("boxes", []):
+    ev = response.get("evidence", {})
+    for b in ev.get("boxes", []):
         room = rooms_by_id.get(b.get("room_id", ""), {})
         w.writerow([safe(x) for x in (
             "box", b["id"], b.get("subject", ""), b.get("room_id", ""), room.get("name", ""),
             b.get("unit", ""), b["x"], b["y"], b["w"], b["h"], "", "", "", b.get("note", ""),
             per_box.get(b["id"], ""))])
-    for r in response.get("evidence", {}).get("rooms", []):
+    for r in ev.get("rooms", []):
         room = rooms_by_id.get(r["room_id"], {})
         w.writerow([safe(x) for x in (
             "room", f"room-{r['room_id']}", "room", r["room_id"], room.get("name", ""),
             room.get("unit", ""), "", "", "", "", "yes" if r["included"] else "no",
             "" if r.get("area_m2") is None else r["area_m2"],
             "yes" if r.get("edited") else "", "", "")])
+    for r in ev.get("rows") or []:
+        w.writerow([safe(x) for x in (
+            "row", r["id"], ans.get("subject", ""), "", r.get("name", ""),
+            "", "", "", "", "", "yes", "", "",
+            "" if r.get("value") is None else r["value"], "")])
     w.writerow([])
-    summary = (f"{ans.get('value')} {ans.get('subject') or ans.get('unit') or ''}".strip()
-               if ans.get("kind") in ("count", "area", "text") else f"abstain: {ans.get('reason')}")
+    summary = _summary_text(ans)
     w.writerow([safe(x) for x in ("answer", response.get("answer_id", ""), summary,
                                   response.get("canonical_en", ""))])
-    return buf.getvalue()
+    return "\ufeff" + buf.getvalue()

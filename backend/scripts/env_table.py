@@ -22,22 +22,30 @@ DOC = {
     'AURA_PRESENTER_TOKEN': ('Modal secret `aura-presenter`', 'Presenter token: bypasses per-IP limits, unlocks image uploads and the model on/off switch'),
     'AURA_IP_SALT': ('Modal secret `aura-presenter`, **required on Modal**', 'Secret salt for hashed client IPs (the app refuses to start on Modal with the default)'),
     'AURA_BUDGET_SEED': ('deploy shell, **required on Modal**', 'Gemini requests already used on this key before this database'),
-    'AURA_EVENT_CAP': ('backend env', 'Event-wide request cap (seed + counted + pending)'),
-    'AURA_DAILY_CAP': ('backend env', 'Public requests per Europe/Helsinki day'),
-    'AURA_DEV_CAP': ('backend env', 'Requests in the `dev` bucket'),
-    'AURA_MEASUREMENT_CAP': ('backend env', 'Requests in the `measurement` bucket'),
-    'AURA_IP_AGENT_PER_HOUR': ('backend env', 'Router-miss model requests (choice, agent, rewrite) per client IP per hour'),
-    'AURA_RASTER_PUBLIC_CAP': ('backend env', 'Image analyses allowed without the presenter token (0 = presenter only)'),
+    'AURA_EVENT_CAP': ('backend env', 'Event-wide request cap (seed + counted + pending) (0 = unlimited)'),
+    'AURA_DAILY_CAP': ('backend env', 'Public requests per Europe/Helsinki day (0 = unlimited)'),
+    'AURA_DEV_CAP': ('backend env', 'Requests in the `dev` bucket (0 = unlimited)'),
+    'AURA_MEASUREMENT_CAP': ('backend env', 'Requests in the `measurement` bucket (0 = unlimited)'),
+    'AURA_IP_AGENT_PER_HOUR': ('backend env', 'Router-miss model requests (choice, agent, rewrite) per client IP per hour (0 = unlimited)'),
+    'AURA_RASTER_PUBLIC_CAP': ('backend env', 'Image analyses allowed without the presenter token (0 = unlimited, -1 = presenter only)'),
     'AURA_BUDGET_TZ': ('backend env', 'Time zone of the daily cap'),
     'AURA_DECISION_MODEL': ('backend env', 'Model for the Decisions API (checks, question choice)'),
     'AURA_AGENT_MODEL': ('backend env', 'Model for the function-calling agent and /rewrite'),
+    'AURA_ANSWERER': ('backend env', 'Answer routing mode (`hybrid`, `agent`, or `exact`)'),
+    'AURA_SIDECAR_URL': ('backend env', 'Base URL of the isolated deep-agent sidecar (`agent-service`)'),
+    'AURA_SIDECAR_TOKEN_FILE': ('backend env', 'Path to the shared bearer token file for `agent-service`'),
+    'AURA_SIDECAR_MODEL': ('backend env', 'Sidecar model used for cost booking until the run reports its own (match JUNCTION_MODEL)'),
+    'AURA_AGENT_RUNS_PER_IP_HOUR': ('backend env', 'Deep-agent sidecar runs per client IP per hour (presenter exempt) (0 = unlimited)'),
+    'AURA_AGENT_RUNS_PER_DAY': ('backend env', 'Public deep-agent sidecar runs per Europe/Helsinki day (0 = unlimited)'),
     'AURA_TURN_DEADLINE_S': ('backend env', 'Deadline of one /ask or /chat turn (s)'),
+    'AURA_AGENT_DEADLINE_S': ('backend env', 'Deadline of a /chat turn once it escalates to the sidecar agent (s)'),
+    'AURA_TRACE_DETAIL': ('backend env', 'Reasoning trace detail: `dev` (every stage with its data) or `demo` (short)'),
     'AURA_VOLUME_COMMIT_S': ('backend env', 'Modal Volume commit interval (s)'),
     'AURA_CLEANUP_S': ('backend env', 'Interval of the expiry sweep (s)'),
     'AURA_UPLOAD_TTL_S': ('backend env', 'Lifetime of uploads, answers, conversations and cached answers (s)'),
-    'AURA_UPLOADS_PER_IP_HOUR': ('backend env', 'Uploads per client IP per hour (presenter exempt)'),
-    'AURA_MAX_QUEUED_UPLOADS': ('backend env', 'Uploads queued or parsing at once'),
-    'AURA_UPLOAD_QUOTA_BYTES': ('backend env', 'Total bytes of all stored uploads'),
+    'AURA_UPLOADS_PER_IP_HOUR': ('backend env', 'Uploads per client IP per hour (presenter exempt) (0 = unlimited)'),
+    'AURA_MAX_QUEUED_UPLOADS': ('backend env', 'Uploads queued or parsing at once (0 = unlimited)'),
+    'AURA_UPLOAD_QUOTA_BYTES': ('backend env', 'Total bytes of all stored uploads (0 = unlimited)'),
     'DATA_DIR': ('set in `modal_app.py`', 'SQLite database, uploads and logs (the Volume, `/data`)'),
     'AURA_BUILD_DIR': ('backend env', 'Preprocessed library drawings'),
     'ALLOWED_ORIGINS': ('backend env', 'Exact CORS origins (comma list or JSON list)'),
@@ -53,7 +61,7 @@ EXTRA = [
 
 def default(name: str, f) -> str:
     if name in ('GEMINI_API_KEY', 'AURA_PRESENTER_TOKEN', 'AURA_IP_SALT', 'DATA_DIR', 'AURA_BUILD_DIR',
-                'ALLOWED_ORIGINS', 'ALLOWED_ORIGIN_REGEX'):
+                'ALLOWED_ORIGINS', 'ALLOWED_ORIGIN_REGEX', 'AURA_SIDECAR_URL', 'AURA_SIDECAR_TOKEN_FILE'):
         return ''
     return f'`{f.default:g}`' if isinstance(f.default, float) else f'`{f.default}`'
 

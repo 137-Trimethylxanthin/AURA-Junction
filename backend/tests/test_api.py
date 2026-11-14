@@ -163,10 +163,10 @@ def test_forged_x_forwarded_for_changes_nothing(tmp_path):
 
 def test_budget_and_stats_shapes(client):
     b = client.get("/budget").json()
-    assert b == {"contract_version": "1.1", "models": "on", "event_used": 94, "event_cap": 1000,
-                 "day_used": 0, "day_cap": 350}
+    assert b == {"contract_version": "1.2", "models": "on", "event_used": 94, "event_cap": 0,
+                 "day_used": 0, "day_cap": 0, "model_calls_total": 0, "cost_usd_total": 0.0}
     s = client.get("/stats").json()
-    assert s == {"contract_version": "1.1", "answers_today": 0, "model_calls_today": 0}
+    assert s == {"contract_version": "1.2", "answers_today": 0, "model_calls_today": 0}
     ask(client, "How many doors?")
     s = client.get("/stats").json()
     assert s["answers_today"] == 1 and s["geometry_only_share"] == {"value": 1.0, "n": 1}

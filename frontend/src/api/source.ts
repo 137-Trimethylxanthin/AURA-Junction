@@ -1,10 +1,35 @@
-import { ApiError, TransportError, getDrawing, getDrawingStatus, getHealth, postAsk, type FetchLike } from './client'
-import type { AskRequest, AskResponse, ChatEvent, Drawing, DrawingStatusBody, Lang, Override, Scope } from './contract'
+import {
+  ApiError,
+  TransportError,
+  deleteProject,
+  getDrawing,
+  getDrawingStatus,
+  getHealth,
+  listProjects,
+  postAsk,
+  saveProject,
+  type FetchLike,
+  type ProjectBundle,
+  type ProjectCallOptions,
+  type SavedProject,
+} from './client'
+import type {
+  AnswererMode,
+  AskRequest,
+  AskResponse,
+  ChatEvent,
+  Drawing,
+  DrawingStatusBody,
+  Lang,
+  Override,
+  Scope,
+} from './contract'
 import { ChatUnavailable, getConversation, streamChat } from './stream'
 import type { Conversation } from './contract'
 import { safeUrl } from './contract'
 import { ask as askLocal } from './local'
 import { BUNDLED_DRAWING_ID } from '@/data/ids'
+import { myProjects } from './library'
 
 export type SourceKind = 'api' | 'local'
 export type SourceState = 'waking' | 'ready'
@@ -14,6 +39,10 @@ export interface SourceStatus {
   state: SourceState
   /** Why the session is local although an API URL is configured. */
   reason?: 'no_api_url' | 'health_failed' | 'fell_back'
+  /** Server answerer mode (`exact`, `hybrid`, or `agent`) from GET /health (1.2). */
+  answerer?: AnswererMode
+  /** Whether the agent sidecar was reachable when GET /health ran (1.2). */
+  agentOk?: boolean
 }
 
 export interface AskResult {
@@ -43,6 +72,12 @@ export interface Source {
   chat(req: ChatTurnRequest, onEvent: (e: ChatEvent) => void, signal?: AbortSignal): Promise<AskResult>
   /** GET /conversations/:id (API only; null when unknown or local). */
   conversation(id: string): Promise<Conversation | null>
+  /** GET /projects (1.2; empty array when local or unconfigured). */
+  projects?(call?: ProjectCallOptions): Promise<ProjectBundle[]>
+  /** POST /projects (1.2; API only). */
+  saveProject?(bundle: ProjectBundle, call?: ProjectCallOptions): Promise<SavedProject>
+  /** DELETE /projects/:id (1.2; API only). */
+  deleteProject?(id: string, call?: ProjectCallOptions): Promise<void>
 }
 
 export interface ChatTurnRequest {
@@ -84,10 +119,51 @@ export function createSource(opts: SourceOptions = {}): Source {
   /** Until when questions go to /ask instead of /chat: for good after a 405 or a non-stream reply, 5 min after a 404. */
   let chatOffUntil = 0
   const CHAT_RETRY_MS = 5 * 60_000
+  const RECOVER_MS = 3_000
+  const RECOVER_TIMEOUT_MS = 1_500
+  const RETRY_DELAY_MS = 600
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
   const set = (s: SourceStatus) => {
     status = s
     for (const fn of listeners) fn(s)
+  }
+
+  const apiStatus = (h: { answerer?: AnswererMode; agent_ok?: boolean }): SourceStatus => ({
+    kind: 'api',
+    state: 'ready',
+    ...(h.answerer !== undefined ? { answerer: h.answerer } : {}),
+    ...(h.agent_ok !== undefined ? { agentOk: h.agent_ok } : {}),
+  })
+
+  /**
+   * A session demoted to local data (health failed, or a request failed) goes back to the API as soon as /health
+   * answers again: the backend restarts often. Short probe, at most once per RECOVER_MS unless `force`.
+   */
+  let lastRecoverAt = 0
+  const recover = async (force = false): Promise<void> => {
+    if (!baseUrl || status.kind !== 'local' || !status.reason || status.reason === 'no_api_url') return
+    if (probing) {
+      await probing
+      return
+    }
+    if (!force && Date.now() - lastRecoverAt < RECOVER_MS) return
+    lastRecoverAt = Date.now()
+    probing = getHealth({ baseUrl, fetch: opts.fetch }, RECOVER_TIMEOUT_MS)
+      .then(
+        (h) => set(apiStatus(h)),
+        () => undefined,
+      )
+      .then(() => {
+        probing = null
+        return status
+      })
+    await probing
+  }
+  if (baseUrl && typeof window !== 'undefined') {
+    const onWake = () => void recover(true)
+    window.addEventListener('focus', onWake)
+    window.addEventListener('online', onWake)
   }
 
   const probe = (): Promise<SourceStatus> => {
@@ -96,7 +172,7 @@ export function createSource(opts: SourceOptions = {}): Source {
     set({ kind: status.kind, state: 'waking' })
     probing = getHealth({ baseUrl, fetch: opts.fetch }, healthTimeoutMs)
       .then(
-        () => ({ kind: 'api', state: 'ready' }) as SourceStatus,
+        (h) => apiStatus(h),
         () => ({ kind: 'local', state: 'ready', reason: 'health_failed' }) as SourceStatus,
       )
       .then((s) => {
@@ -148,8 +224,33 @@ export function createSource(opts: SourceOptions = {}): Source {
       if (status.kind !== 'api' || !baseUrl) return null
       return getConversation({ baseUrl, fetch: opts.fetch }, id)
     },
+    async projects(call) {
+      await init()
+      if (status.kind !== 'api' || !baseUrl) return []
+      try {
+        // Ownership credentials, so bundles over this browser's uploads are listed too.
+        return await listProjects(
+          { baseUrl, fetch: opts.fetch },
+          { ...call, headers: { ...myProjects.listHeaders(), ...call?.headers } },
+        )
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return []
+        throw e
+      }
+    },
+    async saveProject(bundle, call) {
+      await init()
+      if (!baseUrl) throw new TransportError('No API configured', 'network')
+      return saveProject({ baseUrl, fetch: opts.fetch }, bundle, call)
+    },
+    async deleteProject(id, call) {
+      await init()
+      if (!baseUrl) throw new TransportError('No API configured', 'network')
+      await deleteProject({ baseUrl, fetch: opts.fetch }, id, call)
+    },
     async chat(turn, onEvent, signal) {
       await init()
+      await recover()
       const askReq: AskRequest = {
         drawing_id: turn.drawing_id,
         question: turn.question,
@@ -160,52 +261,64 @@ export function createSource(opts: SourceOptions = {}): Source {
       if (status.kind === 'local' || !baseUrl || Date.now() < chatOffUntil) return this.ask(askReq)
       let response: AskResponse | undefined
       let seen = false
-      try {
-        await streamChat(
-          {
-            drawing_id: turn.drawing_id,
-            message: turn.question,
-            ...(turn.conversation_id ? { conversation_id: turn.conversation_id } : {}),
-            ...(turn.scope ? { scope: turn.scope } : {}),
-            ...(turn.overrides ? { overrides: turn.overrides } : {}),
-            ...(turn.lang_hint ? { lang_hint: turn.lang_hint } : {}),
-          },
-          {
-            baseUrl,
-            fetch: opts.fetch,
-            signal,
-            onEvent(e) {
-              seen = true
-              if (e.event === 'answer') response = e.data.response
-              if (e.event === 'error') throw new ApiError(e.data.error, 200, e.data.code, e.data)
-              onEvent(e)
+      let retried = false
+      for (;;) {
+        try {
+          await streamChat(
+            {
+              drawing_id: turn.drawing_id,
+              message: turn.question,
+              ...(turn.conversation_id ? { conversation_id: turn.conversation_id } : {}),
+              ...(turn.scope ? { scope: turn.scope } : {}),
+              ...(turn.overrides ? { overrides: turn.overrides } : {}),
+              ...(turn.lang_hint ? { lang_hint: turn.lang_hint } : {}),
             },
-          },
-        )
-      } catch (e) {
-        // The stream broke after a complete answer arrived (before `done`): the answer stands.
-        if (response && !(e instanceof ApiError)) return { response, fellBack: false }
-        if (e instanceof ChatUnavailable) {
-          chatOffUntil = e.transient ? Date.now() + CHAT_RETRY_MS : Infinity
-          return this.ask(askReq)
+            {
+              baseUrl,
+              fetch: opts.fetch,
+              signal,
+              onEvent(e) {
+                seen = true
+                if (e.event === 'answer') response = e.data.response
+                if (e.event === 'error') throw new ApiError(e.data.error, 200, e.data.code, e.data)
+                onEvent(e)
+              },
+            },
+          )
+          break
+        } catch (e) {
+          // A transient network error before anything streamed: the backend may just be restarting. Retry once.
+          if (e instanceof TransportError && e.kind !== 'timeout' && !seen && !signal?.aborted && !retried) {
+            retried = true
+            await sleep(RETRY_DELAY_MS)
+            continue
+          }
+          // The stream broke after a complete answer arrived (before `done`): the answer stands.
+          if (response && !(e instanceof ApiError)) return { response, fellBack: false }
+          if (e instanceof ChatUnavailable) {
+            chatOffUntil = e.transient ? Date.now() + CHAT_RETRY_MS : Infinity
+            return this.ask(askReq)
+          }
+          if (
+            e instanceof TransportError &&
+            e.kind !== 'timeout' &&
+            !seen &&
+            turn.drawing_id === BUNDLED_DRAWING_ID &&
+            !signal?.aborted
+          ) {
+            lastRecoverAt = Date.now()
+            set({ kind: 'local', state: 'ready', reason: 'fell_back' })
+            return { response: local(askReq), fellBack: true }
+          }
+          throw e
         }
-        if (
-          e instanceof TransportError &&
-          e.kind !== 'timeout' &&
-          !seen &&
-          turn.drawing_id === BUNDLED_DRAWING_ID &&
-          !signal?.aborted
-        ) {
-          set({ kind: 'local', state: 'ready', reason: 'fell_back' })
-          return { response: local(askReq), fellBack: true }
-        }
-        throw e
       }
       if (!response) throw new ApiError('The answer stream ended without an answer', 200, 'invalid_response')
       return { response, fellBack: false }
     },
     async ask(req) {
       await init()
+      await recover()
       if (status.kind === 'local' || !baseUrl) {
         // Only the bundled drawing has local answers; any other drawing must never be answered from it.
         if (req.drawing_id !== BUNDLED_DRAWING_ID)
@@ -213,11 +326,19 @@ export function createSource(opts: SourceOptions = {}): Source {
         return { response: local(req), fellBack: false }
       }
       try {
-        return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
+        try {
+          return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
+        } catch (e) {
+          // A transient network error: the backend may just be restarting. Retry once before giving up.
+          if (!(e instanceof TransportError) || e.kind === 'timeout') throw e
+          await sleep(RETRY_DELAY_MS)
+          return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
+        }
       } catch (e) {
         if (e instanceof ApiError) throw e
         // A slow answer is not a dead server: only network errors and 5xx demote the session to local data.
         if (e instanceof TransportError && e.kind !== 'timeout' && req.drawing_id === BUNDLED_DRAWING_ID) {
+          lastRecoverAt = Date.now()
           set({ kind: 'local', state: 'ready', reason: 'fell_back' })
           return { response: local(req), fellBack: true }
         }

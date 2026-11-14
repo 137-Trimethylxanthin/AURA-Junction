@@ -2,7 +2,6 @@ import { useRef, useState, type ReactNode } from "react"
 import {
   motion,
   useMotionValueEvent,
-  useReducedMotion,
   useScroll,
   useTransform,
   type MotionValue,
@@ -22,6 +21,7 @@ import { BOXES, GOLD } from "./demoData"
 import { factById } from "./facts"
 import { PlanTile } from "./PlanTile"
 import { Reveal, RevealItem } from "./motion"
+import { usePrefersReducedMotion } from "./springs"
 
 /**
  * "How it works", told on the real plan. On a laptop the plan stays pinned while the page scrolls
@@ -72,7 +72,7 @@ function useSteps(): StepText[] {
         <>
           A zoomed tile around every box of one kind goes to the Gemini
           Decisions API in one request: {check.value} on average ({check.n}{" "}
-          requests, 710 boxes; 708 agreed).
+          requests, 710 boxes; 708 agreed with the solver’s boxes).
         </>
       ) : (
         "A zoomed tile around every box of one kind goes to the Gemini Decisions API in one request."
@@ -90,7 +90,7 @@ const DOT = { success: "bg-success", info: "bg-info", warning: "bg-warning" }
 
 export function ScrollStory() {
   const wide = useMediaQuery("(min-width: 1024px) and (min-height: 640px)")
-  const reduce = useReducedMotion()
+  const reduce = usePrefersReducedMotion()
   const steps = useSteps()
   return wide && !reduce ? (
     <Pinned steps={steps} />
@@ -151,7 +151,7 @@ function Pinned({ steps }: { steps: StepText[] }) {
     <div
       ref={track}
       className="relative"
-      style={{ height: "360vh" }}
+      style={{ height: "220vh" }}
       data-story
     >
       <div className="sticky top-16 flex h-[calc(100dvh-4rem)] items-center">
@@ -176,10 +176,10 @@ function Pinned({ steps }: { steps: StepText[] }) {
                     onClick={() => goTo(i)}
                     aria-current={active ? "step" : undefined}
                     className={cn(
-                      "l-press flex w-full flex-col gap-1 rounded-xl px-4 py-3 text-left transition-[opacity,background-color] duration-300 outline-none focus-visible:ring-3 focus-visible:ring-ring",
+                      "l-press flex w-full flex-col gap-1 rounded-xl px-4 py-3 text-left transition-[background-color,box-shadow,color] duration-200 outline-none focus-visible:ring-3 focus-visible:ring-ring",
                       active
-                        ? "bg-card opacity-100 shadow-sm ring-1 ring-foreground/10"
-                        : "opacity-45 hover:opacity-80"
+                        ? "bg-card text-foreground shadow-sm ring-1 ring-foreground/15"
+                        : "text-foreground/80 hover:bg-muted/60 hover:text-foreground"
                     )}
                   >
                     <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
@@ -189,7 +189,12 @@ function Pinned({ steps }: { steps: StepText[] }) {
                       />
                       <span className="tabular-nums">Step {i + 1}</span>
                     </span>
-                    <span className="text-lg font-semibold tracking-[-0.01em]">
+                    <span
+                      className={cn(
+                        "text-lg font-semibold tracking-[-0.01em]",
+                        active ? "text-foreground" : "text-foreground/85"
+                      )}
+                    >
                       {s.title}
                     </span>
                     <span className="text-sm text-pretty text-muted-foreground">

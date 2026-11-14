@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useReducedMotion } from 'motion/react'
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -9,6 +10,7 @@ import { cn } from '@/lib/utils'
 export function ScrollRow({ children, className, label }: { children: React.ReactNode; className?: string; label: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const inner = useRef<HTMLDivElement>(null)
+  const reduce = useReducedMotion()
   const [edges, setEdges] = useState({ start: false, end: false })
 
   const measure = useCallback(() => {
@@ -40,10 +42,10 @@ export function ScrollRow({ children, className, label }: { children: React.Reac
 
   const page = (dir: 1 | -1) => {
     const el = ref.current
-    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: 'smooth' })
+    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: reduce ? 'auto' : 'smooth' })
   }
 
-  const fade = '2.5rem'
+  const fade = '2.75rem'
   const mask =
     edges.start || edges.end
       ? `linear-gradient(to right, ${edges.start ? `transparent, black ${fade}` : 'black'}, ${edges.end ? `black calc(100% - ${fade}), transparent` : 'black'})`
@@ -67,7 +69,7 @@ export function ScrollRow({ children, className, label }: { children: React.Reac
           tabIndex={-1}
           aria-hidden
           onClick={() => page(-1)}
-          className="absolute top-1/2 left-1 grid size-8 -translate-y-1/2 place-items-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-foreground"
+          className="absolute top-1/2 left-1 grid size-10 -translate-y-1/2 place-items-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-foreground"
         >
           <ChevronLeftIcon className="size-4" />
         </button>
@@ -78,7 +80,7 @@ export function ScrollRow({ children, className, label }: { children: React.Reac
           tabIndex={-1}
           aria-hidden
           onClick={() => page(1)}
-          className="absolute top-1/2 right-1 grid size-8 -translate-y-1/2 place-items-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-foreground"
+          className="absolute top-1/2 right-1 grid size-10 -translate-y-1/2 place-items-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-foreground"
         >
           <ChevronRightIcon className="size-4" />
         </button>

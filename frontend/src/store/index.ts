@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useStore } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import { deriveAnswer, type Derived } from '@/lib/answer'
-import { ZOOM_STEPS, createAppStore, type AgentTurn, type AppState, type Turn } from './appStore'
+import { createAppStore, type AgentTurn, type AppState, type Turn } from './appStore'
 
 export * from './appStore'
 
@@ -33,10 +33,15 @@ export const selectAgentTurn =
 
 export const selectActiveTurn = (s: AppState): AgentTurn | undefined => selectAgentTurn(s.ui.activeTurnId)(s)
 export const selectSource = (s: AppState) => s.session.source
+export const selectAnswererMode = (s: AppState) => s.session.answererMode
+export const selectActiveProject = (s: AppState) => s.activeProject
+export const selectCrossPlanScope = (s: AppState) => s.crossPlanScope
+export const selectFocusedGroupId = (s: AppState) => s.ui.focusedGroupId
+export const selectDrawingById = (s: AppState) => s.drawingById
 export const selectDrawing = (s: AppState) => s.session.drawing
 export const selectSessionLang = (s: AppState) => s.session.lang
 export const selectCanUndo = (s: AppState) => s.undoStack.length > 0
-export const selectZoom = (s: AppState) => ZOOM_STEPS[s.ui.zoomIndex] ?? 100
+export const selectZoom = (s: AppState) => s.ui.zoom
 export const selectAttachedMark = (s: AppState) => s.ui.marks.find((m) => m.id === s.ui.attachedMarkId)
 export const selectIsPending = (s: AppState) => s.turns.some((x) => x.role === 'agent' && x.status === 'pending')
 

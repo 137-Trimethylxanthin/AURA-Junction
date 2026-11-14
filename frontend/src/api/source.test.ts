@@ -182,4 +182,30 @@ describe('null optionals from the API', () => {
     expect(r.response.gold).toBeUndefined()
     expect(r.response.check).toBeUndefined()
   })
+
+  it('a demoted session returns to the API once /health answers again', async () => {
+    let up = false
+    const apiResponse = { ...askLocal(REQ), source: 'api' }
+    const fetch = vi.fn((url: string) =>
+      url.endsWith('/health')
+        ? up
+          ? Promise.resolve(health())
+          : Promise.reject(new TypeError('Failed to fetch'))
+        : up
+          ? Promise.resolve(json(200, apiResponse))
+          : Promise.reject(new TypeError('Failed to fetch')),
+    )
+    const s = createSource({ baseUrl: 'https://api.test', fetch })
+    await s.init()
+    expect(s.status()).toMatchObject({ kind: 'local', reason: 'health_failed' })
+    const first = await s.ask(REQ)
+    expect(first.response.source).toBe('local')
+    up = true
+    // Throttled: right after the last probe the session stays local.
+    expect((await s.ask(REQ)).response.source).toBe('local')
+    // Explicit reconnect (or the next ask after a few seconds) re-probes and goes back to the API.
+    await s.retry()
+    expect(s.status()).toMatchObject({ kind: 'api', state: 'ready' })
+    expect((await s.ask(REQ)).response.source).toBe('api')
+  })
 })

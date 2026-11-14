@@ -19,8 +19,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from aura.contract import BOX_SUBJECTS, Box, EvidenceRoom, ToolResult
-from aura.router import DrawingCtx
+from aura.contract import (
+    BOX_SUBJECTS,
+    GROUP_COLORS,
+    Box,
+    EvidenceGroup,
+    EvidenceLink,
+    EvidenceRoom,
+    ToolResult,
+)
+from aura.router import LABEL_CONCEPTS, DrawingCtx
 
 log = logging.getLogger("aura.tools")
 
@@ -57,6 +65,8 @@ def where_en(scope: dict) -> str:
         return "on this floor plan"
     if k == "model":
         return "in the whole building model"
+    if k == "project":
+        return "across the project floors"
     if k == "unit":
         return f"in apartment {scope['unit']}"
     if k == "room":
@@ -68,6 +78,9 @@ def where_en(scope: dict) -> str:
 
 def scope_text(scope: dict) -> str:
     k = scope.get("kind", "floor")
+    if k == "project":
+        n = len(scope.get("drawing_ids") or [])
+        return f"project ({n} floor{'s' if n != 1 else ''})"
     return {
         "floor": "whole floor",
         "model": "whole building model",
@@ -195,9 +208,21 @@ class BundleEngine:
             ev = [{"room_id": r["room_id"], "area_m2": r["area_m2"],
                    "included": family == "apartment" or explicit or not r.get("outdoor")}
                   for r in rooms]
+            groups: list[dict[str, Any]] = []
             if family == "apartment":
                 units = sorted({r["unit"] for r in rooms if r.get("unit")})
                 n = len(units)
+                groups = [
+                    {
+                        "id": f"unit-{u}",
+                        "label": f"Apartment {u}",
+                        "color": GROUP_COLORS[i % len(GROUP_COLORS)],
+                    }
+                    for i, u in enumerate(units)
+                ]
+                for e, r in zip(ev, rooms, strict=False):
+                    if r.get("unit"):
+                        e["group_id"] = f"unit-{r['unit']}"
                 summary = (f"{len(rooms)} numbered rooms; each carries an apartment letter: "
                            f"{', '.join(units)}.")
             else:
@@ -207,8 +232,11 @@ class BundleEngine:
                            f"labelled {scope['label']}." if scope.get("kind") == "label" else
                            f"{len(rooms)} numbered rooms {where}"
                            + (f"; {out} outdoor left out." if out and not explicit else "."))
+            ev_dict: dict[str, Any] = {"boxes": [], "rooms": ev}
+            if groups:
+                ev_dict["groups"] = groups
             return {"answer": {"kind": "count", "value": n, "subject": family}, "value": n,
-                    "numbers": [n, len(rooms)], "evidence": {"boxes": [], "rooms": ev},
+                    "numbers": [n, len(rooms)], "evidence": ev_dict,
                     "summary": summary}
         if family == "area":
             ev, parts = [], []
@@ -529,6 +557,10 @@ def _to_result(d: LoadedDrawing, tool: str, args: dict, raw: dict, ms: int,
              if b.get("subject") in NOUN or (text_subject and b.get("subject") == "label")]
     rooms = [EvidenceRoom(**{k: v for k, v in r.items() if k in EvidenceRoom.model_fields})
              for r in ev.get("rooms", [])]
+    groups = [EvidenceGroup(**{k: v for k, v in g.items() if k in EvidenceGroup.model_fields})
+              for g in ev.get("groups", []) or []]
+    links = [EvidenceLink(**{k: v for k, v in lk.items() if k in EvidenceLink.model_fields})
+             for lk in ev.get("links", []) or []]
     is_abstain = ans.get("kind") == "abstain"
     return ToolResult(
         result_id=_rid(d.id, tool, args),
@@ -541,6 +573,8 @@ def _to_result(d: LoadedDrawing, tool: str, args: dict, raw: dict, ms: int,
         numbers=[float(x) for x in raw.get("numbers") or [] if isinstance(x, (int, float))],
         boxes=boxes,
         rooms=rooms,
+        groups=groups,
+        links=links,
         summary=str(raw.get("summary", "")),
         method=raw.get("method", "cad_geometry"),
         supported=supported,
@@ -626,6 +660,110 @@ def room_areas(d: LoadedDrawing, scope: dict | None = None,
     t0 = time.perf_counter()
     raw = d.engine.answer("area", scope, overrides)
     return _to_result(d, tool, args, raw, _ms(t0), "area", None)
+
+
+def _label_hits(name: str, printed: list[str]) -> bool:
+    n = (name or "").casefold().strip()
+    return any(n == p.casefold() or n.startswith(p.casefold() + "/") for p in printed)
+
+
+def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
+               printed: list[str] | None = None, concept: str | None = None) -> ToolResult:
+    """Stage 1 grab every indexed room with its area; stage 2 keep indoor rooms (of the room type,
+    if one is named) and pick the largest (`order='max'`) or smallest. 0 model calls."""
+    scope = scope or {"kind": "floor"}
+    args: dict[str, Any] = {"scope": scope, "order": order, **({"room_type": concept} if concept else {})}
+    if (bad := _model_scope_unsupported(d, "list_rooms", args)) is not None:
+        return bad
+    t0 = time.perf_counter()
+    rows = d.engine.room_list(scope)
+    kept: list[tuple[dict, float]] = []
+    dropped: list[dict] = []
+    for r in rows:
+        a = _area(r)
+        reason = ("no printed or outlined area" if a is None else
+                  "outdoor space" if r.get("outdoor") else
+                  f"not a {concept}" if printed and not _label_hits(r.get("name", ""), printed) else None)
+        if reason:
+            dropped.append({"id": r["room_id"], "name": r.get("name", ""), "reason": reason})
+        else:
+            kept.append((r, float(a)))  # type: ignore[arg-type]
+    if not kept:
+        return ToolResult(result_id=_rid(d.id, "list_rooms", args), tool="list_rooms", args=args,
+                          kind="none", subject="room",
+                          summary=f"No indoor {concept or 'room'} with an area {where_en(scope)}.",
+                          ms=_ms(t0), meta={"grabbed": len(rows), "dropped": dropped})
+    kept.sort(key=lambda x: x[1], reverse=(order == "max"))
+    win, wa = kept[0]
+    runner = kept[1] if len(kept) > 1 else None
+    word = "largest" if order == "max" else "smallest"
+    label = f"{win.get('name') or 'Room'} {win['room_id']}"
+    tie = runner is not None and round(runner[1], 2) == round(wa, 2)
+    summary = (f"Grabbed {len(rows)} rooms {where_en(scope)}; kept {len(kept)} indoor "
+               f"{noun(concept, 2) if concept else 'rooms'} with an area. The {word} is {label}: {wa:.2f} m²"
+               + (f" (next: {runner[0].get('name') or 'Room'} {runner[0]['room_id']}, {runner[1]:.2f} m²)"
+                  if runner else "") + (" — tied." if tie else "."))
+    return ToolResult(
+        result_id=_rid(d.id, "list_rooms", args), tool="list_rooms", args=args, kind="area",
+        subject="room", value=wa, numbers=[a for _, a in kept] + [float(len(rows))],
+        rooms=[EvidenceRoom(room_id=r["room_id"], included=(r is win), area_m2=a) for r, a in kept],
+        summary=summary, ms=_ms(t0),
+        meta={"grabbed": len(rows), "winner": {"id": win["room_id"], "name": win.get("name", ""),
+                                               "area_m2": wa},
+              "runner_up": ({"id": runner[0]["room_id"], "name": runner[0].get("name", ""),
+                             "area_m2": runner[1]} if runner else None),
+              "kept": [r["room_id"] for r, _ in kept], "dropped": dropped, "order": order,
+              "concept": concept, "tie": tie})
+
+
+# A door's box spans its wall opening, so it touches the outline of the room on each side of the
+# wall (a door on a shared wall belongs to both). Boxes merely near a room (wardrobe doors
+# parallel to the wall, ~0.2 m away behind it) must not count, hence a small tolerance.
+WALL_REACH_M = 0.08
+
+
+def adjacent_boxes(d: LoadedDrawing, subject: str, room_ids: list[str]) -> ToolResult:
+    """Doors/windows that open into any of `room_ids`: grab every box of the subject, keep the ones
+    whose box touches the room outline (within WALL_REACH_M). A door on a wall shared by
+    two rooms belongs to both. 0 model calls."""
+    from shapely.geometry import Polygon
+    from shapely.geometry import box as sbox
+
+    args: dict[str, Any] = {"subject": subject, "scope": {"kind": "room", "room_id": room_ids[0]},
+                            "room_ids": room_ids, "rule": "adjacent"}
+    t0 = time.perf_counter()
+    base = count_objects(d, subject, {"kind": "floor"})
+    rooms = {r["room_id"]: r for r in d.drawing.get("rooms", [])}
+    missing = [rid for rid in room_ids if rid not in rooms or len(rooms[rid].get("points") or []) < 3]
+    if not base.supported or missing:
+        return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                          kind="none", subject=subject, supported=base.supported,
+                          summary=(f"No outline for room {', '.join(missing)}." if missing else base.summary),
+                          ms=_ms(t0))
+    mx = float(d.drawing.get("m_per_pct_x") or 0.1)
+    my = float(d.drawing.get("m_per_pct_y") or mx)
+    reach = WALL_REACH_M / max(1e-6, (mx + my) / 2)  # metres -> percent of the plan
+    polys = {rid: Polygon(rooms[rid]["points"]).buffer(0) for rid in room_ids}
+    kept: list[Box] = []
+    dropped_n = 0
+    for b in base.boxes:
+        g = sbox(b.x, b.y, b.x + b.w, b.y + b.h).buffer(reach)
+        hit = [rid for rid, poly in polys.items() if g.intersects(poly)]
+        if hit:
+            kept.append(b)
+        else:
+            dropped_n += 1
+    names = ", ".join(f"{rooms[r].get('name') or 'Room'} {r}" for r in room_ids)
+    n = len(kept)
+    return ToolResult(
+        result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args, kind="count",
+        subject=subject, value=n, numbers=[float(n), float(len(base.boxes))], boxes=kept,
+        summary=(f"Grabbed {len(base.boxes)} {noun(subject, 2)} on this floor; kept {n} that open into "
+                 f"{names} (box within {WALL_REACH_M:.2f} m of the room outline), dropped {dropped_n}."),
+        ms=_ms(t0),
+        meta={"grabbed": len(base.boxes), "kept": [b.id for b in kept],
+              "dropped": [b.id for b in base.boxes if b not in kept], "room_ids": room_ids,
+              "reach_m": WALL_REACH_M})
 
 
 def what_if(d: LoadedDrawing, scope: dict | None, overrides: list[dict]) -> ToolResult:
@@ -793,3 +931,76 @@ def parse_scope_arg(s: str | None) -> dict | None:
     if k == "label" and v:
         return {"kind": "label", "label": v}
     return None
+
+
+_CATEGORY_LABELS: dict[str, str] = {
+    "living": "Living & Dining",
+    "bedroom": "Bedrooms",
+    "kitchen": "Kitchen",
+    "bathroom": "Bathrooms & WC",
+    "outdoor": "Balcony & Terrace",
+    "corridor": "Circulation & Hall",
+    "storage": "Storage",
+    "stairs": "Stairs",
+}
+
+
+def _room_category(name: str, outdoor: bool = False) -> tuple[str, str]:
+    if outdoor:
+        return "cat-outdoor", "Balcony & Terrace"
+    raw = (name or "").strip()
+    if re.search(r"\bwc\b|toilet|vessa|gabinett", raw, re.IGNORECASE):
+        return "cat-bathroom", "Bathrooms & WC"
+    for concept, rx, _printed in LABEL_CONCEPTS:
+        if rx.search(raw):
+            return f"cat-{concept}", _CATEGORY_LABELS.get(concept, concept.title())
+    if raw:
+        slug = re.sub(r"[^a-z0-9]+", "-", raw.casefold()).strip("-")[:24] or "other"
+        return f"cat-{slug}", raw
+    return "cat-other", "Other Rooms"
+
+
+def color_code_rooms(
+    d: LoadedDrawing, rooms_ev: list[dict[str, Any]], *, by_apartment: bool = False
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Assign <2ms categorical groups (c1..c6) to room evidence by apartment or room category."""
+    meta_by_id = {r["room_id"]: r for r in d.drawing.get("rooms", [])}
+    out_rooms = [dict(r) for r in rooms_ev]
+    groups_map: dict[str, str] = {}
+
+    if by_apartment:
+        for row in out_rooms:
+            if not row.get("included", True):
+                continue
+            rm = meta_by_id.get(row["room_id"], {})
+            u = rm.get("unit")
+            if u:
+                gid = f"unit-{u}"
+                groups_map.setdefault(gid, f"Apartment {u}")
+                row["group_id"] = gid
+    if not groups_map:
+        for row in out_rooms:
+            if not row.get("included", True):
+                continue
+            rm = meta_by_id.get(row["room_id"], {})
+            gid, glabel = _room_category(rm.get("name", ""), bool(rm.get("outdoor")))
+            groups_map.setdefault(gid, glabel)
+            row["group_id"] = gid
+        # If every included room fell into a single category, color individual rooms distinctly
+        if len(groups_map) <= 1 and sum(1 for r in out_rooms if r.get("included", True)) > 1:
+            groups_map.clear()
+            for row in out_rooms:
+                if not row.get("included", True):
+                    continue
+                rm = meta_by_id.get(row["room_id"], {})
+                rid = row["room_id"]
+                gid = f"rm-{rid}"
+                lbl = f"{rid} · {rm.get('name')}" if rm.get("name") else f"Room {rid}"
+                groups_map[gid] = lbl[:60]
+                row["group_id"] = gid
+
+    groups = [
+        {"id": gid, "label": glabel, "color": GROUP_COLORS[i % len(GROUP_COLORS)]}
+        for i, (gid, glabel) in enumerate(groups_map.items())
+    ]
+    return out_rooms, groups

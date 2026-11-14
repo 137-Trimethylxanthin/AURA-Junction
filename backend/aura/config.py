@@ -10,7 +10,7 @@ import json
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -55,27 +55,43 @@ class Settings(BaseSettings):
     presenter_token: SecretStr | None = Field(default=None, alias="AURA_PRESENTER_TOKEN")
     ip_salt: SecretStr = Field(default=SecretStr("aura-local-salt"), alias="AURA_IP_SALT")
 
-    # Budget (plan: "Gemini request budget").
-    event_cap: int = Field(default=1000, alias="AURA_EVENT_CAP")
+    # Budget (plan: "Gemini request budget"). Every cap: 0 = unlimited (the default);
+    # a public deployment sets positive caps. Spend is always counted (/budget, /health).
+    event_cap: int = Field(default=0, alias="AURA_EVENT_CAP")
     event_seed: int = Field(default=94, alias="AURA_BUDGET_SEED")
-    daily_cap: int = Field(default=350, alias="AURA_DAILY_CAP")
-    dev_cap: int = Field(default=100, alias="AURA_DEV_CAP")
-    measurement_cap: int = Field(default=120, alias="AURA_MEASUREMENT_CAP")
-    ip_agent_per_hour: int = Field(default=40, alias="AURA_IP_AGENT_PER_HOUR")
+    daily_cap: int = Field(default=0, alias="AURA_DAILY_CAP")
+    dev_cap: int = Field(default=0, alias="AURA_DEV_CAP")
+    measurement_cap: int = Field(default=0, alias="AURA_MEASUREMENT_CAP")
+    ip_agent_per_hour: int = Field(default=0, alias="AURA_IP_AGENT_PER_HOUR")
+    # Raster analyses without the presenter token: 0 = unlimited, -1 = presenter only, N = N.
     raster_public_cap: int = Field(default=0, alias="AURA_RASTER_PUBLIC_CAP")
     budget_tz: str = Field(default="Europe/Helsinki", alias="AURA_BUDGET_TZ")
 
     decision_model: str = Field(default="gemini-decision-1", alias="AURA_DECISION_MODEL")
     agent_model: str = Field(default="gemini-3.1-flash-lite", alias="AURA_AGENT_MODEL")
 
-    turn_deadline_s: float = Field(default=60.0, alias="AURA_TURN_DEADLINE_S")
+    answerer: Literal["hybrid", "agent", "exact"] = Field(
+        default="hybrid", alias="AURA_ANSWERER"
+    )
+    sidecar_url: str | None = Field(default=None, alias="AURA_SIDECAR_URL")
+    sidecar_token_file: Path | None = Field(default=None, alias="AURA_SIDECAR_TOKEN_FILE")
+    sidecar_model: str = Field(default="gemini-3.8-flash", alias="AURA_SIDECAR_MODEL")
+    agent_runs_per_ip_hour: int = Field(default=0, alias="AURA_AGENT_RUNS_PER_IP_HOUR")
+    agent_runs_per_day: int = Field(default=0, alias="AURA_AGENT_RUNS_PER_DAY")
+
+    turn_deadline_s: float = Field(default=120.0, alias="AURA_TURN_DEADLINE_S")
+    # dev: every answering stage in the trace (grab, decision, filter, answer) with its detail;
+    # demo: the short trace (decision and answer nodes only, no detail payloads).
+    trace_detail: Literal["dev", "demo"] = Field(default="dev", alias="AURA_TRACE_DETAIL")
+    # /chat turns routed to the sidecar agent (SSE heartbeats keep the client alive meanwhile).
+    agent_deadline_s: float = Field(default=150.0, alias="AURA_AGENT_DEADLINE_S")
     volume_commit_every_s: float = Field(default=60.0, alias="AURA_VOLUME_COMMIT_S")
     cleanup_every_s: float = Field(default=3600.0, alias="AURA_CLEANUP_S")
     upload_ttl_s: float = Field(default=24 * 3600.0, alias="AURA_UPLOAD_TTL_S")
-    # Upload abuse limits (checked before the body is read).
-    uploads_per_ip_hour: int = Field(default=10, alias="AURA_UPLOADS_PER_IP_HOUR")
-    max_queued_uploads: int = Field(default=20, alias="AURA_MAX_QUEUED_UPLOADS")
-    upload_quota_bytes: int = Field(default=2 * 1024**3, alias="AURA_UPLOAD_QUOTA_BYTES")
+    # Upload abuse limits (checked before the body is read). 0 = unlimited.
+    uploads_per_ip_hour: int = Field(default=0, alias="AURA_UPLOADS_PER_IP_HOUR")
+    max_queued_uploads: int = Field(default=0, alias="AURA_MAX_QUEUED_UPLOADS")
+    upload_quota_bytes: int = Field(default=0, alias="AURA_UPLOAD_QUOTA_BYTES")
 
     @field_validator("allowed_origins", mode="before")
     @classmethod

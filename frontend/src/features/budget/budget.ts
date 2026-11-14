@@ -5,8 +5,8 @@ import { apiBase } from "@/api/library"
 import { useAppStore } from "@/store"
 
 /**
- * The server's model-request budget, read from `GET /budget`. Shows nothing until the server has answered, in local
- * mode, or when the endpoint is missing: never a guessed figure. Refreshed after every answer, since answers spend it.
+ * The server's running model totals, read from `GET /budget`. Shows nothing until the server has answered, in local
+ * mode, or when the endpoint is missing: never a guessed figure. Refreshed after every answer, since answers add to it.
  */
 export function useBudget(): Budget | null {
   const api = useAppStore((s) => s.session.source.kind === "api")
@@ -28,9 +28,8 @@ export function useBudget(): Budget | null {
   return api && baseUrl ? budget : null
 }
 
-/** Requests left = the tighter of today's cap and the event cap. */
-export function budgetLeft(b: Budget): { left: number; cap: number } {
-  const day = { left: Math.max(0, b.day_cap - b.day_used), cap: b.day_cap }
-  const event = { left: Math.max(0, b.event_cap - b.event_used), cap: b.event_cap }
-  return event.left < day.left ? event : day
+/** Total model calls and spend so far, or null when the server does not report them. Caps are never shown. */
+export function budgetTotals(b: Budget | null): { calls: number; cost: number } | null {
+  if (!b || typeof b.model_calls_total !== "number" || typeof b.cost_usd_total !== "number") return null
+  return { calls: b.model_calls_total, cost: b.cost_usd_total }
 }

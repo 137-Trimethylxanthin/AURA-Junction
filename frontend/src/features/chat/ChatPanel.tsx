@@ -1,9 +1,11 @@
 import { tu, useUi } from "@/i18n/uiLang"
 import type { UiKey } from "@/i18n/strings"
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { motion, useReducedMotion } from "motion/react"
 import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
+import { SPLIT_QUERY } from "@/features/plan/shared"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { isRoomEvidenceId, roomIdOfEvidence, deriveAnswer } from "@/lib/answer"
 import { noun } from "@/lib/format"
@@ -26,18 +28,8 @@ const UNDO_TOAST = "evidence-undo"
 const CHAT_TOASTER = "chat"
 const REJECT_TOAST_MS = 6000
 
-function isTyping(el: Element | null): boolean {
-  if (!el || !(el instanceof HTMLElement)) return false
-  return (
-    el.isContentEditable ||
-    el.tagName === "INPUT" ||
-    el.tagName === "TEXTAREA" ||
-    el.tagName === "SELECT"
-  )
-}
-
 function ChatToaster() {
-  const wide = useMediaQuery("(min-width: 900px)", true)
+  const wide = useMediaQuery(SPLIT_QUERY, true)
   return (
     <Toaster
       id={CHAT_TOASTER}
@@ -61,7 +53,7 @@ function evidenceName(s: AppState, turnId: string, evidenceId: string): string {
   return `${n.charAt(0).toUpperCase()}${n.slice(1)} ${i + 1}`
 }
 
-/** Toasts for rejects (with Undo), fallbacks, and the Ctrl/Cmd+Z shortcut. Always mounted with the chat. */
+/** Toasts for rejects (with Undo) and fallbacks. Always mounted with the chat. */
 function useChatSideEffects() {
   useEffect(() => {
     const seenFallback = new Set<string>()
@@ -102,26 +94,15 @@ function useChatSideEffects() {
       for (const t of s.turns) {
         if (t.role === "agent" && t.fellBack && !seenFallback.has(t.id)) {
           seenFallback.add(t.id)
-          toast("Backend unreachable. Answering from local data.", {
+          toast(tu("chat_fell_back"), {
             id: "fell-back",
             toasterId: CHAT_TOASTER,
           })
         }
       }
     })
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey
-      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
-        if (isTyping(document.activeElement)) return
-        if (appStore.getState().undoStack.length === 0) return
-        e.preventDefault()
-        actions().undo()
-      }
-    }
-    window.addEventListener("keydown", onKey)
     return () => {
       unsub()
-      window.removeEventListener("keydown", onKey)
     }
   }, [])
 }
@@ -193,6 +174,11 @@ export function ChatPanel() {
   useChatSideEffects()
   const pairs = usePairs()
   const root = useRef<HTMLDivElement>(null)
+  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null)
+  const setRootRef = useCallback((node: HTMLDivElement | null) => {
+    root.current = node
+    setPortalHost(node?.closest("aside") ?? null)
+  }, [])
   const count = useRef(0)
   const reduce = useReducedMotion()
   /** Follow the newest question until the user scrolls by hand. */
@@ -230,10 +216,16 @@ export function ChatPanel() {
     }
   }, [])
 
-  return (
-    <div ref={root} className="flex min-h-full flex-col">
+  const liveAndToasts = (
+    <>
       <LiveRegion />
       <ChatToaster />
+    </>
+  )
+
+  return (
+    <div ref={setRootRef} className="flex min-h-full flex-col">
+      {portalHost ? createPortal(liveAndToasts, portalHost) : liveAndToasts}
       {pairs.length === 0 ? (
         <div className="flex flex-col gap-3 p-4 pt-5">
           <div className="flex flex-col gap-1">
@@ -245,7 +237,7 @@ export function ChatPanel() {
           <SuggestionList />
         </div>
       ) : (
-        <ol className="flex flex-col gap-5 p-4" aria-label="Conversation">
+        <ol className="flex flex-col gap-5 p-4" aria-label={tu("shell_conversation")}>
           {pairs.map(({ user, reply }) => (
             // A new question rises in from the composer below (same path as the text it came from); fade only
             // with reduced motion. Transform/opacity only, so the scroll measurement above is unaffected.

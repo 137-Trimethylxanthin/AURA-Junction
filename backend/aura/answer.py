@@ -24,10 +24,15 @@ def same_scope(a: dict, b: dict) -> bool:
     if a.get("kind", "floor") != b.get("kind", "floor"):
         return False
     k = a.get("kind", "floor")
-    if k == "floor":
+    if k in ("floor", "model"):
         return True
     if k == "region":
         return False
+    if k == "project":
+        return (
+            a.get("project_id") == b.get("project_id")
+            and a.get("drawing_ids") == b.get("drawing_ids")
+        )
     key = {"unit": "unit", "room": "room_id", "label": "label"}[k]
     return a.get(key) == b.get(key)
 
@@ -218,6 +223,10 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                       "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]}
     if tr.meta.get("rows") and not tr.boxes:
         evidence["rows"] = tr.meta["rows"]  # IFC elements without a 2D footprint
+    if tr.groups:
+        evidence["groups"] = [g.model_dump(exclude_none=True) for g in tr.groups]
+    if tr.links:
+        evidence["links"] = [lk.model_dump(exclude_none=True) for lk in tr.links]
     body = _base(question, lang, scope) | {
         "answer": {"kind": "count", "value": value, "subject": subject},
         "evidence": evidence,
@@ -275,9 +284,14 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
                            f"Sum of {len(included)} net room areas = {value:.2f} m², shown room by room."),
                   "kind": "exact", "evidence_ids": inc_ids})
     gold = None if overrides or k == "region" else gold_for(d, lang, "area", None, scope, value)
+    ev_dict: dict = {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in rooms]}
+    if tr.groups:
+        ev_dict["groups"] = [g.model_dump(exclude_none=True) for g in tr.groups]
+    if tr.links:
+        ev_dict["links"] = [lk.model_dump(exclude_none=True) for lk in tr.links]
     body = _base(question, lang, scope) | {
         "answer": {"kind": "area", "value": value, "unit": "m2"},
-        "evidence": {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in rooms]},
+        "evidence": ev_dict,
         "canonical_en": canonical,
         "method": tr.method,
         "trace": trace,
@@ -293,29 +307,208 @@ QUANTITY_EN = {"wall_length": "total wall length", "wall_side_area": "net wall s
 
 def quantity(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict,
              intent_tag: str = "router") -> Built:
-    """An IFC quantity, given exactly as the model states it (never recomputed)."""
+    """An IFC or agent-measured quantity, given with its unit and evidence."""
     what = QUANTITY_EN.get(tr.subject or "", tr.subject or "quantity")
     unit = tr.meta.get("unit", "m")
     rows = tr.meta.get("rows", [])
+    ev_dict: dict[str, Any] = {
+        "boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
+        "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms],
+    }
+    if rows:
+        ev_dict["rows"] = rows
+    if tr.groups:
+        ev_dict["groups"] = [g.model_dump(exclude_none=True) for g in tr.groups]
+    if tr.links:
+        ev_dict["links"] = [lk.model_dump(exclude_none=True) for lk in tr.links]
+    is_agent = tr.method == "agent_estimate"
+    ids = [b.id for b in tr.boxes]
     body = _base(question, lang, scope) | {
         "answer": {"kind": "quantity", "value": float(tr.value), "unit": unit},
-        "evidence": {"boxes": [], "rooms": [], **({"rows": rows} if rows else {})},
+        "evidence": ev_dict,
         "canonical_en": f"What is the {what} {where_en(scope)}",
         "method": tr.method,
         "trace": [
             question_node(question, lang),
             intent_node(f"quantity · {what} · {scope_text(scope)}", intent_tag),
-            {"id": "read", "parent": "q", "title": "Read the IFC quantities", "tag": "IFC · Qto",
-             "body": tr.summary, "kind": "exact", "tool": tool_meta(tr)},
+            {"id": "read", "parent": "q",
+             "title": "Measured on the drawing" if is_agent else "Read the IFC quantities",
+             "tag": "Agent · measurement" if is_agent else "IFC · Qto",
+             "body": tr.summary, "kind": "model" if is_agent else "exact",
+             **({"evidence_ids": ids} if ids else {}), "tool": tool_meta(tr)},
             {"id": "answer", "parent": "q", "title": "Answer", "tag": "quantity",
-             "body": f"{tr.value} {unit}, as stated in the model's quantity sets.",
-             "kind": "exact"},
+             "body": (f"{tr.value} {unit} (agent measurement)." if is_agent
+                      else f"{tr.value} {unit}, as stated in the model's quantity sets."),
+             "kind": "model" if is_agent else "exact",
+             **({"evidence_ids": ids} if ids else {})},
         ],
     }
-    gold = gold_for(d, lang, "quantity", tr.subject, scope, float(tr.value))
+    gold = None if is_agent else gold_for(d, lang, "quantity", tr.subject, scope, float(tr.value))
     if gold:
         body["gold"] = gold
+    return Built(body, [tr], ids if is_agent else [], tr.subject)
+
+
+def note(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict,
+         intent_tag: str = "router") -> Built:
+    """Open-ended answer from the deep agent (`AnswerNote`, contract 1.2)."""
+    value = tr.text or tr.summary or ""
+    ans: dict[str, Any] = {"kind": "note", "value": value}
+    if tr.value is not None:
+        ans["number"] = float(tr.value)
+    if tr.meta.get("unit"):
+        ans["unit"] = str(tr.meta["unit"])
+    ev_dict: dict[str, Any] = {
+        "boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
+        "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms],
+    }
+    if tr.meta.get("rows") and not tr.boxes:
+        ev_dict["rows"] = tr.meta["rows"]
+    if tr.groups:
+        ev_dict["groups"] = [g.model_dump(exclude_none=True) for g in tr.groups]
+    if tr.links:
+        ev_dict["links"] = [lk.model_dump(exclude_none=True) for lk in tr.links]
+    ids = [b.id for b in tr.boxes] or [room_eid(r.room_id) for r in tr.rooms if r.included]
+    body = _base(question, lang, scope) | {
+        "answer": ans,
+        "evidence": ev_dict,
+        "canonical_en": question,
+        "method": tr.method,
+        "trace": [
+            question_node(question, lang),
+            intent_node(f"note · {scope_text(scope)}", intent_tag),
+            {"id": "read", "parent": "q", "title": "Inspect the drawing", "tag": "Agent",
+             "body": tr.summary or value, "kind": "model",
+             **({"evidence_ids": ids} if ids else {}), "tool": tool_meta(tr)},
+            {"id": "answer", "parent": "q", "title": "Answer", "tag": "note",
+             "body": value, "kind": "model",
+             **({"evidence_ids": ids} if ids else {})},
+        ],
+    }
     return Built(body, [tr], [], tr.subject)
+
+
+def stage_node(stage: str, nid: str, title: str, tag: str, body: str, *, kind: str = "exact",
+               parent: str = "q", detail: dict | None = None, evidence_ids: list[str] | None = None,
+               tool: dict | None = None, confidence: float | None = None) -> dict:
+    """A trace node marked with its answering stage (resources → decision → filter → answer)."""
+    n: dict[str, Any] = {"id": nid, "parent": parent, "title": title, "tag": tag, "body": body,
+                         "kind": kind, "stage": stage}
+    if detail is not None:
+        n["detail"] = detail
+    if evidence_ids is not None:
+        n["evidence_ids"] = evidence_ids
+    if tool is not None:
+        n["tool"] = tool
+    if confidence is not None:
+        n["confidence"] = round(float(confidence), 3)
+    return n
+
+
+def rule_decision_node(chosen: str, matched: list[str], route: str = "exact",
+                       body: str | None = None) -> dict:
+    """The routing decision when the deterministic router decided (no model asked)."""
+    return stage_node(
+        "decision", "decision", "Route decision", "router · rules",
+        body or f"Matched the '{chosen}' template by rule ({', '.join(matched)}); "
+                "no model needed, answered from the indexed drawing.",
+        kind="info",
+        detail={"decider": "router", "model": None, "chosen": chosen, "confidence": 1.0,
+                "matched": matched, "route": route, "runner_up": None})
+
+
+def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict,
+              matched: list[str], intent_tag: str = "router") -> Built:
+    """'Which room is the biggest/smallest': one room picked from the grabbed room table."""
+    m = tr.meta
+    win, ru = m["winner"], m.get("runner_up")
+    word = "largest" if m["order"] == "max" else "smallest"
+    what = m.get("concept") or "room"
+    value = (f"{win['name'] or 'Room'} ({win['id']}) is the {word} {what}: {win['area_m2']:.2f} m²"
+             + (f"; next is {ru['name'] or 'room'} ({ru['id']}) at {ru['area_m2']:.2f} m²" if ru else "")
+             + (" (tied)" if m.get("tie") else "") + ".")
+    all_ids = [room_eid(r.room_id) for r in tr.rooms]
+    win_ids = [room_eid(win["id"])]
+    dropped = m.get("dropped") or []
+    reasons: dict[str, int] = {}
+    for x in dropped:
+        reasons[x["reason"]] = reasons.get(x["reason"], 0) + 1
+    trace = [
+        question_node(question, lang),
+        intent_node(f"{word} {what} · by net area · {scope_text(scope)}", intent_tag),
+        rule_decision_node("room_rank", matched),
+        stage_node("resources", "grab", "Grab candidates", "drawing index · rooms",
+                   f"Read the indexed room table: {m['grabbed']} rooms with their printed or outlined "
+                   f"areas in {tr.ms} ms, 0 model calls.",
+                   detail={"tables": ["rooms"], "grabbed": m["grabbed"], "ms": tr.ms},
+                   evidence_ids=all_ids, tool=tool_meta(tr)),
+        stage_node("filter", "filter", "Filter candidates",
+                   f"code · {'max' if m['order'] == 'max' else 'min'} by area",
+                   f"Kept {len(m['kept'])} indoor {noun(what, 2)} with an area"
+                   + (f"; dropped {len(dropped)} (" + ", ".join(f"{v} {k}" for k, v in reasons.items()) + ")"
+                      if dropped else "")
+                   + f". Sorted by net area: {win['name']} {win['id']} {win['area_m2']:.2f} m²"
+                   + (f" before {ru['name']} {ru['id']} {ru['area_m2']:.2f} m²." if ru else "."),
+                   parent="grab",
+                   detail={"rule": f"{m['order']}(area_m2)", "kept": m["kept"], "dropped": dropped},
+                   evidence_ids=win_ids),
+        stage_node("answer", "answer", "Answer", "exact · CAD room areas",
+                   value + " Source: indexed CAD room areas; 0 model calls, $0.",
+                   detail={"source": "cad_geometry", "calls": 0, "cost_usd": 0.0},
+                   evidence_ids=win_ids),
+    ]
+    body = _base(question, lang, scope) | {
+        "answer": {"kind": "note", "value": value, "number": round(float(win["area_m2"]), 2), "unit": "m2"},
+        "evidence": {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]},
+        "canonical_en": f"Which is the {word} {what} {where_en(scope)}",
+        "method": "cad_geometry",
+        "trace": trace,
+    }
+    return Built(body, [tr], [], "room")
+
+
+def adjacent(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, matched: list[str],
+             ref: dict | None = None, intent_tag: str = "router") -> Built:
+    """Doors/windows opening into given room(s); `ref` says how 'that room' was resolved."""
+    m = tr.meta
+    subject = tr.subject or "door"
+    room_ids = m["room_ids"]
+    rooms = {r["room_id"]: r for r in d.drawing.get("rooms", [])}
+    names = ", ".join(f"{rooms.get(r, {}).get('name') or 'Room'} {r}" for r in room_ids)
+    scope = {"kind": "room", "room_id": room_ids[0]}
+    built = count(question, lang, d, tr, scope, None, intent_tag=intent_tag)
+    n = int(tr.value or 0)
+    ids = [b.id for b in tr.boxes]
+    decision = (stage_node(
+        "decision", "decision", "Resolve the reference", "context · previous answer",
+        f"“{ref['phrase']}” = {names}, the room(s) the previous answer highlighted.",
+        kind="info", detail={"decider": "context", "model": None, "chosen": room_ids,
+                             "confidence": 1.0, "matched": matched, "route": "exact",
+                             "source_answer_id": ref.get("answer_id"), "runner_up": None})
+        if ref else rule_decision_node("adjacent", matched))
+    built.body["trace"] = [
+        question_node(question, lang),
+        intent_node(f"{noun(subject, 2)} opening into {names}", intent_tag),
+        decision,
+        stage_node("resources", "grab", "Grab candidates", f"DXF · {subject} layer + room outlines",
+                   f"Read all {m['grabbed']} {noun(subject, 2)} and the outline of {names} in {tr.ms} ms, "
+                   "0 model calls.",
+                   detail={"tables": [f"{subject} boxes", "room outlines"], "grabbed": m["grabbed"],
+                           "ms": tr.ms}, tool=tool_meta(tr)),
+        stage_node("filter", "filter", "Filter candidates", "geometry · touches the room",
+                   tr.summary, parent="grab",
+                   detail={"rule": f"box within {m.get('reach_m', 0.35)} m of the room outline (both sides of a wall)",
+                           "kept": m["kept"], "dropped": [{"id": x, "reason": "not on this room's walls"}
+                                                          for x in m["dropped"]]},
+                   evidence_ids=ids),
+        stage_node("answer", "answer", "Answer", "exact · CAD geometry",
+                   f"{n} {noun(subject, n)} open into {names}, each drawn on the plan. 0 model calls, $0.",
+                   detail={"source": "cad_geometry", "calls": 0, "cost_usd": 0.0}, evidence_ids=ids),
+    ]
+    built.body["canonical_en"] = f"Which {noun(subject, 2)} open into {names}"
+    built.body.pop("gold", None)
+    built.check_ids = []  # exact geometry; no image-model cross-check (0 model calls)
+    return built
 
 
 def text(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, subject: str,

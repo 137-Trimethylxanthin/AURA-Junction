@@ -12,7 +12,7 @@ Research behind these choices: `.omc/research/stoa/stoa-research.md` (sections 5
 | Layer | Choice | Why |
 |---|---|---|
 | Language, API | Python 3.12, FastAPI, `uv` | All drawing libraries are Python |
-| Swiss plans (DXF twin) | `ezdxf` + `shapely` | 99.0 % correct, measured on the full set, 0 model calls |
+| Swiss plans (DXF twin) | `ezdxf` + `shapely` | 99.2 % correct (`18,660 / 18,792` after room-number normalisation; `99.0 %` / `18,606` raw), measured on the full set, 0 model calls |
 | IFC models | `IfcOpenShell` | 99.5 % correct, measured; LGPL is fine as an imported library |
 | PDF schedules, rasterising | `pdfplumber` + `pypdfium2` | Not PyMuPDF (AGPL) |
 | CubiCasa images (67 % of the score) | OCR (`RapidOCR` or Tesseract `fin`) for room labels; RF-DETR (Apache-2.0) detector for doors, windows, fixtures | Biggest risk: exact-count accuracy not measured yet |
@@ -51,11 +51,17 @@ Colour meanings (one colour = one meaning):
 
 | Meaning | Token | Value |
 |---|---|---|
-| Agent evidence (boxes, rooms, active answer) | `--info` / `--info-surface` | `#166ed1` / `#ddeaf7` |
+| Agent evidence (boxes, rooms, active answer) | `--info` / `--info-surface` | `#1260b8` / `#ddeaf7` |
 | Exact, from CAD geometry | `--success` / `--success-surface` | `#367c48` / `#e3f9ea` |
-| User corrections (rejected, changed) | `--warning` / `--warning-surface` | `#a55e29` / `#f9f3d4` |
-| Errors | `--destructive` / `--destructive-surface` | `#ca482a` / `#f9e5e2` |
+| User corrections (rejected, changed) | `--warning` / `--warning-surface` | `#965422` / `#f9f3d4` |
+| Errors | `--destructive` / `--destructive-surface` | `#b3391e` / `#f9e5e2` |
 | User input (marked areas, scope, what-if sizes) | `--user` / `--user-surface` (ours) | `#0f766e` / `#ccfbf1` |
+| Categorical evidence group `c1` (Cobalt) | `--group-1` / `--group-1-surface` | `#1260b8` / `#ddeaf7` |
+| Categorical evidence group `c2` (Royal Violet) | `--group-2` / `--group-2-surface` | `#6d3ab7` / `#efe7fb` |
+| Categorical evidence group `c3` (Magenta Plum) | `--group-3` / `--group-3-surface` | `#a82465` / `#fbe5f0` |
+| Categorical evidence group `c4` (Cerulean) | `--group-4` / `--group-4-surface` | `#0b6b8a` / `#dff3f9` |
+| Categorical evidence group `c5` (Architectural Slate) | `--group-5` / `--group-5-surface` | `#475569` / `#e8edf3` |
+| Categorical evidence group `c6` (Raw Umber) | `--group-6` / `--group-6-surface` | `#7c4a15` / `#f6eadc` |
 
 ```css
 :root {
@@ -75,20 +81,33 @@ Colour meanings (one colour = one meaning):
   --accent: #00000008;
   --accent-foreground: #1a1a1a;
   --border: #e7e7e7;
-  --input: #a1a1a1;
+  --input: #767676;
   --ring: #7d7d7d;
-  --destructive: #ca482a;
+  --destructive: #b3391e;
   --destructive-foreground: #ffffff;
   --destructive-surface: #f9e5e2;
   --success: #367c48;
   --success-surface: #e3f9ea;
-  --warning: #a55e29;
+  --warning: #965422;
   --warning-surface: #f9f3d4;
-  --info: #166ed1;
+  --info: #1260b8;
   --info-surface: #ddeaf7;
   /* ours: user input */
   --user: #0f766e;
   --user-surface: #ccfbf1;
+  /* categorical evidence groups (apartments, stairs, circulation routes; WCAG AA >= 5.9:1) */
+  --group-1: #1260b8;
+  --group-1-surface: #ddeaf7;
+  --group-2: #6d3ab7;
+  --group-2-surface: #efe7fb;
+  --group-3: #a82465;
+  --group-3-surface: #fbe5f0;
+  --group-4: #0b6b8a;
+  --group-4-surface: #dff3f9;
+  --group-5: #475569;
+  --group-5-surface: #e8edf3;
+  --group-6: #7c4a15;
+  --group-6-surface: #f6eadc;
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
 }

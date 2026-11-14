@@ -16,6 +16,7 @@ import {
 } from "@/features/chat/view"
 import { placeBadges } from "@/features/plan/badges"
 import { BOXES, LEAVES, QUESTION, RESPONSE } from "./demoData"
+import { usePrefersReducedMotion } from "./springs"
 import { PLAN_ASPECT } from "@/features/plan/shared"
 import "@/features/plan/plan.css"
 
@@ -50,6 +51,7 @@ function useStageWidth() {
 }
 
 export function HeroDemo() {
+  const reduce = usePrefersReducedMotion()
   const [rejected, setRejected] = useState<Record<string, boolean>>({})
   const [history, setHistory] = useState<string[]>([])
   const [hot, setHot] = useState<string | null>(null)
@@ -106,7 +108,7 @@ export function HeroDemo() {
   return (
     <div
       className="l-enter grid min-w-0 overflow-hidden rounded-2xl border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_32px_-12px_rgb(0_0_0/0.12)] md:grid-cols-[minmax(0,1fr)_16rem]"
-      style={{ ["--d" as string]: "120ms" }}
+      style={reduce ? undefined : { ["--d" as string]: "120ms" }}
       data-demo
     >
       <div className="flex min-w-0 items-center justify-end gap-2 border-b px-3 py-2.5 md:col-span-2">
@@ -129,7 +131,7 @@ export function HeroDemo() {
             decoding="async"
             fetchPriority="high"
             className="l-fade absolute inset-0 size-full select-none"
-            style={{ ["--d" as string]: "200ms" }}
+            style={reduce ? undefined : { ["--d" as string]: "200ms" }}
             draggable={false}
           />
           {BOXES.map((b, i) => {
@@ -152,7 +154,7 @@ export function HeroDemo() {
                   top: `${b.y}%`,
                   width: `${b.w}%`,
                   height: `${b.h}%`,
-                  animationDelay: `${BOX_START + i * BOX_STEP}ms`,
+                  animationDelay: reduce ? undefined : `${BOX_START + i * BOX_STEP}ms`,
                 }}
                 className={cn(
                   "plan-evidence-in absolute min-h-2.5 min-w-2.5 rounded-[3px] border-2 p-0 outline-none",
@@ -185,7 +187,7 @@ export function HeroDemo() {
                     style={{
                       left: `calc(${at.x}% + ${at.dx}px)`,
                       top: `calc(${at.y}% + ${at.dy}px)`,
-                      animationDelay: `${BOX_START + i * BOX_STEP}ms`,
+                      animationDelay: reduce ? undefined : `${BOX_START + i * BOX_STEP}ms`,
                     }}
                   >
                     <span
@@ -200,7 +202,7 @@ export function HeroDemo() {
                         off
                           ? "border-[1.5px] border-dashed border-warning bg-background text-warning line-through decoration-2"
                           : "bg-info text-primary-foreground",
-                        hot === b.id && "scale-110"
+                        !reduce && hot === b.id && "scale-110"
                       )}
                     >
                       {i + 1}
@@ -218,9 +220,13 @@ export function HeroDemo() {
         <article
           aria-label="Answer"
           className="l-fade flex min-w-0 flex-col gap-3 p-4 md:absolute md:inset-0"
-          style={{
-            ["--d" as string]: `${BOX_START + BOXES.length * BOX_STEP}ms`,
-          }}
+          style={
+            reduce
+              ? undefined
+              : {
+                  ["--d" as string]: `${BOX_START + BOXES.length * BOX_STEP}ms`,
+                }
+          }
         >
           <div className="flex items-baseline gap-2">
             <span

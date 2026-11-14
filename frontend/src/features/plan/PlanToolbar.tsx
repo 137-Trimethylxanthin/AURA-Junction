@@ -1,4 +1,17 @@
-import { BoxIcon, Columns2Icon, Loader2Icon, MapIcon, MinusIcon, MousePointer2Icon, PlusIcon, RefreshCwIcon, RulerIcon, SquareDashedIcon } from 'lucide-react'
+import { useEffect } from 'react'
+import {
+  BoxIcon,
+  CircleHelpIcon,
+  Columns2Icon,
+  Loader2Icon,
+  MapIcon,
+  MinusIcon,
+  MousePointer2Icon,
+  PlusIcon,
+  RefreshCwIcon,
+  RulerIcon,
+  SquareDashedIcon,
+} from 'lucide-react'
 import { useUi } from '@/i18n/uiLang'
 import type { UiKey } from '@/i18n/strings'
 import { Badge } from '@/components/ui/badge'
@@ -8,7 +21,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { ZOOM_STEPS, actions, selectZoom, useAppStore, useAppStoreShallow, useSource, type PlanView, type Tool } from '@/store'
+import { ZOOM_MAX, ZOOM_MIN, actions, selectZoom, useAppStore, useAppStoreShallow, useSource, type PlanView, type Tool } from '@/store'
 
 const TOOLS: { id: Tool; label: UiKey; hint: UiKey; Icon: typeof MousePointer2Icon }[] = [
   { id: 'select', label: 'tool_select', hint: 'tool_select_hint', Icon: MousePointer2Icon },
@@ -27,12 +40,17 @@ export function PlanToolbar() {
   const tool = useAppStore((s) => s.ui.tool)
   const compare = useAppStoreShallow((s) => s.ui.compare)
   const hasOriginal = useAppStore((s) => !!s.session.drawing.images.original)
-  // What-if needs rooms with a resizable rectangle; drawings without any (IFC, many uploads) do not offer it.
+  // What-if needs rooms with a resizable rectangle, and is hidden only when server answerer is pure 'agent'.
   const canWhatIf = useAppStore((s) => s.session.drawing.rooms.some((r) => !!r.rect))
+  const answererMode = useAppStore((s) => s.session.answererMode)
+  const showWhatIf = canWhatIf && answererMode !== 'agent'
   const zoom = useAppStore(selectZoom)
-  const zoomIndex = useAppStore((s) => s.ui.zoomIndex)
   const view = useAppStore((s) => s.ui.view)
   const { tu } = useUi()
+
+  useEffect(() => {
+    if (tool === 'whatif' && !showWhatIf) actions().cancelWhatIf()
+  }, [tool, showWhatIf])
 
   if (view === '3d')
     return (
@@ -55,7 +73,7 @@ export function PlanToolbar() {
         onValueChange={pickTool}
         aria-label={tu('tool')}
       >
-        {TOOLS.filter((x) => x.id !== 'whatif' || canWhatIf).map(({ id, label, hint, Icon }) => (
+        {TOOLS.filter((x) => x.id !== 'whatif' || showWhatIf).map(({ id, label, hint, Icon }) => (
           <ToggleGroupItem
             key={id}
             value={id}
@@ -125,7 +143,7 @@ export function PlanToolbar() {
         </div>
       ) : null}
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex flex-wrap items-center gap-2">
         <SourceBadge />
         <div className="flex items-center rounded-lg border" role="group" aria-label={tu('tb_zoom')}>
           <Tooltip>
@@ -134,7 +152,7 @@ export function PlanToolbar() {
                 variant="ghost"
                 size="icon"
                 aria-label={tu('zoom_out')}
-                disabled={zoomIndex <= 0}
+                disabled={zoom <= ZOOM_MIN}
                 onClick={() => actions().zoomOut()}
                 className="rounded-r-none"
               >
@@ -143,16 +161,25 @@ export function PlanToolbar() {
             </TooltipTrigger>
             <TooltipContent>{tu('zoom_out')}</TooltipContent>
           </Tooltip>
-          <span className="num w-12 text-center text-xs tabular-nums" aria-live="polite" aria-label={tu('tb_zoom_level', { n: zoom })}>
+          <button
+            type="button"
+            disabled={zoom === ZOOM_MIN}
+            onClick={() => actions().resetZoom()}
+            title={zoom === ZOOM_MIN ? undefined : tu('zoom_reset')}
+            aria-live="polite"
+            aria-label={zoom === ZOOM_MIN ? tu('tb_zoom_level', { n: zoom }) : `${tu('tb_zoom_level', { n: zoom })} — ${tu('zoom_reset')}`}
+            className="num flex h-10 min-w-12 items-center justify-center px-1 text-center text-xs tabular-nums transition-colors hover:bg-muted disabled:pointer-events-none"
+            data-zoom-readout=""
+          >
             {zoom}%
-          </span>
+          </button>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
                 aria-label={tu('zoom_in')}
-                disabled={zoomIndex >= ZOOM_STEPS.length - 1}
+                disabled={zoom >= ZOOM_MAX}
                 onClick={() => actions().zoomIn()}
                 className="rounded-l-none"
               >
@@ -162,6 +189,20 @@ export function PlanToolbar() {
             <TooltipContent>{tu('zoom_in')}</TooltipContent>
           </Tooltip>
         </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label={tu('shortcuts_btn')}
+              onClick={() => actions().setShortcutsOpen(true)}
+              data-shortcuts-trigger=""
+            >
+              <CircleHelpIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{tu('shortcuts_btn')}</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   )
@@ -216,13 +257,26 @@ export function SourceBadge() {
   const failed = src.reason === 'health_failed' || src.reason === 'fell_back'
   return (
     <div className="flex items-center gap-1">
-      <Badge variant="secondary" className="h-7" role="status" title={tu('src_local_hint')}>
-        {tu('src_local')}
-      </Badge>
+      {failed ? (
+        <Badge
+          variant="outline"
+          className="h-7 gap-1.5 border-warning/40 bg-warning-surface text-warning"
+          role="status"
+          title={tu('src_offline_hint')}
+          data-source-offline
+        >
+          <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+          {tu('src_offline')}
+        </Badge>
+      ) : (
+        <Badge variant="secondary" className="h-7" role="status" title={tu('src_local_hint')}>
+          {tu('src_local')}
+        </Badge>
+      )}
       {failed ? (
         <Button variant="ghost" size="sm" className="h-10" onClick={() => void actions().retrySource()}>
           <RefreshCwIcon data-icon="inline-start" />
-          <span className="@max-[1040px]:sr-only">{tu('src_retry')}</span>
+          <span className="@max-[1040px]:sr-only">{tu('src_reconnect')}</span>
         </Button>
       ) : null}
     </div>

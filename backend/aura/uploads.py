@@ -1,8 +1,8 @@
 """Uploads: type from magic bytes (never the extension), size caps, an id, a delete token.
 
 Files go to <DATA_DIR>/uploads/<id>/source.<ext>; the client filename is never used for paths.
-DXF is open to everyone; PNG/JPG need the presenter token (or AURA_RASTER_PUBLIC_CAP).
-PDF and IFC are T3: rejected as unsupported for now. DWG and zip archives are rejected.
+DXF, PDF and IFC are open to everyone; PNG/JPG need the presenter token unless
+AURA_RASTER_PUBLIC_CAP allows them (0 = unlimited, the default). DWG and zip archives are rejected.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MB = 1024 * 1024
-BODY_CAP = 25 * MB
-CAPS = {"dxf": 20 * MB, "png": 15 * MB, "jpg": 15 * MB}
+BODY_CAP = 65 * MB
+CAPS = {"dxf": 20 * MB, "png": 15 * MB, "jpg": 15 * MB, "pdf": 40 * MB, "ifc": 60 * MB}
 MAX_PIXELS = 40_000_000
 TTL_S = 24 * 3600
 
@@ -29,7 +29,7 @@ class UploadError(Exception):
 
 
 def sniff(head: bytes) -> str | None:
-    """'dxf' | 'png' | 'jpg' | 'pdf' | 'dwg' | 'zip' | None, from the first bytes."""
+    """'dxf' | 'png' | 'jpg' | 'pdf' | 'ifc' | 'dwg' | 'zip' | None, from the first bytes."""
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
     if head.startswith(b"\xff\xd8\xff"):
@@ -43,6 +43,8 @@ def sniff(head: bytes) -> str | None:
     if head.startswith(b"AutoCAD Binary DXF\r\n\x1a\x00"):
         return "dxf"
     text = head.lstrip(b"\xef\xbb\xbf").lstrip()
+    if text.startswith(b"ISO-10303-21;"):
+        return "ifc"
     # ASCII DXF: group code 0, then SECTION (optionally preceded by 999 comments).
     lines = [ln.strip() for ln in text.split(b"\n")[:8]]
     while len(lines) >= 2 and lines[0] == b"999":
@@ -102,10 +104,11 @@ class Accepted:
 def validate(head: bytes, size: int, *, presenter_ok: bool) -> str:
     """Raises UploadError; returns the sniffed kind."""
     kind = sniff(head)
-    if kind in (None, "dwg", "zip", "pdf"):
-        what = {"dwg": "DWG files", "zip": "Archives", "pdf": "PDFs (not yet)"}.get(
-            kind or "", "This file type")
-        raise UploadError("unsupported_type", f"{what} are not accepted. Upload a DXF.", 415)
+    if kind in (None, "dwg", "zip"):
+        what = {"dwg": "DWG files", "zip": "Archives"}.get(kind or "", "This file type")
+        raise UploadError(
+            "unsupported_type", f"{what} are not accepted. Upload a DXF, PDF, or IFC.", 415
+        )
     if size > CAPS[kind]:
         raise UploadError("too_large", f"{kind.upper()} uploads are limited to "
                                        f"{CAPS[kind] // MB} MB.", 413)
@@ -117,7 +120,7 @@ def validate(head: bytes, size: int, *, presenter_ok: bool) -> str:
             raise UploadError("too_large", "Images are limited to 40 megapixels.", 413)
         if not presenter_ok:
             raise UploadError("presenter_required",
-                              "Image uploads need the presenter token; DXF is open to everyone.", 403)
+                              "Image uploads need the presenter token; DXF, PDF and IFC are open.", 403)
     return kind
 
 

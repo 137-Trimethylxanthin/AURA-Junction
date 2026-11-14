@@ -1,5 +1,7 @@
 # Stoa dataset (12 GB, not for git)
 /data/
+/*.zip
+/.worktrees/
 
 # Frontend
 node_modules/
@@ -27,3 +29,8 @@ backend/.data/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Sidecar (agent-service)
+agent-service/.venv/
+agent-service/.data/
+agent-service/runs/

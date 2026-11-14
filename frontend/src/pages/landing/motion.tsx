@@ -3,24 +3,16 @@ import {
   animate,
   motion,
   useInView,
-  useReducedMotion,
-  type Transition,
   type Variants,
 } from "motion/react"
 import { cn } from "@/lib/utils"
+import { SPRING, usePrefersReducedMotion } from "./springs"
 
 /**
  * Motion vocabulary for the landing pages (apple-motion): critically damped springs, no bounce,
- * transform and opacity only. Under reduced motion MotionConfig("user") drops the travel and keeps
- * the fade, so nothing waits on movement.
+ * transform and opacity only. Under reduced motion `Reveal` and `RevealItem` bypass `whileInView`
+ * completely and `CountUp` reports completion immediately, so content is never left waiting on scroll.
  */
-export const SPRING: Transition = { type: "spring", bounce: 0, duration: 0.6 }
-export const SPRING_FAST: Transition = {
-  type: "spring",
-  bounce: 0,
-  duration: 0.35,
-}
-
 const group: Variants = {
   hidden: {},
   shown: { transition: { staggerChildren: 0.07, delayChildren: 0.05 } },
@@ -42,14 +34,17 @@ export function Reveal({
   as?: "div" | "ul" | "ol" | "dl"
   amount?: number
 }) {
+  const reduce = usePrefersReducedMotion()
+  if (reduce) {
+    const Plain = as
+    return <Plain className={className}>{children}</Plain>
+  }
   const Tag = motion[as]
-  // Reduced motion: content is simply there, never waiting on a viewport event.
-  const reduce = useReducedMotion()
   return (
     <Tag
       className={className}
       variants={group}
-      initial={reduce ? false : "hidden"}
+      initial="hidden"
       whileInView="shown"
       viewport={{ once: true, amount }}
     >
@@ -67,6 +62,11 @@ export function RevealItem({
   className?: string
   as?: "div" | "li"
 }) {
+  const reduce = usePrefersReducedMotion()
+  if (reduce) {
+    const Plain = as
+    return <Plain className={cn("min-w-0", className)}>{children}</Plain>
+  }
   const Tag = motion[as]
   return (
     <Tag className={cn("min-w-0", className)} variants={item}>
@@ -89,19 +89,19 @@ export function CountUp({
   onProgress?: (t: number) => void
 }) {
   const ref = useRef<HTMLSpanElement>(null)
-  const inView = useInView(ref, { once: true, amount: 0.6 })
-  const reduce = useReducedMotion()
+  const inView = useInView(ref, { once: true, amount: 0.25 })
+  const reduce = usePrefersReducedMotion()
   const m = /^(\D*)(\d[\d,]*(?:\.\d+)?)(.*)$/.exec(value)
   const [text, setText] = useState(() =>
     m && !reduce ? `${m[1]}${fmt(0, m[2])}${m[3]}` : value
   )
 
   useEffect(() => {
-    if (!m || !inView) return
-    if (reduce) {
+    if (!m || reduce) {
       onProgress?.(1)
       return
     }
+    if (!inView) return
     const target = Number(m[2].replace(/,/g, ""))
     const controls = animate(0, target, {
       type: "spring",
@@ -117,12 +117,14 @@ export function CountUp({
       },
     })
     return () => controls.stop()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once when it comes into view
-  }, [inView])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once when it comes into view or reduced motion activates
+  }, [inView, reduce, value])
+
+  const shownText = !m || reduce ? value : text
 
   return (
     <span ref={ref} className={className}>
-      <span aria-hidden>{text}</span>
+      <span aria-hidden>{shownText}</span>
       <span className="sr-only">{value}</span>
     </span>
   )

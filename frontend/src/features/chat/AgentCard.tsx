@@ -1,11 +1,15 @@
 import { useUi } from '@/i18n/uiLang'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { useReducedMotion } from 'motion/react'
 import {
+  ArrowUpRightIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
+  CloudOffIcon,
   SquareIcon,
+  TimerOffIcon,
   EyeIcon,
   GitBranchIcon,
   MinusIcon,
@@ -13,15 +17,40 @@ import {
   RotateCcwIcon,
   XIcon,
 } from 'lucide-react'
-import type { Lang } from '@/api/contract'
+import type { Drawing, Lang } from '@/api/contract'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { t } from '@/i18n/strings'
+import { t, type StringKey, type UiKey } from '@/i18n/strings'
 import { fmtCount, noun } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { actions, selectDrawing, useAppStore, useDerived, type AgentTurn } from '@/store'
+import {
+  actions,
+  selectActiveProject,
+  selectDrawing,
+  selectDrawingById,
+  selectFocusedGroupId,
+  selectIsPending,
+  useAppStore,
+  useDerived,
+  type AgentTurn,
+} from '@/store'
+import { BoxCropThumb } from './BoxCropThumb'
 import { StreamSteps } from './StreamSteps'
-import { chips, footerParts, rows, sentence, valueParts, type Chip, type Row } from './view'
+import { ListenButton } from '@/features/voice/ListenButton'
+import {
+  agentFailure,
+  chips,
+  evidenceGroupsOf,
+  footerParts,
+  groupCssVars,
+  rows,
+  sentence,
+  valueParts,
+  type AgentFailure,
+  type Chip,
+  type EvidenceGroupItem,
+  type Row,
+} from './view'
 
 const CHIP_TONE: Record<Chip['tone'], string> = {
   success: 'bg-success-surface text-success',
@@ -99,20 +128,175 @@ function ElementRow({ row }: { row: Row }) {
   )
 }
 
-function EvidenceRow({ turnId, row, active }: { turnId: string; row: Row; active: boolean }) {
+function setFocusedGroupSafe(id: string | null) {
+  actions().setFocusedGroup(id)
+}
+
+function GroupLegend({
+  groups,
+  turn,
+  active,
+  drawingId,
+  floorLabels,
+}: {
+  groups: EvidenceGroupItem[]
+  turn: AgentTurn
+  active: boolean
+  drawingId: string
+  floorLabels: ReadonlyMap<string, string>
+}) {
   const { tu } = useUi()
+  const navigate = useNavigate()
+  const focusedGroupId = useAppStore((s) => (active ? selectFocusedGroupId(s) : null))
+  const [hoverPreview, setHoverPreview] = useState<{ hoveredId: string; restoreId: string | null } | null>(null)
+  if (!groups.length) return null
+
+  const memberIdsOf = (gid: string, preferDrawingId?: string): string[] => {
+    const ev = turn.response?.evidence
+    if (!ev) return []
+    const preferred: string[] = []
+    const rest: string[] = []
+    for (const b of ev.boxes) {
+      if (b.group_id !== gid) continue
+      const bFloor = b.drawing_id ?? drawingId
+      if (preferDrawingId && bFloor === preferDrawingId) preferred.push(b.id)
+      else rest.push(b.id)
+    }
+    for (const r of ev.rooms) {
+      if (r.group_id !== gid) continue
+      const rFloor = r.drawing_id ?? drawingId
+      const id = `room-${r.room_id}`
+      if (preferDrawingId && rFloor === preferDrawingId) preferred.push(id)
+      else rest.push(id)
+    }
+    return [...preferred, ...rest]
+  }
+
+  const pinnedId = hoverPreview ? hoverPreview.restoreId : focusedGroupId
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5" role="group" aria-label={tu('group_legend_aria')} data-evidence-groups>
+      {groups.map((g) => {
+        const vars = groupCssVars(g.color)
+        const isPinned = pinnedId === g.id
+        const isFocused = focusedGroupId === g.id
+        const targetFloor =
+          g.target_drawing_id && g.target_drawing_id !== drawingId
+            ? (floorLabels.get(g.target_drawing_id) ?? g.target_drawing_id)
+            : null
+        return (
+          <button
+            key={g.id}
+            type="button"
+            data-group-pill={g.id}
+            data-group-color={g.color}
+            aria-pressed={isPinned}
+            onPointerEnter={
+              active
+                ? mouseOnly(() => {
+                    const restoreId = hoverPreview ? hoverPreview.restoreId : focusedGroupId
+                    setHoverPreview({ hoveredId: g.id, restoreId })
+                    setFocusedGroupSafe(g.id)
+                    const ids = memberIdsOf(g.id, drawingId)
+                    if (ids.length) actions().hover(ids)
+                  })
+                : undefined
+            }
+            onPointerLeave={
+              active
+                ? mouseOnly(() => {
+                    if (hoverPreview) {
+                      setFocusedGroupSafe(hoverPreview.restoreId)
+                      setHoverPreview(null)
+                    }
+                    actions().hover([])
+                  })
+                : undefined
+            }
+            onClick={() => {
+              if (!active) actions().setActive(turn.id)
+              const curPinned = hoverPreview ? hoverPreview.restoreId : focusedGroupId
+              const nextPinned = curPinned === g.id ? null : g.id
+              setHoverPreview(null)
+              setFocusedGroupSafe(nextPinned)
+              if (nextPinned) {
+                const destFloor =
+                  g.target_drawing_id && g.target_drawing_id !== drawingId ? g.target_drawing_id : drawingId
+                const ids = memberIdsOf(g.id, destFloor)
+                if (ids[0]) actions().select(turn.id, ids[0])
+                if (destFloor !== drawingId) {
+                  void navigate(`/d/${encodeURIComponent(destFloor)}`)
+                }
+              }
+            }}
+            style={
+              vars
+                ? {
+                    backgroundColor: isFocused ? vars.solid : vars.surface,
+                    color: isFocused ? 'var(--primary-foreground)' : 'var(--foreground)',
+                    borderColor: vars.solid,
+                  }
+                : undefined
+            }
+            className={cn(
+              'inline-flex min-h-10 min-w-10 max-w-full items-center gap-1.5 overflow-hidden rounded-lg border px-2.5 py-1 text-left text-xs font-semibold transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
+              isFocused && 'shadow-xs',
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className="size-2.5 shrink-0 rounded-full ring-2 ring-background"
+              style={vars ? { backgroundColor: isFocused ? 'var(--primary-foreground)' : vars.solid } : undefined}
+            />
+            <span className="min-w-0 truncate">{g.label}</span>
+            {targetFloor ? (
+              <span className="inline-flex max-w-28 shrink-0 items-center gap-0.5 opacity-85">
+                <ArrowUpRightIcon className="size-3 shrink-0" aria-hidden="true" />
+                <span className="num truncate">{targetFloor}</span>
+              </span>
+            ) : null}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function EvidenceRow({
+  turnId,
+  row,
+  active,
+  drawing,
+  canToggle,
+}: {
+  turnId: string
+  row: Row
+  active: boolean
+  drawing: Drawing
+  canToggle: boolean
+}) {
+  const { tu } = useUi()
+  const navigate = useNavigate()
   const selected = useAppStore((s) => active && s.ui.selectedEvidenceId === row.id)
   const hovered = useAppStore((s) => active && s.ui.hoveredEvidenceIds.includes(row.id))
   const Toggle = row.kind === 'room' ? (row.on ? MinusIcon : PlusIcon) : row.on ? XIcon : RotateCcwIcon
   const toggleLabel =
     row.kind === 'room'
       ? `${row.on ? 'Leave out' : 'Add'} ${row.title} ${row.badge}`
-      : `${row.on ? 'Reject' : 'Restore'} ${row.title}`
+      : `${row.on ? tu('reject_box') : tu('restore_box')} ${row.title}`
   const subParts = row.sub ? row.sub.split(' · ') : []
+  const grpVars = groupCssVars(row.groupColor)
+  const showCrop = row.kind === 'box' && Boolean(row.box) && (selected || hovered || Boolean(row.leastCertain))
+  const isCrossFloor = Boolean(row.drawingId && row.drawingId !== drawing.id)
+  const targetDrawing = useAppStore((s) =>
+    isCrossFloor && row.drawingId ? selectDrawingById(s)[row.drawingId] : undefined,
+  )
+
   return (
     <li
       data-evidence-id={row.id}
       data-state={row.on ? 'on' : 'off'}
+      data-group-id={row.groupId}
       className={cn(
         'flex scroll-my-2 items-center gap-1 rounded-lg p-0.5 transition-colors',
         row.edited && 'bg-user-surface',
@@ -124,28 +308,57 @@ function EvidenceRow({ turnId, row, active }: { turnId: string; row: Row; active
       <button
         type="button"
         aria-current={selected || undefined}
-        aria-label={tu('ev_show', { title: row.title })}
-        title={[row.title, row.sub, row.note].filter(Boolean).join('\n')}
-        onClick={() => actions().select(turnId, row.id)}
+        aria-label={tu('ev_show', { title: row.floorLabel ? `${row.title} (${row.floorLabel})` : row.title })}
+        title={[row.title, row.floorLabel ? `[${row.floorLabel}]` : '', row.sub, row.note].filter(Boolean).join('\n')}
+        onClick={() => {
+          actions().select(turnId, row.id)
+          if (isCrossFloor && row.drawingId) {
+            void navigate(`/d/${encodeURIComponent(row.drawingId)}`)
+          }
+        }}
         className="flex min-h-10 min-w-0 flex-1 items-center gap-2.5 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <span
           title={row.badge}
+          style={row.on && grpVars ? { backgroundColor: grpVars.solid, color: 'var(--primary-foreground)' } : undefined}
           className={cn(
             'num inline-flex h-6 max-w-24 min-w-7 shrink-0 items-center justify-center rounded-md px-1.5 text-xs font-semibold',
-            row.on ? 'bg-info text-primary-foreground' : 'border-[1.5px] border-dashed border-warning text-warning',
+            row.on
+              ? cn(!grpVars && 'bg-info text-primary-foreground', grpVars && 'ring-2 ring-background shadow-xs')
+              : 'border-[1.5px] border-dashed border-warning text-warning',
           )}
         >
           <span className="truncate">{row.badge}</span>
         </span>
+        {showCrop && row.box ? (
+          <BoxCropThumb
+            box={row.box}
+            drawing={drawing}
+            targetDrawing={targetDrawing}
+            boxDrawingId={row.drawingId}
+            on={row.on}
+            accentColor={grpVars?.solid}
+          />
+        ) : null}
         <span className="flex min-w-0 flex-1 flex-col">
-          <span
-            className={cn(
-              'line-clamp-2 text-sm font-medium [overflow-wrap:anywhere]',
-              !row.on && 'text-muted-foreground line-through',
-            )}
-          >
-            {row.title}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span
+              className={cn(
+                'line-clamp-2 text-sm font-medium [overflow-wrap:anywhere]',
+                !row.on && 'text-muted-foreground line-through',
+              )}
+            >
+              {row.title}
+            </span>
+            {row.floorLabel ? (
+              <span
+                data-floor-badge={row.drawingId}
+                className="num inline-flex max-w-24 shrink-0 items-center gap-0.5 rounded border border-border bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground"
+              >
+                <span className="truncate">{row.floorLabel}</span>
+                <ArrowUpRightIcon className="size-3 shrink-0" aria-hidden="true" />
+              </span>
+            ) : null}
           </span>
           {subParts.length ? (
             <span className="num line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
@@ -165,23 +378,35 @@ function EvidenceRow({ turnId, row, active }: { turnId: string; row: Row; active
         </span>
         <span className={cn('shrink-0 text-xs font-medium', row.on ? 'text-success' : 'text-warning')}>{row.state}</span>
       </button>
-      <Button
-        variant="outline"
-        size="icon"
-        aria-label={toggleLabel}
-        title={toggleLabel}
-        onClick={() => actions().toggle(turnId, row.id)}
-      >
-        <Toggle />
-      </Button>
+      {canToggle ? (
+        <Button
+          variant="outline"
+          size="icon"
+          aria-label={toggleLabel}
+          title={toggleLabel}
+          onClick={() => actions().toggle(turnId, row.id)}
+        >
+          <Toggle />
+        </Button>
+      ) : null}
     </li>
   )
 }
 
-function EvidenceList({ turn, lang, active }: { turn: AgentTurn; lang: Lang; active: boolean }) {
+function EvidenceList({
+  turn,
+  lang,
+  active,
+  floorLabels,
+}: {
+  turn: AgentTurn
+  lang: Lang
+  active: boolean
+  floorLabels: ReadonlyMap<string, string>
+}) {
   const drawing = useAppStore(selectDrawing)
   const resp = turn.response!
-  const list = useMemo(() => rows(resp, turn.toggles, drawing, lang), [resp, turn.toggles, drawing, lang])
+  const list = useMemo(() => rows(resp, turn.toggles, drawing, lang, floorLabels), [resp, turn.toggles, drawing, lang, floorLabels])
   const ref = useRef<HTMLUListElement>(null)
   const selectedId = useAppStore((s) => (active ? s.ui.selectedEvidenceId : null))
   const reduce = useReducedMotion()
@@ -194,7 +419,7 @@ function EvidenceList({ turn, lang, active }: { turn: AgentTurn; lang: Lang; act
       return
     }
     const el = ref.current?.querySelector<HTMLElement>(`[data-evidence-id="${CSS.escape(selectedId)}"]`)
-    el?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' })
+    el?.scrollIntoView?.({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' })
   }, [selectedId, turn.listOpen, turn.id, list, reduce])
 
   if (!list.length) return null
@@ -221,16 +446,25 @@ function EvidenceList({ turn, lang, active }: { turn: AgentTurn; lang: Lang; act
           <ChevronDownIcon data-icon="inline-start" className={cn('transition-transform', !turn.listOpen && '-rotate-90')} />
           {label}
         </Button>
-        {turn.listOpen ? <span className="ml-auto truncate text-xs text-muted-foreground">{summary}</span> : null}
+        {turn.listOpen && !onlyElements ? (
+          <span className="ml-auto truncate text-xs text-muted-foreground">{summary}</span>
+        ) : null}
       </div>
       {turn.listOpen ? (
-        <CappedScroll label={`${label}: ${summary}`} lang={lang}>
+        <CappedScroll label={`${label}: ${summary}`} lang={lang} totalCount={list.length}>
           <ul id={listId} ref={ref} className="flex flex-col gap-0.5" aria-label={label}>
             {list.map((r) =>
               r.kind === 'element' ? (
                 <ElementRow key={r.id} row={r} />
               ) : (
-                <EvidenceRow key={r.id} turnId={turn.id} row={r} active={active} />
+                <EvidenceRow
+                  key={r.id}
+                  turnId={turn.id}
+                  row={r}
+                  active={active}
+                  drawing={drawing}
+                  canToggle={!(resp.method === 'agent_estimate' && (resp.answer.kind !== 'count' || r.kind !== 'box'))}
+                />
               ),
             )}
           </ul>
@@ -245,12 +479,22 @@ function EvidenceList({ turn, lang, active }: { turn: AgentTurn; lang: Lang; act
 const CAP_PX = 188
 
 /**
- * Evidence list capped to a whole number of rows: the cut always falls on a row boundary, never through a row,
- * and a "N more" button says how many are below (and scrolls to them). The top keeps a soft fade once scrolled.
+ * Evidence list capped to a whole number of rows when at least 2 rows would be hidden below the fold.
+ * All `<li>` elements stay mounted in the DOM; `Expand all (N)` / `Collapse` toggles the CSS max-height cap.
  */
-function CappedScroll({ children, label, lang }: { children: React.ReactNode; label: string; lang: Lang }) {
+function CappedScroll({
+  children,
+  label,
+  lang,
+  totalCount,
+}: {
+  children: React.ReactNode
+  label: string
+  lang: Lang
+  totalCount: number
+}) {
   const ref = useRef<HTMLDivElement>(null)
-  const reduce = useReducedMotion()
+  const [expanded, setExpanded] = useState(false)
   const [view, setView] = useState<{ cap: number | null; top: boolean; below: number }>({ cap: null, top: false, below: 0 })
   const measure = useCallback(() => {
     const el = ref.current
@@ -260,13 +504,15 @@ function CappedScroll({ children, label, lang }: { children: React.ReactNode; la
     const base = list.offsetTop
     const bottoms = items.map((li) => li.offsetTop - base + li.offsetHeight)
     const total = bottoms[bottoms.length - 1] ?? 0
-    // Largest whole-row height that fits the cap (at least one row).
-    const cap = total <= CAP_PX ? null : Math.max(bottoms[0] ?? CAP_PX, ...bottoms.filter((b) => b <= CAP_PX))
+    // Largest whole-row height that fits the cap (at least one row); only cap when >= 2 rows would be hidden.
+    const rawCap = total <= CAP_PX ? null : Math.max(bottoms[0] ?? CAP_PX, ...bottoms.filter((b) => b <= CAP_PX))
+    const hiddenAtTop = rawCap === null ? 0 : items.filter((li) => li.offsetTop - base + li.offsetHeight > rawCap + 1).length
+    const cap = hiddenAtTop >= 2 ? rawCap : null
     const viewBottom = el.scrollTop + (cap ?? total)
     const below = cap === null ? 0 : items.filter((li) => li.offsetTop - base + li.offsetHeight > viewBottom + 1).length
-    const top = el.scrollTop > 2
+    const top = !expanded && cap !== null && el.scrollTop > 2
     setView((p) => (p.cap === cap && p.top === top && p.below === below ? p : { cap, top, below }))
-  }, [])
+  }, [expanded])
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -275,9 +521,9 @@ function CappedScroll({ children, label, lang }: { children: React.ReactNode; la
     ro.observe(el)
     if (el.firstElementChild) ro.observe(el.firstElementChild)
     return () => ro.disconnect()
-  }, [measure])
-  const mask = view.top ? 'linear-gradient(to bottom, transparent, black 1.25rem)' : undefined
-  const scrollable = view.cap !== null
+  }, [measure, totalCount])
+  const scrollable = !expanded && view.cap !== null
+  const mask = scrollable && view.top ? 'linear-gradient(to bottom, transparent, black 1.25rem)' : undefined
   return (
     <div className="relative flex flex-col border-t pt-1.5">
       <div
@@ -287,20 +533,31 @@ function CappedScroll({ children, label, lang }: { children: React.ReactNode; la
         role={scrollable ? 'region' : undefined}
         aria-label={scrollable ? label : undefined}
         data-evidence-scroll
-        className="overflow-y-auto overscroll-contain rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-        style={{ maxHeight: view.cap ?? undefined, maskImage: mask, WebkitMaskImage: mask }}
+        className={cn(
+          'overscroll-contain rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
+          scrollable ? 'overflow-y-auto' : 'overflow-visible',
+        )}
+        style={{ maxHeight: scrollable ? (view.cap ?? undefined) : undefined, maskImage: mask, WebkitMaskImage: mask }}
       >
         {children}
       </div>
-      {view.below > 0 ? (
+      {view.cap !== null ? (
         <Button
           variant="ghost"
-          className="self-center text-xs text-muted-foreground"
-          data-evidence-more={view.below}
-          onClick={() => ref.current?.scrollBy({ top: view.cap ?? CAP_PX, behavior: reduce ? 'auto' : 'smooth' })}
+          aria-expanded={expanded}
+          className="min-h-10 min-w-10 self-center text-xs text-muted-foreground"
+          data-evidence-expand={expanded ? 'open' : 'capped'}
+          data-evidence-more={!expanded && view.below > 0 ? view.below : undefined}
+          onClick={() => {
+            setExpanded((prev) => {
+              const next = !prev
+              if (!next && ref.current) ref.current.scrollTop = 0
+              return next
+            })
+          }}
         >
-          <ChevronDownIcon data-icon="inline-start" />
-          {t(lang, 'more_n', { n: fmtCount(view.below, lang) })}
+          <ChevronDownIcon data-icon="inline-start" className={cn('transition-transform', expanded && 'rotate-180')} />
+          {expanded ? t(lang, 'collapse') : t(lang, 'expand_all_n', { n: fmtCount(totalCount, lang) })}
         </Button>
       ) : null}
     </div>
@@ -404,11 +661,12 @@ function CardShell({
   turnId: string
   lang: Lang
 }) {
+  const { tu } = useUi()
   return (
     <article
       data-turn={turnId}
       data-active={active || undefined}
-      aria-label="Answer"
+      aria-label={tu('answer_region')}
       lang={lang}
       className={cn(
         'flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground transition-[border-color,box-shadow] duration-200',
@@ -421,13 +679,23 @@ function CardShell({
   )
 }
 
-/** Printed text (a label, a fire rating) is read, not glanced at: body size, quoted, clamped to 4 lines with "Show all". */
-function TextValue({ value, label, lang }: { value: string; label: string; lang: Lang }) {
+/** Printed text or prose AnswerNote: body size, quoted, clamped to 4 lines with expand/collapse toggle. */
+function TextValue({
+  value,
+  label,
+  lang,
+  expandKey = 'show_all',
+}: {
+  value: string
+  label?: string
+  lang: Lang
+  expandKey?: Extract<StringKey, 'show_all' | 'show_more'>
+}) {
   const [all, setAll] = useState(false)
   const long = value.length > 160
   return (
     <figure className="flex flex-col gap-1" data-answer-value={value}>
-      <figcaption className="text-xs font-medium text-muted-foreground">{label}</figcaption>
+      {label ? <figcaption className="text-xs font-medium text-muted-foreground">{label}</figcaption> : null}
       <blockquote
         className={cn(
           'border-l-2 border-border pl-3 text-lg leading-snug font-medium text-pretty [overflow-wrap:anywhere]',
@@ -437,11 +705,40 @@ function TextValue({ value, label, lang }: { value: string; label: string; lang:
         {value}
       </blockquote>
       {long ? (
-        <Button variant="link" className="h-10 self-start px-0" onClick={() => setAll((v) => !v)} aria-expanded={all}>
-          {t(lang, all ? 'show_less' : 'show_all')}
+        <Button variant="link" className="h-10 min-w-10 self-start px-0" onClick={() => setAll((v) => !v)} aria-expanded={all}>
+          {t(lang, all ? 'show_less' : expandKey)}
         </Button>
       ) : null}
     </figure>
+  )
+}
+
+function ClampedProse({
+  text,
+  lang,
+  kind,
+}: {
+  text: string
+  lang: Lang
+  kind: 'explanation' | 'note'
+}) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > 220
+  return (
+    <div className="flex flex-col gap-0.5">
+      <p
+        className={cn('text-sm text-pretty text-foreground [overflow-wrap:anywhere]', long && !open && 'line-clamp-4')}
+        data-explanation={kind === 'explanation' ? true : undefined}
+        data-note-prose={kind === 'note' ? true : undefined}
+      >
+        {text}
+      </p>
+      {long ? (
+        <Button variant="link" className="h-10 min-w-10 self-start px-0 text-xs" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          {t(lang, open ? 'show_less' : 'show_more')}
+        </Button>
+      ) : null}
+    </div>
   )
 }
 
@@ -450,7 +747,14 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
   const active = useAppStore((s) => s.ui.activeTurnId === turn.id)
   const derived = useDerived(turn.id)
   const drawing = useAppStore(selectDrawing)
+  const activeProject = useAppStore(selectActiveProject)
+  const floorLabels = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const f of activeProject?.floors ?? []) m.set(f.drawing_id, f.label)
+    return m
+  }, [activeProject])
   const resp = turn.response
+  const groups = useMemo(() => (resp ? evidenceGroupsOf(resp) : []), [resp])
   const lang = resp?.detected_lang ?? userLang
 
   if (turn.status === 'pending')
@@ -481,9 +785,14 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
           ) : (
             <CircleAlertIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
           )}
-          <p className="min-w-0 text-sm [overflow-wrap:anywhere]">
-            {turn.error.code === 'cancelled' ? turn.error.message : t(userLang, 'budget_out')}
-          </p>
+          {turn.error.code === 'cancelled' ? (
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <strong className="text-sm font-semibold text-foreground">{t(userLang, 'stopped_title')}</strong>
+              <p className="min-w-0 text-sm [overflow-wrap:anywhere]">{turn.error.message}</p>
+            </div>
+          ) : (
+            <p className="min-w-0 text-sm [overflow-wrap:anywhere]">{t(userLang, 'budget_out')}</p>
+          )}
         </div>
       </CardShell>
     )
@@ -504,6 +813,8 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
     )
 
   const a = resp.answer
+  const failure = agentFailure(resp)
+  if (failure) return <AgentFailureCard turn={turn} failure={failure} active={active} lang={lang} />
   if (a.kind === 'abstain') {
     const title =
       a.reason === 'not_on_drawing'
@@ -554,26 +865,52 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
 
   const parts = valueParts(resp, derived, lang)
   const chipList = chips(resp, derived, lang)
+  const isProseNote = resp.answer.kind === 'note' && resp.answer.number === undefined
+  const numericNoteProse =
+    resp.answer.kind === 'note' &&
+    resp.answer.number !== undefined &&
+    resp.answer.value.trim().length > 0 &&
+    resp.answer.value.trim() !== `${parts?.[0] ?? ''} ${parts?.[1] ?? ''}`.trim() &&
+    resp.answer.value.trim() !== resp.explanation?.trim()
+      ? resp.answer.value.trim()
+      : null
+
   return (
     <CardShell active={active} turnId={turn.id} lang={lang}>
+      {groups.length ? (
+        <GroupLegend groups={groups} turn={turn} active={active} drawingId={drawing.id} floorLabels={floorLabels} />
+      ) : null}
       <div className="flex flex-col gap-1.5">
         {parts && resp.answer.kind === 'text' ? (
-          <TextValue value={parts[0]} label={parts[1]} lang={lang} />
+          <TextValue value={parts[0]} label={parts[1]} lang={lang} expandKey="show_all" />
+        ) : parts && isProseNote ? (
+          <TextValue value={parts[0]} lang={lang} expandKey="show_more" />
         ) : parts ? (
           <p className="flex flex-wrap items-baseline gap-x-2" data-answer-value={parts[0]}>
             <span className="text-[44px] leading-none font-semibold tracking-tight tabular-nums [overflow-wrap:anywhere]">
               {parts[0]}
             </span>
-            <span className="text-lg font-medium">{parts[1]}</span>
+            {parts[1] ? <span className="text-lg font-medium">{parts[1]}</span> : null}
+            <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="ml-auto self-center" />
           </p>
         ) : null}
+        {numericNoteProse ? <ClampedProse text={numericNoteProse} lang={lang} kind="note" /> : null}
         <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        {!parts || resp.answer.kind === 'text' || isProseNote ? (
+          <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="-ml-2 self-start" />
+        ) : null}
         {resp.estimate ? (
           <p className="text-sm text-muted-foreground" data-estimate>
-            {t(lang, 'estimate_sure', { pct: Math.floor(resp.estimate.confidence * 100) })}
-            {resp.estimate.measured
-              ? ` ${t(lang, 'estimate_measured', { correct: resp.estimate.measured.correct, n: resp.estimate.measured.n })}`
-              : ''}
+            {resp.method === 'agent_estimate' ? (
+              t(lang, 'self_confidence', { pct: Math.round(resp.estimate.confidence * 100) })
+            ) : (
+              <>
+                {t(lang, 'estimate_sure', { pct: Math.floor(resp.estimate.confidence * 100) })}
+                {resp.estimate.measured
+                  ? ` ${t(lang, 'estimate_measured', { correct: resp.estimate.measured.correct, n: resp.estimate.measured.n })}`
+                  : ''}
+              </>
+            )}
           </p>
         ) : null}
         {resp.dropped_items ? (
@@ -595,9 +932,7 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
         ) : null}
         {resp.explanation ? (
           // Model prose that passed the provenance filter: every number in it comes from a tool result.
-          <p className="text-sm text-pretty text-foreground" data-explanation>
-            {resp.explanation}
-          </p>
+          <ClampedProse text={resp.explanation} lang={lang} kind="explanation" />
         ) : null}
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -624,10 +959,50 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
           </Button>
         </div>
       ) : null}
-      <EvidenceList turn={turn} lang={lang} active={active} />
+      <EvidenceList turn={turn} lang={lang} active={active} floorLabels={floorLabels} />
       <Actions turn={turn} active={active} lang={lang} />
       <Feedback turn={turn} lang={lang} />
       <Footer parts={footerParts(resp, lang)} />
     </CardShell>
   )
 })
+
+const FAILURE_COPY: Record<AgentFailure, { icon: typeof CloudOffIcon; title: UiKey }> = {
+  unavailable: { icon: CloudOffIcon, title: 'ag_fail_unavailable' },
+  timeout: { icon: TimerOffIcon, title: 'ag_fail_timeout' },
+  error: { icon: CircleAlertIcon, title: 'ag_fail_error' },
+}
+
+/** A deep-agent run that failed: neutral, translated copy, a Retry that re-asks, never the raw error text. */
+function AgentFailureCard({ turn, failure, active, lang }: { turn: AgentTurn; failure: AgentFailure; active: boolean; lang: Lang }) {
+  const { tu } = useUi()
+  const question = useAppStore((s) => s.turns.find((x) => x.id === turn.replyTo))
+  const pending = useAppStore(selectIsPending)
+  const { icon: Icon, title } = FAILURE_COPY[failure]
+  const retry = () => {
+    if (question?.role === 'user') void actions().ask(question.text, { scope: question.scope, overrides: question.overrides })
+  }
+  return (
+    <CardShell active={active} turnId={turn.id} lang={lang}>
+      <div className="flex items-start gap-3" data-agent-failure={failure}>
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground" aria-hidden>
+          <Icon className="size-4" />
+        </span>
+        <div className="flex min-w-0 flex-col gap-1">
+          <h3 className="text-base leading-snug font-semibold text-balance">{tu(title)}</h3>
+          <p className="text-sm text-muted-foreground">{tu('ag_fail_body')}</p>
+          <p className="text-sm text-muted-foreground">{tu('ag_fail_hint')}</p>
+        </div>
+      </div>
+      {question?.role === 'user' ? (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={retry} disabled={pending} data-agent-retry>
+            <RotateCcwIcon data-icon="inline-start" />
+            {tu('ag_fail_retry')}
+          </Button>
+        </div>
+      ) : null}
+      <Feedback turn={turn} lang={lang} />
+    </CardShell>
+  )
+}
