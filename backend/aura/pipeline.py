@@ -374,6 +374,11 @@ AGENT_TIMEOUT_S = 25.0
 AGENT_TAG = "agent · flash-lite"
 
 
+def _counted_rows(built: A.Built) -> bool:
+    """The answer is a row count (asked for a length, the model finished on 'how many rows')."""
+    return any(r.kind == "count" for r in built.results)
+
+
 async def _agent(svc: Services, d: tools.LoadedDrawing, question: str, lang: str, caller: Caller,
                  stats: dict, history: list[dict] | None, choice_tag: str) -> A.Built:
     """Function calling; the answer comes from the ToolResult the model names."""
@@ -651,7 +656,9 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
                 intent = "area"
             elif u.intent == "length":
                 if d.ctx.printed_dimensions:                 # the store read dimensions printed on the sheet
-                    return await _agent(svc, d, question, lang, caller, stats, history, tag)
+                    built = await _agent(svc, d, question, lang, caller, stats, history, tag)
+                    if not _counted_rows(built):
+                        return built                         # a number of rows is never a length: abstain below
                 return A.abstain_topic(question, lang, "length", intent_tag=tag)
             elif u.intent == "text":
                 return A.abstain(
