@@ -17,19 +17,26 @@ Hook: `pipeline.ask()` / `pipeline.chat_events()` take an optional `run_fn`; `ma
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import re
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from aura.budget import BudgetError
 from aura.contract import CONTRACT_VERSION, AskRequest, ProjectBundle
+from aura.gemini.client import Meter
+from aura.pipeline import PipelineError, ensure_ready, with_unknown_areas
 
 log = logging.getLogger("aura.building")
 
 MAX_PARALLEL = 3
+MAX_SHEETS = 12  # cap on sheets answered in a single question
+MAX_CALLS = 24  # one shared model-call budget across all sheets of one question
 
 DECIDER_WORDS = "explicit words"
 DECIDER_SELECTION = "user selection"
@@ -155,6 +162,18 @@ def named_sheets(question: str, sheets: list[Sheet]) -> list[Sheet]:
     return [s for s in sheets if s.id in hit]
 
 
+def _dedup_floors(floors: list[Any]) -> list[Sheet]:
+    """Deduplicate project floors by `drawing_id` (first wins), then sort vertically."""
+    seen: set[str] = set()
+    unique: list[Sheet] = []
+    for f in floors:
+        if f.drawing_id in seen:
+            continue
+        seen.add(f.drawing_id)
+        unique.append(Sheet(f.drawing_id, f.label, float(f.order)))
+    return sorted(unique, key=lambda s: (s.order, s.label, s.id))
+
+
 def plan_for(
     bundles: list[ProjectBundle],
     drawing_id: str,
@@ -163,23 +182,35 @@ def plan_for(
     project_id: str | None = None,
     sheet_ids: list[str] | None = None,
     scope: dict | None = None,
+    saved_ids: set[str] | None = None,
 ) -> Plan | None:
-    """The plan for this question, or None when the drawing is not a floor of a multi-sheet project."""
+    """The plan for this question, or None when the drawing is not a floor of a multi-sheet project.
+
+    User-saved bundles (`saved_ids`) are applied ONLY when `project_id` explicitly names them (and
+    `bundles` already filtered to projects the caller owns); server-built bundles apply by default.
+    """
     if (scope or {}).get("kind") == "project":
         return None  # an explicit project scope keeps the deep-agent multi-plan path (pipeline.run)
+    saved = saved_ids or set()
     proj = None
     if project_id:
         proj = next((p for p in bundles if p.id == project_id), None)
-        if proj is not None and drawing_id not in {f.drawing_id for f in proj.floors}:
-            proj = None
+    else:
+        proj = next(
+            (
+                p for p in bundles
+                if p.id not in saved
+                and len({f.drawing_id for f in p.floors}) >= 2
+                and drawing_id in {f.drawing_id for f in p.floors}
+            ),
+            None,
+        )
     if proj is None:
-        proj = next((p for p in bundles if len(p.floors) >= 2
-                     and drawing_id in {f.drawing_id for f in p.floors}), None)
-    if proj is None or len(proj.floors) < 2:
         return None
-    all_sheets = [Sheet(f.drawing_id, f.label, float(f.order)) for f in
-                  sorted(proj.floors, key=lambda f: (float(f.order), f.label, f.drawing_id))]
+    all_sheets = _dedup_floors(proj.floors)
     by_id = {s.id: s for s in all_sheets}
+    if len(all_sheets) < 2 or drawing_id not in by_id:
+        return None
     active = by_id[drawing_id]
     kind = (scope or {}).get("kind")
 
@@ -198,6 +229,48 @@ def plan_for(
     if kind in ("room", "region"):
         return plan([active], DECIDER_SELECTION, f"{kind} drawn on this sheet")
     return plan(list(all_sheets), DECIDER_DEFAULT)
+
+
+def validate_plan(plan: Plan, *, max_sheets: int = MAX_SHEETS) -> None:
+    """Refuse a question whose resolved sheet set exceeds `max_sheets`."""
+    if max_sheets > 0 and len(plan.sheets) > max_sheets:
+        raise PipelineError(
+            "bad_request",
+            f"Too many sheets in one question ({len(plan.sheets)}; maximum {max_sheets}). "
+            f"Select up to {max_sheets} sheets or ask about a specific floor.",
+            400,
+        )
+
+
+class SheetUnavailable(Exception):
+    """A sheet in the building plan is missing (deleted/expired) or not ready."""
+
+    def __init__(self, reason: str, kind: str = "missing"):
+        super().__init__(reason)
+        self.reason = reason
+        self.kind = kind  # "missing" | "not_ready"
+
+
+def check_sheet(svc: Any, drawing_id: str) -> SheetUnavailable | None:
+    """Check existence and readiness of one sheet; return `SheetUnavailable` if unusable."""
+    store = getattr(svc, "store", None)
+    reg = getattr(svc, "registry", None)
+    if drawing_id.startswith("up-") and store is not None:
+        row = store.drawing_row(drawing_id)
+        if row is None:
+            if reg is not None:
+                reg.evict(drawing_id)
+            return SheetUnavailable("this sheet was deleted or is missing", "missing")
+        if row.get("status") != "ready":
+            return SheetUnavailable(f"this sheet is {row.get('status')} (not ready)", "not_ready")
+    if reg is not None:
+        d = reg.get(drawing_id)
+        if d is None:
+            return SheetUnavailable("this sheet is missing", "missing")
+        st = d.drawing.get("status", "ready")
+        if st != "ready":
+            return SheetUnavailable(f"this sheet is {st} (not ready)", "not_ready")
+    return None
 
 
 # ---- combining --------------------------------------------------------------------------
@@ -296,9 +369,18 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
             oks.append((i, sh, r))
     responses = [r for _, r in results if isinstance(r, dict)]
     if not responses:
-        first = next(r for _, r in results if isinstance(r, BaseException))
-        raise first
-    template = (oks[0][2] if oks else next(r for _, _, r in others if isinstance(r, dict)))
+        non_sheet = next((r for _, r in results if isinstance(r, BaseException)
+                          and not isinstance(r, SheetUnavailable)), None)
+        if non_sheet is not None:
+            raise non_sheet
+        template = {
+            "answer": {"kind": "abstain", "reason": "not_answerable"},
+            "detected_lang": "en",
+            "canonical_en": question,
+            "route": "template",
+        }
+    else:
+        template = (oks[0][2] if oks else next(r for _, _, r in others if isinstance(r, dict)))
 
     seen_boxes: set[str] = set()
     seen_rooms: set[str] = set()
@@ -375,10 +457,13 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
     ):
         status = ("error" if isinstance(r, BaseException)
                   else "abstain" if (r.get("answer") or {}).get("kind") == "abstain" else "ok")
-        if isinstance(r, BaseException):  # the reason stays in the server log, never in the response
+        why = ""
+        if isinstance(r, SheetUnavailable):
+            why = r.reason
+        elif isinstance(r, BaseException):  # the reason stays in the server log, never in the response
             log.warning("building: sheet %s failed: %s: %s", getattr(sh, "id", "?"), type(r).__name__, r)
-        trace += _branch(i, sh, r if isinstance(r, dict) else None, status, maps.get(i, {}),
-                         "this sheet could not be answered" if isinstance(r, BaseException) else "")
+            why = "this sheet could not be answered"
+        trace += _branch(i, sh, r if isinstance(r, dict) else None, status, maps.get(i, {}), why)
     calls = sum(r.get("calls", 0) for r in responses)
     cost = round(sum(r.get("cost_usd", 0.0) for r in responses), 8)
     exact = method in ("cad_geometry", "pdf_vector", "store_sql")
@@ -404,7 +489,92 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
         "route": "agent" if "agent" in routes else (template.get("route") or "template"),
         "breakdown": breakdown,
     }
-    return body
+    return with_unknown_areas(body)
+
+
+# ---- shared call budget & per-sheet meters ----------------------------------------------
+
+
+class _TeeMeter(Meter):
+    """Per-sheet meter whose own counters stay isolated while forwarding every request to `outer`."""
+
+    def __init__(self, outer: Meter | None = None) -> None:
+        super().__init__()
+        self._outer = outer
+
+    def add(self, rec: Any) -> None:
+        super().add(rec)
+        if self._outer is not None:
+            self._outer.add(rec)
+
+
+class SharedCallBudget:
+    """One shared model-call cap across all sheets of one whole-building question."""
+
+    def __init__(self, cap: int = MAX_CALLS) -> None:
+        self.cap = cap
+        self._lock = threading.Lock()
+        self._used = 0
+
+    def acquire(self) -> None:
+        if self.cap <= 0:
+            return
+        with self._lock:
+            if self._used + 1 > self.cap:
+                raise BudgetError(
+                    "budget_exhausted",
+                    f"Whole-building question reached its {self.cap}-call budget.",
+                )
+            self._used += 1
+
+    def release(self) -> None:
+        if self.cap <= 0:
+            return
+        with self._lock:
+            self._used = max(0, self._used - 1)
+
+    @property
+    def used(self) -> int:
+        with self._lock:
+            return self._used
+
+
+class _CappedClient:
+    """Proxy around `GeminiClient` enforcing one shared `SharedCallBudget` across sheets."""
+
+    def __init__(self, inner: Any, gate: SharedCallBudget) -> None:
+        self._inner = inner
+        self._gate = gate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    async def _guarded(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        self._gate.acquire()
+        probe = _TeeMeter(kwargs.get("meter"))
+        kwargs["meter"] = probe
+        try:
+            return await fn(*args, **kwargs)
+        except BaseException:
+            if probe.calls == 0:
+                self._gate.release()
+            raise
+
+    async def decisions(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._guarded(self._inner.decisions, *args, **kwargs)
+
+    async def generate(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._guarded(self._inner.generate, *args, **kwargs)
+
+
+def _with_shared_budget(svc: Any, max_calls: int) -> tuple[Any, SharedCallBudget]:
+    gate = SharedCallBudget(max_calls)
+    if svc is None or getattr(svc, "client", None) is None or max_calls <= 0:
+        return svc, gate
+    capped_client = _CappedClient(svc.client, gate)
+    if dataclasses.is_dataclass(svc):
+        return dataclasses.replace(svc, client=capped_client), gate
+    return svc, gate
 
 
 # ---- running ----------------------------------------------------------------------------
@@ -423,40 +593,66 @@ async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = Non
               history: list[dict] | None = None, meters: dict | None = None,
               deadline_s: float | None = None, agent_deadline_s: float | None = None, *,
               plan: Plan, base_run: BaseRun,
-              persist: Callable[[Any, str, str, dict, dict], None] | None = None) -> AsyncIterator[tuple[str, dict]]:
+              persist: Callable[[Any, str, str, dict, dict], None] | None = None,
+              max_sheets: int = MAX_SHEETS,
+              max_calls: int = MAX_CALLS) -> AsyncIterator[tuple[str, dict]]:
     """Drop-in for `pipeline.run`: the same events, answered for the sheets of `plan`."""
+    validate_plan(plan, max_sheets=max_sheets)
+    if svc is not None and getattr(svc, "store", None) is not None:
+        ensure_ready(svc, req.drawing_id)
+    if (
+        svc is not None
+        and getattr(svc, "registry", None) is not None
+        and svc.registry.get(req.drawing_id) is None
+    ):
+        raise PipelineError("unknown_drawing", f"Unknown drawing '{req.drawing_id}'", 404)
+
     t0 = time.perf_counter()
     scope_node = _scope_node(plan)
+    meters = meters if meters is not None else {"answer": Meter(), "check": Meter()}
 
     if len(plan.sheets) == 1:
-        # One sheet: the normal answer, with the scope node added to its trace.
         only = plan.sheets[0]
-        sub = _sub_request(req, only, plan) if only.id != req.drawing_id else req
-        async for ev, data in base_run(svc, sub, caller, context, history, meters, deadline_s, agent_deadline_s):
-            if ev == "answer":
-                resp = dict(data["response"])
-                trace = list(resp.get("trace") or [])
-                resp["trace"] = [*trace[:1], scope_node | {"parent": (trace[0]["id"] if trace else "q")}, *trace[1:]]
-                data = {"response": resp}
-            yield ev, data
-        return
-
-    sem = asyncio.Semaphore(MAX_PARALLEL)
-
-    async def one(sheet: Sheet) -> dict:
-        sub = _sub_request(req, sheet, plan)
-        async with sem:
+        prob = check_sheet(svc, only.id)
+        if prob is None:
+            # One ready sheet: the normal answer, with the scope node added to its trace.
+            sub = _sub_request(req, only, plan) if only.id != req.drawing_id else req
             async for ev, data in base_run(svc, sub, caller, context, history, meters, deadline_s, agent_deadline_s):
                 if ev == "answer":
-                    return dict(data["response"])
-        raise RuntimeError("the pipeline ended without an answer")
+                    resp = dict(data["response"])
+                    trace = list(resp.get("trace") or [])
+                    resp["trace"] = [*trace[:1], scope_node | {"parent": (trace[0]["id"] if trace else "q")}, *trace[1:]]
+                    data = {"response": resp}
+                yield ev, data
+            return
+        results: list[tuple[Sheet, dict | BaseException]] = [(only, prob)]
+    else:
+        capped_svc, _gate = _with_shared_budget(svc, max_calls)
+        sem = asyncio.Semaphore(MAX_PARALLEL)
 
-    raw = await asyncio.gather(*(one(s) for s in plan.sheets), return_exceptions=True)
-    results: list[tuple[Sheet, dict | BaseException]] = []
-    for s, r in zip(plan.sheets, raw):
-        if isinstance(r, asyncio.CancelledError):
-            raise r
-        results.append((s, r))
+        async def one(sheet: Sheet) -> dict | BaseException:
+            prob = check_sheet(capped_svc, sheet.id)
+            if prob is not None:
+                return prob
+            sub = _sub_request(req, sheet, plan)
+            sheet_meters = {
+                "answer": _TeeMeter(meters.get("answer")),
+                "check": _TeeMeter(meters.get("check")),
+            }
+            async with sem:
+                async for ev, data in base_run(capped_svc, sub, caller, context, history,
+                                               sheet_meters, deadline_s, agent_deadline_s):
+                    if ev == "answer":
+                        return dict(data["response"])
+            raise RuntimeError("the pipeline ended without an answer")
+
+        raw = await asyncio.gather(*(one(s) for s in plan.sheets), return_exceptions=True)
+        results = []
+        for s, r in zip(plan.sheets, raw):
+            if isinstance(r, asyncio.CancelledError):
+                raise r
+            results.append((s, r))
+
     body = combine(plan, req.question, results, int((time.perf_counter() - t0) * 1000))
     yield "understood", {"detected_lang": body["detected_lang"], "canonical_en": body["canonical_en"],
                          "route": body["route"] if body["route"] in ("template", "agent", "cache", "choice") else "template"}

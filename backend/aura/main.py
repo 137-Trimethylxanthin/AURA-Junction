@@ -118,6 +118,20 @@ def _volume():
     return modal.Volume.from_name("aura-data")
 
 
+def _dedup_raw_floors(raw_floors: list) -> list:
+    """Keep the first floor entry per `drawing_id`; malformed entries pass through to validation."""
+    seen: set[str] = set()
+    out = []
+    for item in raw_floors:
+        if isinstance(item, dict) and isinstance(item.get("drawing_id"), str) and item["drawing_id"]:
+            did = item["drawing_id"]
+            if did in seen:
+                continue
+            seen.add(did)
+        out.append(item)
+    return out
+
+
 def _synthesize_projects(s: Services) -> list[ProjectBundle]:
     """Merge persisted SQLite `projects` with auto-detected multi-floor groups (`project_id` / IFC stems)."""
     persisted_rows = s.store.project_rows() if s.store else []
@@ -127,8 +141,11 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
 
     for row in persisted_rows:
         try:
+            deduped = _dedup_raw_floors(row["floors"] if isinstance(row.get("floors"), list) else [])
+            if len(deduped) < 2:
+                continue
             floors = sorted(
-                row["floors"],
+                deduped,
                 key=lambda f: (float(f.get("order", 0)), str(f.get("label", "")), str(f.get("drawing_id", ""))),
             )
             pb = ProjectBundle.model_validate({
@@ -142,8 +159,9 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
             continue
         bundles.append(pb)
         seen_ids.add(pb.id)
-        for fl in pb.floors:
-            claimed_drawings.add(fl.drawing_id)
+        if not _is_saved_project_row(row):
+            for fl in pb.floors:
+                claimed_drawings.add(fl.drawing_id)
 
     # Auto-synthesize bundles from library + ready upload drawings sharing explicit `project_id` or IFC stem
     candidate_ids = list(s.registry.library_ids())
@@ -253,21 +271,38 @@ def _ownerless(row: dict) -> bool:
         str(f.get("drawing_id", "")).startswith("up-") for f in row.get("floors") or [])
 
 
+def _is_saved_project_row(row: dict) -> bool:
+    """True for user-saved rows in `projects` (never server-built multi-page PDF upload bundles)."""
+    return bool(row.get("token_hash")) or _ownerless(row)
+
+
+def _bundle_visible(s: Services, request: Request, p: ProjectBundle, rows_by_id: dict[str, dict]) -> bool:
+    """True when `request` may see or answer across `p`: public server-built bundles for everyone,
+    user-saved or upload-backed bundles only for the caller holding their token."""
+    row = rows_by_id.get(p.id)
+    if (row is not None and _is_saved_project_row(row)) or any(
+        f.drawing_id.startswith("up-") for f in p.floors
+    ):
+        return _project_access(
+            s, request, [f.drawing_id for f in p.floors], row.get("token_hash") if row else None
+        )
+    return True
+
+
 def _project_of(s: Services, project_id: str) -> ProjectBundle | None:
     return next((p for p in _synthesize_projects(s) if p.id == project_id), None)
 
 
 def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -> JSONResponse | None:
     """A project scope is used only as the server stored it: every drawing it names (and the
-    drawing asked about) must be a floor of that stored bundle, and a bundle with an upload floor
-    is private exactly as in GET /projects (unknown to anyone without its token)."""
+    drawing asked about) must be a floor of that stored bundle, and a saved or upload-backed
+    bundle is private exactly as in GET /projects (unknown to anyone without its token)."""
     if scope is None or getattr(scope, "kind", None) != "project":
         return None
     proj = _project_of(s, scope.project_id)
-    if proj is not None and any(f.drawing_id.startswith("up-") for f in proj.floors):
-        row = s.store.project_row(proj.id) if s.store else None
-        if not _project_access(s, request, [f.drawing_id for f in proj.floors],
-                               row.get("token_hash") if row else None):
+    if proj is not None:
+        rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
+        if not _bundle_visible(s, request, proj, rows_by_id):
             proj = None  # same answer as an unknown id: do not confirm it exists
     if proj is None:
         return _err("not_found", f"Unknown project '{scope.project_id}'.", 404)
@@ -280,21 +315,24 @@ def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -
 
 def _visible_projects(s: Services, request: Request) -> list[ProjectBundle]:
     """The bundles this caller may see (same rule as GET /projects)."""
-    hashes = {r["id"]: r.get("token_hash") for r in (s.store.project_rows() if s.store else [])}
-    return [p for p in _synthesize_projects(s)
-            if not any(f.drawing_id.startswith("up-") for f in p.floors)
-            or _project_access(s, request, [f.drawing_id for f in p.floors], hashes.get(p.id))]
+    rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
+    return [p for p in _synthesize_projects(s) if _bundle_visible(s, request, p, rows_by_id)]
 
 
 def _building_run(s: Services, request: Request, drawing_id: str, question: str, body: Any):
     """A whole-building `run` for a drawing that is a sheet of a multi-plan project, else None."""
     from aura import building
 
+    rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
+    visible = [p for p in _synthesize_projects(s) if _bundle_visible(s, request, p, rows_by_id)]
+    saved_ids = {pid for pid, r in rows_by_id.items() if _is_saved_project_row(r)}
     scope = body.scope.model_dump(exclude_none=True) if body.scope else None
-    plan = building.plan_for(_visible_projects(s, request), drawing_id, question,
-                             project_id=body.project_id, sheet_ids=body.sheet_ids, scope=scope)
+    plan = building.plan_for(visible, drawing_id, question,
+                             project_id=body.project_id, sheet_ids=body.sheet_ids,
+                             scope=scope, saved_ids=saved_ids)
     if plan is None:
         return None
+    building.validate_plan(plan)
     from aura import pipeline
     return functools.partial(building.run, plan=plan, base_run=pipeline.run, persist=pipeline._persist)
 
@@ -544,13 +582,7 @@ def create_app(
 
     @app.get("/projects")
     async def list_projects(request: Request) -> dict:
-        s = svc(request)
-        hashes = {r["id"]: r.get("token_hash") for r in (s.store.project_rows() if s.store else [])}
-        # Bundles with an upload floor are private to whoever holds that upload's delete token or
-        # the project's owner token; library-only bundles are public.
-        projects = [p for p in _synthesize_projects(s)
-                    if not any(f.drawing_id.startswith("up-") for f in p.floors)
-                    or _project_access(s, request, [f.drawing_id for f in p.floors], hashes.get(p.id))]
+        projects = _visible_projects(svc(request), request)
         return ProjectList(projects=projects).model_dump(exclude_none=True)
 
     @app.post("/projects")
@@ -585,8 +617,8 @@ def create_app(
         raw_floors = raw.get("floors")
         if raw_floors is None and isinstance(raw.get("drawing_ids"), list):
             raw_floors = []
-            for idx, did in enumerate(raw["drawing_ids"], 1):
-                did_s = str(did)
+            unique_dids = list(dict.fromkeys(str(did) for did in raw["drawing_ids"]))
+            for idx, did_s in enumerate(unique_dids, 1):
                 d_obj = s.registry.get(did_s)
                 if d_obj is None:
                     return _err("unknown_drawing", f"Unknown drawing '{did_s}'.", 404)
@@ -600,6 +632,8 @@ def create_app(
                     lbl = lbl or inf_l
                     ord_v = inf_o if ord_v is None else ord_v
                 raw_floors.append({"drawing_id": did_s, "label": str(lbl), "order": ord_v})
+        elif isinstance(raw_floors, list):
+            raw_floors = _dedup_raw_floors(raw_floors)
         if not isinstance(raw_floors, list) or len(raw_floors) < 2:
             return _err("bad_request", "A project bundle requires at least 2 floors.", 400)
         try:
