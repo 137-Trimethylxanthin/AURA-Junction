@@ -264,3 +264,12 @@ def test_store_off_never_imports_jstore():
     out = subprocess.run([sys.executable, "-c", code], check=False, cwd=Path(__file__).resolve().parents[1],
                          capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
+
+
+async def test_finish_on_an_sql_set_reads_its_cell(d, store_on):
+    store_on.rows = [{"n": 30}]
+    turns = [[("sql", {"query": "select count(*) as n from q.elements where ifc_class = 'IfcColumn'"})],
+             [("finish", {"set": "s1", "answer": "count"})]]
+    built, stats, _ = await ask(d, turns)
+    body = validated(built, stats)
+    assert body["answer"]["number"] == 30 and stats["meter"].calls == 2

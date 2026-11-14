@@ -174,7 +174,10 @@ SQL_SYSTEM = (
     "\n\nThe drawing store is available through the sql tool. Prefer the fixed tools for rooms, doors, "
     "windows and fixtures; use sql for everything they do not read. A refused or failed query comes back "
     "as an error: fix it once, or finish with set='none'. The finish_as of an sql call is count, cell, "
-    "value:<column> or sum:<column>.\n\n"
+    "value:<column> or sum:<column>. IFC building elements (walls, slabs, beams, columns, stairs, railings, "
+    "sanitary terminals ...) are rows of q.elements by ifc_class (with storey and stored_*/measured_* "
+    "quantities; type objects have is_type = true: leave them out of counts); their properties are in "
+    "q.ifc_properties.\n\n"
 )
 SQL_OWNER_NOTE = ("On this drawing q.rooms, q.apartments, q.doors, q.windows, q.fixtures and q.items are "
                   "not used: rooms and items come from the fixed tools.\n\n")
@@ -906,7 +909,8 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
     taken = q.get("take")
     if fin.get("answer") and (taken is None or fin.get("answer") != rs.args.get("finish_as")):
         res = store_sql.SqlResult(ok=True, query=q.get("query", ""), rows=q.get("rows") or [],
-                                  total=q.get("total", 0), columns=q.get("columns") or [])
+                                  total=q.get("total", 0), columns=q.get("columns") or [],
+                                  views=q.get("views") or [])
         shape = {"list": "rows"}.get(fin["answer"], fin["answer"])
         if shape == "area":
             m2 = [c for c in res.columns if c.lower().endswith("m2")]
