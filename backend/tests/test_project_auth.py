@@ -93,3 +93,54 @@ def test_owned_project_ignores_upload_delete_tokens(tmp_path):
         assert c.delete("/projects/proj-c", headers=only_upload).status_code == 403
         assert "proj-c" not in [p["id"] for p in c.get("/projects", headers=only_upload).json()["projects"]]
         assert c.delete("/projects/proj-c", headers={"x-project-token": made["token"]}).status_code == 204
+
+
+def test_project_scope_with_an_id_the_server_does_not_hold(tmp_path):
+    """A group made in the browser (never saved, saved under a token the request lacks, or lost on
+    the server) still answers across its sheets: library drawings are public, uploads need their
+    delete tokens."""
+    import copy
+    import json
+
+    from aura import tools
+    from aura.config import Settings
+    from aura.main import create_app
+    from tests.conftest import FRONTEND_DRAWING
+
+    base = json.loads(FRONTEND_DRAWING.read_text())
+    lib = []
+    for i, keep in enumerate((6, 4)):
+        d = copy.deepcopy(base)
+        d |= {"id": f"lib-{i}", "title": f"Plan {i}"}
+        d["evidence"]["door"] = d["evidence"]["door"][:keep]
+        lib.append(tools.LoadedDrawing(id=d["id"], dir=None, drawing=d, engine=tools.BundleEngine(d),
+                                       gold=[], anchors=[]))
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild", AURA_ANSWERER="hybrid")
+    with TestClient(create_app(s, extra_drawings=lib, sidecar_transport=MockSidecarState().handler)) as c:
+        scope = {"kind": "project", "project_id": "proj-mwgxu9xx", "drawing_ids": ["lib-0", "lib-1"]}
+        ask = {"drawing_id": "lib-0", "question": "how many doors are there?", "scope": scope}
+        r = c.post("/ask", json=ask)
+        assert r.status_code == 200, r.text
+        assert r.json()["answer"]["value"] == 10
+        # The same group saved by its owner (private row): the token-less question still answers.
+        assert c.post("/projects", json={"id": "proj-mwgxu9xx", "title": "Mine",
+                                         "drawing_ids": ["lib-0", "lib-1"]}).status_code == 200
+        assert c.post("/ask", json=ask).status_code == 200
+        # A conversation may move between the sheets of the accepted group.
+        evs, _ = parse_sse_raw(c.post("/chat", json={"drawing_id": "lib-0", "message": "How many rooms?",
+                                                     "scope": scope}).text)
+        conv = evs[0][1]["conversation_id"]
+        hop = {"drawing_id": "lib-1", "conversation_id": conv, "message": "And doors?"}
+        assert c.post("/chat", json=hop | {"scope": scope}).status_code == 200
+        # An unknown sheet is still refused, and one sheet is not a group.
+        bad = scope | {"drawing_ids": ["lib-0", "nope"]}
+        assert c.post("/ask", json=ask | {"scope": bad}).status_code == 404
+        assert c.post("/ask", json=ask | {"scope": scope | {"drawing_ids": ["lib-0"]}}).status_code == 404
+
+        # Uploads join an unsaved group only with every upload's own delete token.
+        (u1, t1), (u2, t2) = _uploads(c, 2)
+        up = {"kind": "project", "project_id": "proj-local-x", "drawing_ids": [u1, u2]}
+        q = {"drawing_id": u1, "question": "How many rooms?", "scope": up}
+        assert c.post("/ask", json=q).status_code == 404
+        assert c.post("/ask", json=q, headers={"x-delete-token": t1}).status_code == 404
+        assert c.post("/ask", json=q, headers={"x-delete-token": f"{t1},{t2}"}).status_code == 200

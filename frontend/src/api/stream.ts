@@ -1,4 +1,4 @@
-import { ApiError, TransportError, checkVersion, dropNulls, join, presenterHeader, type ClientOptions, type FetchLike } from './client'
+import { ApiError, TransportError, checkVersion, dropNulls, join, presenterHeader, scopeHeaders, type ClientOptions, type FetchLike } from './client'
 import {
   isAskResponse,
   salvageAskResponse,
@@ -133,7 +133,7 @@ export async function streamChat(req: ChatRequest, opts: ChatStreamOptions): Pro
     try {
       res = await doFetch(join(opts.baseUrl, '/chat'), {
         method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...presenterHeader() },
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...presenterHeader(), ...scopeHeaders(req.scope) },
         body: JSON.stringify(req),
         signal: ctrl.signal,
       })

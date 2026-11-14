@@ -288,3 +288,32 @@ describe('ungrouping a building the server derives from files', () => {
     myProjects.clear()
   })
 })
+
+describe('a question across a project carries its ownership proof', () => {
+  it('sends the project token with /ask for a project scope, nothing otherwise', async () => {
+    const { postAsk, scopeHeaders } = await import('./client')
+    myProjects.clear()
+    myProjects.save({
+      id: 'proj-mine',
+      title: 'Mine',
+      auto_matched: false,
+      floors: [
+        { drawing_id: 'a', label: 'EG', order: 0 },
+        { drawing_id: 'b', label: 'OG', order: 1 },
+      ],
+    })
+    myProjects.setToken('proj-mine', 'tok-1')
+    const scope = { kind: 'project' as const, project_id: 'proj-mine', drawing_ids: ['a', 'b'] }
+    expect(scopeHeaders(scope)).toEqual({ 'x-project-token': 'tok-1' })
+    expect(scopeHeaders(undefined)).toEqual({})
+    expect(scopeHeaders({ kind: 'project', project_id: 'proj-unknown', drawing_ids: ['a', 'b'] })).toEqual({})
+    let seen: Record<string, string> = {}
+    const fetch = (async (_u: unknown, init?: RequestInit) => {
+      seen = init?.headers as Record<string, string>
+      return new Response('{}', { status: 500 })
+    }) as typeof globalThis.fetch
+    await postAsk({ baseUrl: 'http://x', fetch }, { drawing_id: 'a', question: 'q', scope }).catch(() => {})
+    expect(seen['x-project-token']).toBe('tok-1')
+    myProjects.clear()
+  })
+})
