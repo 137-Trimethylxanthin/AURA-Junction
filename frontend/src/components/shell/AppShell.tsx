@@ -166,7 +166,7 @@ export function AppShell(props: AppShellSlots) {
             expand={{ expanded: chatExpanded, onToggle: () => setChatExpanded((v) => !v) }}
             className={cn(
               "flex-none border-t shadow-[0_-1px_0_var(--border)] transition-[height] duration-200",
-              chatExpanded ? "h-[75dvh]" : "h-[50dvh]"
+              chatExpanded ? "h-[75dvh]" : "h-[58dvh]"
             )}
           />
         </div>

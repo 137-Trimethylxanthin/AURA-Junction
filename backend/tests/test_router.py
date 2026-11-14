@@ -187,3 +187,26 @@ def test_score_families_route_and_never_doors_or_windows():
     assert family_of("How many doors and windows?") is None
     assert family_of("How many windows are drawn?") is None
     assert family_of("Is there a sauna?") is None  # not a count question
+
+
+def test_templates_refuse_questions_they_do_not_account_for():
+    """Verifier B13: never a confident template answer to a question it has not understood."""
+    ctx = DrawingCtx(labels=["Chambre à coucher", "Bain", "Cuisine"], room_ids=["3.04"],
+                     units=["A", "B"])
+    for q in ("How many places to sleep are there in this flat?",
+              "Which bedroom has the most windows?",
+              "Which room has the largest area?",
+              "How many rooms have a window?",
+              "How many rooms with more than two doors are there?",
+              "Quelle chambre a le plus de fenêtres ?",
+              "Combien de places pour dormir dans cet appartement ?",
+              "Welches Zimmer hat die meisten Fenster?",
+              "Wie viele Schlafplätze gibt es in dieser Wohnung?",
+              "Missä huoneessa on eniten ikkunoita?",
+              "Mikä huone on suurin?"):
+        r = route(q, ctx)
+        assert r.intent == "unknown", (q, r.intent, r.subject)
+    # Apartments counted (template) vs apartment as scope only.
+    assert route("How many apartments are on this floor?", ctx).subject == "apartment"
+    assert route("Wie viele Wohnungen gibt es?", ctx).subject == "apartment"
+    assert route("How many doors are in this flat?", ctx).subject == "door"

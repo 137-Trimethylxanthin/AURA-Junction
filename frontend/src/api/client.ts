@@ -14,6 +14,7 @@ import {
   majorOf,
   type AskRequest,
   type AskResponse,
+  type Budget,
   type Drawing,
   type DrawingList,
   type DrawingStatusBody,
@@ -147,6 +148,15 @@ export async function getHealth(opts: ClientOptions, timeoutMs = 10_000): Promis
   if (!isHealth(body)) throw new ApiError('Unexpected /health body', 200, 'invalid_response', body)
   checkVersion(body.contract_version, body)
   return body
+}
+
+/** `GET /budget` (1.1): the server's model-request budget. Throws on any body that is not a whole Budget. */
+export async function getBudget(opts: ClientOptions, timeoutMs = 8_000): Promise<Budget> {
+  const b = (await request(opts, '/budget', { method: 'GET' }, timeoutMs)) as Partial<Budget> | null
+  const n = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
+  if (!b || typeof b !== 'object' || (b.models !== 'on' && b.models !== 'off') || !n(b.day_used) || !n(b.day_cap) || !n(b.event_used) || !n(b.event_cap))
+    throw new ApiError('Unexpected /budget body', 200, 'invalid_response', b)
+  return b as Budget
 }
 
 export async function postAsk(opts: ClientOptions, req: AskRequest, timeoutMs = 15_000): Promise<AskResponse> {

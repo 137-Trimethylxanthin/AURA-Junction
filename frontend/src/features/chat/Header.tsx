@@ -13,6 +13,7 @@ const PluginsSheet = lazy(() =>
   }))
 )
 import { callsText, fmtUsd, roundCost } from "./view"
+import { BudgetMeter } from "@/features/budget/BudgetMeter"
 
 export function DrawingTitle() {
   const d = useAppStore(selectDrawing)
@@ -89,6 +90,7 @@ export function HeaderActions() {
         </TooltipTrigger>
         <TooltipContent>New conversation</TooltipContent>
       </Tooltip>
+      <BudgetMeter />
       <SessionButton />
       <Button variant="outline" onClick={() => actions().setPluginsOpen(true)}>
         <BlocksIcon data-icon="inline-start" />

@@ -161,7 +161,7 @@ LABELLED = S(r"labell?ed|labeled|named|called|désignation|désignées?|bezeichn
 # Concept → (question synonyms, printed labels that mean it, most specific first).
 LABEL_CONCEPTS: list[tuple[str, re.Pattern[str], list[str]]] = [
     ("bedroom", S(r"chambres? à coucher|bed ?rooms?|makuuhuone|schlafzimmer|camera da letto|"
-                  r"camere da letto|sleep|schlaf|dormir|nukku"),
+                  r"camere da letto"),
      ["Chambre à coucher", "Schlafzimmer", "Camera da letto", "Bedroom", "Chambre", "Zimmer",
       "Pièce", "Stanza"]),
     ("living", S(r"séjour|sejour|living|dining|lounge|olohuone|oleskelu|ruokailu|wohnzimmer|"
@@ -349,6 +349,23 @@ def _scope(text: str, ctx: DrawingCtx | None) -> dict | None:
     return None
 
 
+SELECTOR = S(r"which|most|fewest|least|largest|smallest|biggest|more than|less than|fewer than|"
+             r"at least|at most|quel(?:les?|s)?\b(?!\s+(?:est|sont))|lequel|laquelle|le plus|la plus|les plus|welche[rsn]?|"
+             r"meisten|wenigsten|grösste[rn]?|größte[rn]?|kleinste[rn]?|mehr als|mindestens|mikä(?!\s+on\b)|"
+             r"mitkä(?!\s+ovat\b)|missä|eniten|vähiten|suurin|pienin|enemmän kuin|vähintään|quale|quali|"
+             r"il più|la più|di più|almeno")
+ROOMS_WITH = S(r"(?:rooms?|bedrooms?|pièces?|chambres?|zimmer|räume|huonee?t?)\s+(?:that\s+|which\s+)?"
+               r"(?:with|have|has|having|contain\w*|avec|ayant|mit|joissa|jossa)")
+
+
+def _counts_apartments(s: str) -> bool:
+    """Apartments are what is COUNTED ("how many flats…"), not just the scope ("…in this
+    flat?"): the apartment word must follow the count cue within two words."""
+    c = COUNT.search(s)
+    a = APARTMENT.search(s, c.end()) if c else None
+    return bool(a) and len(s[c.end():a.start()].split()) <= 2
+
+
 def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     s = unicodedata.normalize("NFC", text or "")
     lang, signal = detect_lang(s)
@@ -371,6 +388,12 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     if LENGTH.search(s):
         return Routed("abstain", lang, signal, reason="not_supported_yet", topic="length",
                       matched=["length"])
+
+    # A template answers only a question it accounts for whole: a selector or superlative
+    # ("which bedroom has the most windows?") or a "rooms with/that have X" clause is NOT
+    # "count X"; it goes to the model step (or abstains when models are off).
+    if SELECTOR.search(s) or (ROOMS_WITH.search(s) and not LABELLED.search(s)):
+        return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["needs_model"])
 
     is_area = bool(AREA.search(s))
     is_count = bool(COUNT.search(s))
@@ -397,7 +420,7 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     if is_area:
         return Routed("area", lang, signal, scope=scope, matched=["area"])
 
-    if is_count and APARTMENT.search(s) and not (scope and scope["kind"] == "unit"):
+    if is_count and _counts_apartments(s) and not (scope and scope["kind"] == "unit"):
         return Routed("count", lang, signal, subject="apartment", scope=None,
                       matched=["count", "apartment"])
     if scope and scope["kind"] == "label" and (is_count or ROOM_WORD.search(s)):

@@ -205,29 +205,47 @@ function useEditorCorner(
       else if (reg.bottom - pl.bottom >= H) next = { v: 'bottom', h: 'left' }
       else {
         const r = room?.rect
-        const cx = r ? pl.left + ((r.x + r.w / 2) / 100) * pl.width : reg.left
-        const cy = r ? pl.top + ((r.y + r.h / 2) / 100) * pl.height : reg.top
+        // The edited room on screen, grown by the dimension labels (above and to the right) and the depth handle (below).
+        const rr = r
+          ? {
+              l: pl.left + (r.x / 100) * pl.width - 8,
+              t: pl.top + (r.y / 100) * pl.height - 32,
+              r: pl.left + ((r.x + r.w) / 100) * pl.width + 96,
+              b: pl.top + ((r.y + r.h) / 100) * pl.height + 28,
+            }
+          : null
+        const cx = rr ? (rr.l + rr.r) / 2 : reg.left
+        const cy = rr ? (rr.t + rr.b) / 2 : reg.top
         const corners: Corner[] = [
           { v: 'bottom', h: 'left' },
           { v: 'bottom', h: 'right' },
           { v: 'top', h: 'left' },
           { v: 'top', h: 'right' },
         ]
-        // Distance from the room to the nearest point of the card placed in each corner.
-        const dist = (c: Corner) => {
+        const box = (c: Corner) => {
           const x0 = c.h === 'left' ? reg.left : reg.right - W
           const y0 = c.v === 'top' ? reg.top : reg.bottom - H
-          const dx = Math.max(x0 - cx, 0, cx - (x0 + W))
-          const dy = Math.max(y0 - cy, 0, cy - (y0 + H))
-          return Math.hypot(dx, dy)
+          return { x0, y0, x1: x0 + W, y1: y0 + H }
         }
-        next = corners.reduce((best, c) => (dist(c) > dist(best) + 1 ? c : best))
+        // Never over the room being edited: the least overlap wins, then the corner farthest from the room.
+        const overlap = (c: Corner) => {
+          if (!rr) return 0
+          const b = box(c)
+          return Math.max(0, Math.min(b.x1, rr.r) - Math.max(b.x0, rr.l)) * Math.max(0, Math.min(b.y1, rr.b) - Math.max(b.y0, rr.t))
+        }
+        const dist = (c: Corner) => {
+          const b = box(c)
+          return Math.hypot(Math.max(b.x0 - cx, 0, cx - b.x1), Math.max(b.y0 - cy, 0, cy - b.y1))
+        }
+        const score = (c: Corner) => overlap(c) * 1000 - dist(c)
+        next = corners.reduce((best, c) => (score(c) < score(best) - 1 ? c : best))
       }
       setCorner((cur) => (cur.v === next.v && cur.h === next.h ? cur : next))
     }
     place()
     const ro = new ResizeObserver(place)
     ro.observe(sc)
+    if (cardRef.current) ro.observe(cardRef.current)
     sc.addEventListener('scroll', place, { passive: true })
     return () => {
       ro.disconnect()
@@ -265,7 +283,7 @@ export function WhatIfEditor({
           exit={reduce ? { opacity: 0 } : { opacity: 0, y: dy / 1.5, scale: 0.98, transition: { duration: 0.15 } }}
           transition={reduce ? { duration: 0.15 } : { type: 'spring', duration: 0.35, bounce: 0.12 }}
           style={{ transformOrigin: `${corner.v} ${corner.h}`, [corner.v]: GAP, [corner.h]: GAP }}
-          className="absolute z-40 w-80 max-w-[calc(100%-1.5rem)] rounded-xl border bg-card p-3 text-card-foreground shadow-[0_12px_32px_-8px_color-mix(in_oklch,var(--foreground)_22%,transparent)]"
+          className="absolute z-40 w-72 max-w-[calc(100%-1.5rem)] rounded-xl border bg-card p-3 text-card-foreground shadow-[0_12px_32px_-8px_color-mix(in_oklch,var(--foreground)_22%,transparent)]"
           role="region"
           aria-label={tu('wi_title')}
         >
