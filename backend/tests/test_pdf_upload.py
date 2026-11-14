@@ -250,3 +250,65 @@ def test_corrupt_pdf_fails_cleanly_and_ten_page_pdf_caps_at_eight(tmp_path):
         assert len(proj["floors"]) == 8
         assert c.get(f"/drawings/{ten}-p8/status").json()["status"] == "ready"
         assert c.get(f"/drawings/{ten}-p9/status").status_code == 404
+
+
+# ---- WP7: image detection on PDF pages ---------------------------------------------------------
+
+def _fake_detect_hook(calls: list[str], *, fail: bool = False):
+    """Stands in for main._raster_hook: writes the same raster.json + capabilities, no model call."""
+    import json
+
+    from aura.solvers import raster
+
+    async def hook(drawing_id, out, ctx):
+        calls.append(drawing_id)
+        if fail:
+            raise RuntimeError("model down")
+        items = [{"label": "door", "box_2d": [100, 100, 150, 140]},
+                 {"label": "door", "box_2d": [300, 500, 360, 540]},
+                 {"label": "window", "box_2d": [10, 400, 30, 480]}]
+        boxes = raster.boxes_from_items(items)
+        r = {"boxes": boxes, "counts": {s: len(v) for s, v in boxes.items()}, "items": items,
+             "model": "fake", "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+             "latency_ms": 1}
+        (out / "raster.json").write_text(json.dumps(r))
+        dp = out / "drawing.json"
+        d = json.loads(dp.read_text())
+        d["capabilities"] = list(raster.SUBJECTS)
+        dp.write_text(json.dumps(d))
+
+    return hook
+
+
+def test_pdf_pages_get_image_detection_labelled_as_estimates(tmp_path):
+    with TestClient(make_app(tmp_path)) as c:
+        calls: list[str] = []
+        c.app.state.jobs.after_raster = _fake_detect_hook(calls)
+        did = upload_pdf(c, make_pdf(["Erdgeschoss EG", "Plan 1. OG"]), "Haus.pdf").json()["drawing_id"]
+        st = wait_status(c, did)
+        assert st["status"] == "ready" and not st.get("error"), st
+        assert sorted(calls) == sorted([did, f"{did}-p2"])  # every page of the bundle
+        for fid in (did, f"{did}-p2"):
+            assert c.get(f"/drawings/{fid}").json()["capabilities"] == ["door", "window"]
+            b = c.post("/ask", json={"drawing_id": fid,
+                                     "question": "How many doors are drawn on this floor plan?"}).json()
+            assert b["answer"] == {"kind": "count", "value": 2, "subject": "door"}
+            assert b["method"] == "vision" and "gold" not in b
+            assert len(b["evidence"]["boxes"]) == 2
+            ans = next(n for n in b["trace"] if n["id"] == "answer")
+            assert "Model estimate" in ans["body"]
+
+
+def test_pdf_detection_failure_leaves_the_upload_ready_and_not_indexed(tmp_path):
+    with TestClient(make_app(tmp_path)) as c:
+        calls: list[str] = []
+        c.app.state.jobs.after_raster = _fake_detect_hook(calls, fail=True)
+        did = upload_pdf(c, make_pdf(["Erdgeschoss EG", "Plan 1. OG"]), "Haus.pdf").json()["drawing_id"]
+        st = wait_status(c, did)
+        assert st["status"] == "ready", st
+        assert "Not indexed" in (st.get("error") or "")
+        assert len(calls) == 2
+        for fid in (did, f"{did}-p2"):
+            assert c.get(f"/drawings/{fid}/status").json()["status"] == "ready"
+            assert c.get(f"/drawings/{fid}").json()["capabilities"] == []
+            assert c.get(f"/drawings/{fid}/original.png").status_code == 200
