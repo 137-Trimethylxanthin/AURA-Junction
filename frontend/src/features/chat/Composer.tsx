@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react"
-import { ArrowUpIcon, CrosshairIcon, MicIcon, XIcon } from "lucide-react"
+import { ArrowUpIcon, CrosshairIcon, MicIcon, SparklesIcon, XIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { LOCALE } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -18,6 +18,10 @@ import {
   useAppStore,
 } from "@/store"
 import { speechSupported, useSpeech } from "@/features/voice/useSpeech"
+import { RewriteCard } from "@/features/rewrite/RewriteCard"
+import { needsTidy, splitLocally } from "@/features/rewrite/heuristic"
+import { canRewriteWithModel, useRewrite } from "@/features/rewrite/state"
+import { t } from "@/i18n/strings"
 import { PROMPT_BLOCKS, fillBlock, useDraft } from "./draft"
 import { ScrollRow } from "./ScrollRow"
 import { SuggestionList } from "./Suggestions"
@@ -50,6 +54,17 @@ export function Composer() {
   const [voiceOpen, setVoiceOpen] = useState(false)
   const [canSpeak] = useState(speechSupported)
   const speech = useSpeech(LOCALE[lang])
+  const rewriteOpen = useRewrite((s) => s.status !== "idle")
+  // Re-evaluated when the source changes (the model rewrite needs the API).
+  const sourceKind = useAppStore((s) => s.session.source.kind)
+  const withModel = sourceKind === "api" && canRewriteWithModel()
+  /** What tidy-up can honestly do for this text: the model (any text), or a local split (clear joins only). */
+  const tidyAvailable = (s: string) => s.trim().length >= 12 && (withModel || splitLocally(s).length >= 2)
+  const suggestTidy = !rewriteOpen && tidyAvailable(text) && needsTidy(text)
+  const startTidy = (s: string) => {
+    useDraft.getState().setText("")
+    void useRewrite.getState().start(s)
+  }
 
   // Auto-grow up to MAX_LINES.
   useLayoutEffect(() => {
@@ -107,6 +122,7 @@ export function Composer() {
 
   return (
     <div className="flex flex-col gap-2">
+      <RewriteCard />
       {voiceOpen ? (
         <Suspense fallback={null}>
           <VoiceCard
@@ -117,8 +133,11 @@ export function Composer() {
             onStop={speech.stop}
             onDiscard={closeVoice}
             onUse={() => {
-              useDraft.getState().fill(speech.text)
+              const said = speech.text
               closeVoice()
+              // A transcript is often several questions at once: offer the same confirm card.
+              if (tidyAvailable(said) && needsTidy(said, { fromVoice: true })) startTidy(said)
+              else useDraft.getState().fill(said)
             }}
           />
         </Suspense>
@@ -168,6 +187,19 @@ export function Composer() {
           aria-keyshortcuts="/"
           className="max-h-24 min-h-10 min-w-0 flex-1 resize-none bg-transparent px-2 py-2.5 text-[15px] leading-5 outline-none placeholder:text-muted-foreground focus-visible:outline-none"
         />
+        {!rewriteOpen && tidyAvailable(text) ? (
+          <Button
+            variant={suggestTidy ? "secondary" : "ghost"}
+            size={suggestTidy ? "default" : "icon"}
+            aria-label={t(lang, "rw_offer")}
+            title={withModel ? "Tidy this up with Gemini (1 model request)" : "Split into separate questions (local, no model)"}
+            data-tidy={suggestTidy ? "suggested" : "manual"}
+            onClick={() => startTidy(text)}
+          >
+            <SparklesIcon data-icon={suggestTidy ? "inline-start" : undefined} />
+            {suggestTidy ? t(lang, "rw_offer") : null}
+          </Button>
+        ) : null}
         {canSpeak ? (
           <Button
             variant="ghost"

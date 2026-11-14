@@ -131,7 +131,15 @@ export interface DrawingLoad {
 export const POLL_MS = 1500
 
 export interface AppState {
-  session: { source: SourceStatus; drawing: Drawing; lang: Lang; load: DrawingLoad; conversationId: string | null }
+  session: {
+    source: SourceStatus
+    drawing: Drawing
+    lang: Lang
+    load: DrawingLoad
+    conversationId: string | null
+    /** Model use outside answers (e.g. /rewrite), counted in the session total. */
+    spend: { calls: number; cost_usd: number }
+  }
   turns: Turn[]
   ui: {
     activeTurnId: string | null
@@ -163,6 +171,8 @@ export interface AppState {
   restoreConversation(): Promise<void>
   /** Forget the conversation: a fresh start on the same drawing. */
   newConversation(): void
+  /** Record model use that is not part of an answer (a rewrite), so the session total stays honest. */
+  addSpend(calls: number, cost_usd: number): void
   setActive(turnId: string | null): void
   setListOpen(turnId: string, open: boolean): void
   toggleCanonical(turnId: string): void
@@ -276,6 +286,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         lang: 'en',
         load: { id: initial.id, state: 'ready' },
         conversationId: null,
+        spend: { calls: 0, cost_usd: 0 },
       },
       turns: [],
       ui: freshUi(),
@@ -455,6 +466,15 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
           turns,
           session: { ...st.session, conversationId: conv.id },
           ui: { ...st.ui, activeTurnId: last?.id ?? null },
+        }))
+      },
+
+      addSpend(calls, cost_usd) {
+        set((st) => ({
+          session: {
+            ...st.session,
+            spend: { calls: st.session.spend.calls + calls, cost_usd: st.session.spend.cost_usd + cost_usd },
+          },
         }))
       },
 

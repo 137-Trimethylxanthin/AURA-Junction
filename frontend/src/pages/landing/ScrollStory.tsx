@@ -72,7 +72,7 @@ function useSteps(): StepText[] {
         <>
           A zoomed tile around every box of one kind goes to the Gemini
           Decisions API in one request: {check.value} on average ({check.n}{" "}
-          requests, 710 boxes; 707 agreed).
+          requests, 710 boxes; 708 agreed).
         </>
       ) : (
         "A zoomed tile around every box of one kind goes to the Gemini Decisions API in one request."

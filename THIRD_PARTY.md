@@ -22,7 +22,7 @@ Versions are those in `backend/uv.lock` at the time of writing. Licences are rea
 | google-genai | 3.3.0 | Apache-2.0 |
 | fastmcp | 4.2.0 | Apache-2.0 |
 | modal | 1.6.4 | Apache-2.0 |
-| ifcopenshell (optional extra `ifc`) | 0.9.0 | LGPL-3.0-or-later; used as an imported library, not modified or vendored |
+| ifcopenshell (optional extra `ifc`) | 0.9.0 | LGPL-3.0-or-later; used as an imported library, not modified or vendored, only in local preprocessing and the eval (not in the served app) |
 | pytest, pytest-asyncio, ruff (dev only) | 9.2.0, 1.5.0, 0.17.5 | MIT, Apache-2.0, MIT |
 
 Regenerate: `cd backend && uv pip list`, then check each package's `importlib.metadata` licence fields.
@@ -37,8 +37,19 @@ Fonts (SIL OFL-1.1, via `@fontsource-variable`): Inter, JetBrains Mono.
 
 ## Data
 
-- **Swiss Dwellings v3.0.0**, by Matthias Standfest et al. (Archilyse AG), doi:10.5281/zenodo.7788422, licence CC BY 4.0. The bundled drawings (`frontend/public/drawings/`, `design/assets/`) are rendered from its geometry. Labels and numbering are synthetic. Credit text: `design/assets/LICENSE.md`.
-- **CubiCasa5k** is CC BY-NC-SA 4.0. It is used locally for evaluation only and is **not redistributed**: no CubiCasa image, derived image or annotation is committed (`.omc/research/gemini/experiments/` is git-ignored for this reason).
+- **Swiss Dwellings v3.0.0**, by Matthias Standfest, Michael Franzen, Yvonne Schröder, Luis Gonzalez Medina, Yarilo Villanueva Hernandez, Jan Hendrik Buck, Yen-Ling Tan, Milena Niedzwiecka, Rachele Colmegna (Archilyse AG), https://doi.org/10.5281/zenodo.7788422, licence [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changes: the drawings (`frontend/public/drawings/`, `design/assets/`) were rendered by us from the published geometry, with drawing style, room and unit numbers, room names in an assigned language and a title block added; labels and numbering are synthetic. Archilyse AG does not endorse these drawings. Credit text: `design/assets/LICENSE.md`.
+- **IFC library models** (source: `data/junction-dataset/data/ifc_models/LICENSE.md`; a 2D storey plan is rendered from each model with IfcOpenShell, geometry unmodified; the KIT licence is "for unrestricted use", the BIM-Speed model is CC BY 4.0, both allow rendered derivatives with credit):
+
+  | File | Title | Licence | Credit and source |
+  |---|---|---|---|
+  | `kit-fzk-haus_ac20-fzk-haus.ifc` | FZK-Haus (Simple Phantasy Building) | KIT, "for unrestricted use" (LicenseRef-KIT-unrestricted) | Institute for Automation and Applied Informatics (IAI) / Karlsruhe Institute of Technology (KIT), KIT IFC Examples. https://www.ifcwiki.org/index.php?title=KIT_IFC_Examples&oldid=552 |
+  | `kit-institute_ac20-institute-var-2.ifc` | Buerogebaeude (Phantasy Office Building, AC20-Institute-Var-2) | as above | as above |
+  | `kit-smiley-west_ac-20-smiley-west-10-bldg.ifc` | Smiley West (terraced houses) | as above | as above |
+  | `bimspeed-warmond_ar.ifc` | BIM-Speed Warmond demo site (baseline) | CC BY 4.0 | Garcia, Ana Galegos; Hartmann, Timo (2022): BIM-Speed Demonstration Projects - BIM and BEM models. TU Berlin DepositOnce, https://doi.org/10.14279/depositonce-16441.2 (EU H2020 BIM-SPEED, grant 820553). https://depositonce.tu-berlin.de/items/735d547e-789a-4124-ad49-6a24f67cacdf |
+
+  The buildingSMART Duplex and Medical-Dental Clinic models are published under CC BY 4.0 today and were originally CC BY-ND 3.0; the dataset applies the stricter CC BY-ND 3.0. We use them only in accuracy eval counts, unchanged, and distribute no rendered or derived output from them.
+  Other IFC models in the dataset (e.g. IFC-Bench v2, which includes GPL-3.0 BIMserver.org models) are not used or distributed by AURA.
+- **CubiCasa5K**, Copyright (c) 2019 CubiCasa; Kalervo, Ylioinas, Häikiö, Karhu, Kannala, "CubiCasa5K: A Dataset and an Improved Multi-Task Model for Floorplan Image Analysis", SCIA 2019, https://zenodo.org/records/2613548. The GitHub repository states CC BY-NC 4.0 and the Zenodo record CC BY-NC-SA 4.0; we apply the stricter CC BY-NC-SA 4.0 (non-commercial, share-alike). It is used locally for evaluation only. No CubiCasa image, annotation or derived image is committed (`.omc/research/gemini/experiments/` is git-ignored). The repository does contain aggregate evaluation numbers derived from it (`backend/eval/results/cubicasa.json`, `facts.json`); these are statistics, not CubiCasa content. Whether aggregate statistics count as "adapted material" under CC BY-NC-SA is unverified (we believe not).
 - The Stoa challenge dataset (`data/`, 12 GB) is git-ignored and not redistributed.
 
 ## Services

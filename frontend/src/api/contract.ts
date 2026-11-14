@@ -57,6 +57,7 @@ export interface PctRect {
 export type TextBoxSubject = 'label' | 'fire_rating'
 export type BoxSubjectAny = Subject | TextBoxSubject
 const BOX_SUBJECTS: readonly BoxSubjectAny[] = [...SUBJECTS, 'label', 'fire_rating']
+export const BOX_SUBJECT_NAMES: readonly BoxSubjectAny[] = BOX_SUBJECTS
 
 export interface Box extends PctRect {
   /** win-01…, door-01…, basin-01…, wc-01…, text-01…; stable across calls, reading order. */

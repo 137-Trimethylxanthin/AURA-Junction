@@ -29,10 +29,11 @@ export function DrawingTitle() {
 
 function SessionButton() {
   const turns = useAppStore((s) => s.turns)
+  const spend = useAppStore((s) => s.session.spend)
   const active = useAppStore(selectActiveTurn)
   const { calls, cost } = useMemo(() => {
-    let calls = 0
-    let cost = 0
+    let calls = spend.calls
+    let cost = roundCost(spend.cost_usd)
     for (const t of turns)
       if (t.role === "agent" && t.response) {
         // The answer's own calls plus its check's requests (contract 1.1 reports them separately).
@@ -42,7 +43,7 @@ function SessionButton() {
           roundCost(t.response.check?.cost_usd ?? 0)
       }
     return { calls, cost }
-  }, [turns])
+  }, [turns, spend])
   const canOpen = !!active?.response
   return (
     <Button

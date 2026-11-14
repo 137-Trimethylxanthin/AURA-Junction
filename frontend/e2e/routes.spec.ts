@@ -95,3 +95,22 @@ test('a ?presenter= link stores the token and is removed from the address bar', 
   await expect(page).toHaveURL('/app?x=1')
   expect(await page.evaluate(() => localStorage.getItem('aura.presenter'))).toBe('tok-123')
 })
+
+test('without a server, two clear questions are split locally (no model) and asked on confirm', async ({ page }) => {
+  await page.goto(SAMPLE)
+  await composerOf(page).fill('How many windows? How big is room 3.04?')
+  await page.locator('[data-tidy="suggested"]').click()
+  const card = page.locator('[data-rewrite-card="local"]')
+  await expect(card.locator('[data-rewrite-cost]')).toHaveText('Split locally, no model')
+  await expect(card.locator('[data-rewrite-block]')).toHaveCount(2)
+  await expect(page.locator('article[data-turn]')).toHaveCount(0)
+  await card.getByRole('button', { name: 'Ask all' }).click()
+  await expect(page.locator('article[data-turn] [data-answer-value]')).toHaveCount(2)
+  await expect(card).toHaveCount(0)
+})
+
+test('without a server, one plain question offers no tidy-up', async ({ page }) => {
+  await page.goto(SAMPLE)
+  await composerOf(page).fill('How many windows are drawn on this floor plan?')
+  await expect(page.locator('[data-tidy]')).toHaveCount(0)
+})

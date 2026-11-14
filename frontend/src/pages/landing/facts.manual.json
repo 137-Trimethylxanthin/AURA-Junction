@@ -9,7 +9,7 @@
       "n": 36,
       "n_unit": "requests",
       "model_calls": 36,
-      "scope": "The 12 library drawings, one request each for windows, doors and washbasins: 710 evidence boxes, 707 agreed with the model",
+      "scope": "The 12 library drawings, one request each for windows, doors and washbasins: 710 evidence boxes, 708 agreed with the model",
       "method": "Gemini Decisions API, 448,607 input tokens and $0.04486 in total; $0.0002 to $0.0040 per request",
       "measured": "2026-11-14",
       "caveat": "Average per request, truncated. “Agreed” means the model agreed with the solver’s boxes; it is not a measured accuracy of the check."
