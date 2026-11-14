@@ -1,4 +1,4 @@
-import type { AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
+import type { AgentFailure, AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
 import { LOCALE, fmtArea, fmtCount, noun } from '@/lib/format'
 import { t, type StringKey, type UiKey } from '@/i18n/strings'
@@ -593,21 +593,9 @@ export function resolveSlashCommand(input: string, ctx: { hasTurns: boolean }): 
 }
 
 
-export type AgentFailure = 'unavailable' | 'timeout' | 'error'
+export type { AgentFailure } from '@/api/contract'
 
-/**
- * A deep-agent run that failed (service down, deadline, run error) arrives as a `low_confidence` abstain with no
- * estimate. Prefers an explicit `agent_failure` field when the backend sends one; otherwise reads the backend's
- * fixed "look" trace wording. Never returns the raw text: the card shows its own translated copy.
- */
+/** A failed deep-agent run (service down, deadline, run error), as the backend labels it in `agent_failure`. */
 export function agentFailure(resp: AskResponse): AgentFailure | null {
-  const a = resp.answer
-  if (a.kind !== 'abstain' || a.reason !== 'low_confidence' || resp.estimate) return null
-  const explicit = (resp as { agent_failure?: unknown }).agent_failure
-  if (explicit === 'unavailable' || explicit === 'timeout' || explicit === 'error') return explicit
-  const look = resp.trace.find((n) => n.id === 'look')?.body ?? ''
-  if (/service is unavailable/i.test(look)) return 'unavailable'
-  if (/did not finish in/i.test(look)) return 'timeout'
-  if (/could not complete this run/i.test(look)) return 'error'
-  return null
+  return resp.answer.kind === 'abstain' ? (resp.agent_failure ?? null) : null
 }

@@ -786,25 +786,28 @@ describe('1.2 BoxCropThumb, AgentCard, and DrawingTitle DOM verification', () =>
 })
 
 describe('agentFailure', () => {
-  const failed = (look: string, extra: Record<string, unknown> = {}) =>
+  const failed = (extra: Record<string, unknown> = {}) =>
     ({
       answer: { kind: 'abstain', reason: 'low_confidence' },
       method: 'none',
       route: 'agent',
-      trace: [{ id: 'look', title: 'Look for the data', tag: 'drawing', body: look, kind: 'warn' }],
+      trace: [{ id: 'look', title: 'Look for the data', tag: 'drawing', body: 'The deep agent service is unavailable.', kind: 'warn' }],
       ...extra,
     }) as unknown as AskResponse
 
-  it('tells unavailable, timeout and run errors apart without exposing the text', () => {
-    expect(agentFailure(failed('The deep agent service is unavailable (ConnectError http://x); nothing guessed.'))).toBe('unavailable')
-    expect(agentFailure(failed('The agent did not finish in 61 s; nothing guessed.'))).toBe('timeout')
-    expect(agentFailure(failed('The deep agent could not complete this run (boom).'))).toBe('error')
-    expect(agentFailure(failed('anything', { agent_failure: 'timeout' }))).toBe('timeout')
+  it('reads the backend label, for each failure kind', () => {
+    for (const kind of ['unavailable', 'timeout', 'error'] as const) expect(agentFailure(failed({ agent_failure: kind }))).toBe(kind)
   })
 
-  it('leaves real low-confidence abstains alone', () => {
-    expect(agentFailure(failed("The agent's confidence (0.31) is below the 0.50 threshold; nothing guessed."))).toBeNull()
-    expect(agentFailure(failed('x', { estimate: { confidence: 0.4 } }))).toBeNull()
+  it('never parses the trace wording: no field, no failure card', () => {
+    expect(agentFailure(failed())).toBeNull()
+    expect(agentFailure(failed({ estimate: { confidence: 0.4 } }))).toBeNull()
+  })
+
+  it('the contract accepts the field and rejects unknown values', () => {
+    const r = askLocalForFooter({ drawing_id: bundledDrawing.id, question: 'how many windows' })
+    expect(isAskResponse({ ...r, agent_failure: 'timeout' })).toBe(true)
+    expect(isAskResponse({ ...r, agent_failure: 'exploded' })).toBe(false)
   })
 })
 

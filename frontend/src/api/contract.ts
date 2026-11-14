@@ -514,7 +514,11 @@ export interface AskResponse {
    * `measured` = how often such answers were right. Below 0.6: abstain 'low_confidence' with `probabilities`.
    */
   estimate?: { confidence: number; probabilities?: Record<string, number>; measured?: { correct: number; n: number; source: string } }
+  /** Set only on the abstain of a failed deep-agent run: service down, deadline, or the run returned no answer. */
+  agent_failure?: AgentFailure
 }
+
+export type AgentFailure = 'unavailable' | 'timeout' | 'error'
 
 /** `POST /chat` body (1.1); the response is `text/event-stream`. */
 export interface ChatRequest {
@@ -884,7 +888,8 @@ export function isAskResponse(v: unknown): v is AskResponse {
     optStr(v.conversation_id) &&
     optStr(v.turn_id) &&
     (v.route === undefined || isOneOf(v.route, ['template', 'choice', 'agent', 'cache'] as const)) &&
-    optStr(v.explanation)
+    optStr(v.explanation) &&
+    (v.agent_failure === undefined || isOneOf(v.agent_failure, ['unavailable', 'timeout', 'error'] as const))
   )
 }
 
