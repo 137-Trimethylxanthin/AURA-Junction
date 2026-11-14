@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useInRouterContext, useNavigate, type NavigateFunction } from 'react-router'
-import { LayersIcon } from 'lucide-react'
+import { ChevronDownIcon, ChevronUpIcon, LayersIcon } from 'lucide-react'
+import { motion, useReducedMotion } from 'motion/react'
 import { getDrawing } from '@/api/client'
 import type { Drawing } from '@/api/contract'
 import { apiUrl, myProjects } from '@/api/library'
@@ -17,6 +18,13 @@ import {
   type GroupedRoom,
   type ProjectBundleLike,
 } from './badges'
+
+const RAIL_COPY: Record<'en' | 'fr' | 'fi' | 'de', { floorUp: string; floorDown: string }> = {
+  en: { floorUp: 'Floor up', floorDown: 'Floor down' },
+  fr: { floorUp: 'Étage supérieur', floorDown: 'Étage inférieur' },
+  fi: { floorUp: 'Kerros ylös', floorDown: 'Kerros alas' },
+  de: { floorUp: 'Stockwerk hoch', floorDown: 'Stockwerk runter' },
+}
 
 function RouterNavSink({ navRef }: { navRef: React.RefObject<NavigateFunction | null> }) {
   const nav = useNavigate()
@@ -58,7 +66,8 @@ export function FloorSwitcher({ project: projectProp, onNavigateFloor }: FloorSw
   const sourceKind = useAppStore((s) => s.session.source.kind)
   const turn = useActiveTurn()
   const { lang } = useUi()
-  const copy = STAGE_COPY[lang]
+  const copy = { ...STAGE_COPY[lang], ...RAIL_COPY[lang] }
+  const reduced = useReducedMotion() ?? false
 
   const inRouter = useInRouterContext()
   const navRef = useRef<NavigateFunction | null>(null)
@@ -173,17 +182,33 @@ export function FloorSwitcher({ project: projectProp, onNavigateFloor }: FloorSw
   if (floors.length < 2) return null
 
   const multiFloorHits = [...hitsByFloor.keys()].some((fid) => fid !== drawingId)
+  const curIdx = floors.findIndex((f) => f.drawing_id === drawingId)
+  // Highest floor first, the way a building and a lift panel read.
+  const topDown = floors.map((f, i) => ({ f, level: i + 1 })).reverse()
+  const step = (delta: 1 | -1) => {
+    const next = floors[curIdx + delta]
+    if (next) switchFloor(next.drawing_id)
+  }
 
   return (
-    <div
-      role="navigation"
+    <nav
       aria-label={copy.floorSwitcherAria}
       data-floor-switcher=""
-      className="pointer-events-auto absolute top-3 left-1/2 z-30 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-xl border bg-background/95 p-1 shadow-sm backdrop-blur-xs"
+      className="floor-rail pointer-events-auto absolute top-1/2 left-3 z-30 flex max-h-[calc(100%-1.5rem)] -translate-y-1/2 flex-col gap-1 rounded-2xl p-1.5"
     >
       {inRouter ? <RouterNavSink navRef={navRef} /> : null}
-      <div className="flex items-center gap-0.5" role="group" aria-label={project?.title || copy.floorSwitcherAria}>
-        {floors.map((floor) => {
+      <button
+        type="button"
+        className="floor-rail-step"
+        onClick={() => step(1)}
+        disabled={curIdx < 0 || curIdx >= floors.length - 1}
+        aria-label={copy.floorUp}
+        title={`${copy.floorUp} (Alt+↑)`}
+      >
+        <ChevronUpIcon aria-hidden className="size-4" />
+      </button>
+      <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto" role="group" aria-label={project?.title || copy.floorSwitcherAria}>
+        {topDown.map(({ f: floor, level }) => {
           const active = floor.drawing_id === drawingId
           const count = hitsByFloor.get(floor.drawing_id) ?? 0
           const showCount = count > 0 && (!active || multiFloorHits)
@@ -194,24 +219,32 @@ export function FloorSwitcher({ project: projectProp, onNavigateFloor }: FloorSw
               data-floor-id={floor.drawing_id}
               aria-current={active ? 'page' : undefined}
               onClick={() => switchFloor(floor.drawing_id)}
+              title={floor.label}
               className={cn(
-                'flex h-10 min-h-10 min-w-10 shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition-colors outline-none',
+                'floor-rail-item relative flex h-10 min-h-10 shrink-0 items-center gap-2 rounded-xl pr-3 pl-2 text-xs whitespace-nowrap outline-none',
                 'focus-visible:ring-3 focus-visible:ring-ring/60',
-                active
-                  ? 'bg-primary text-primary-foreground shadow-xs'
-                  : 'text-foreground hover:bg-muted',
+                active ? 'text-primary-foreground' : 'text-foreground',
               )}
             >
-              <span>{floor.label}</span>
-              {active && !showCount ? (
-                <span aria-hidden="true" className="size-1.5 rounded-full bg-primary-foreground" />
+              {active ? (
+                <motion.span
+                  layoutId={reduced ? undefined : 'floor-rail-active'}
+                  aria-hidden
+                  className="absolute inset-0 rounded-xl bg-primary shadow-sm"
+                  transition={{ type: 'spring', bounce: 0, duration: 0.35 }}
+                />
               ) : null}
+              <SlabIcon active={active} />
+              <span className={cn('num relative w-6 text-left font-semibold', active ? 'opacity-80' : 'text-muted-foreground')}>
+                L{level}
+              </span>
+              <span className="relative max-w-32 truncate font-medium">{floor.label}</span>
               {showCount ? (
                 <span
                   data-floor-hits={count}
                   className={cn(
-                    'num rounded-full px-1.5 py-0.5 text-xs leading-none font-semibold',
-                    active ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-info-surface text-info',
+                    'num relative ml-auto rounded-full px-1.5 py-0.5 text-xs leading-none font-semibold',
+                    active ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-info text-white',
                   )}
                 >
                   {count}
@@ -221,23 +254,42 @@ export function FloorSwitcher({ project: projectProp, onNavigateFloor }: FloorSw
           )
         })}
       </div>
-      <div aria-hidden="true" className="mx-0.5 h-5 w-px shrink-0 bg-border" />
+      <button
+        type="button"
+        className="floor-rail-step"
+        onClick={() => step(-1)}
+        disabled={curIdx <= 0}
+        aria-label={copy.floorDown}
+        title={`${copy.floorDown} (Alt+↓)`}
+      >
+        <ChevronDownIcon aria-hidden className="size-4" />
+      </button>
+      <div aria-hidden="true" className="mx-1 h-px shrink-0 bg-foreground/10" />
       <button
         type="button"
         data-cross-plan-toggle=""
         aria-pressed={crossPlanScope}
         onClick={toggleCrossPlan}
+        title={copy.allFloors(floors.length)}
         className={cn(
-          'flex h-10 min-h-10 min-w-10 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium whitespace-nowrap transition-colors outline-none',
+          'flex h-10 min-h-10 shrink-0 items-center gap-2 rounded-xl px-2.5 text-xs font-medium whitespace-nowrap transition-colors outline-none',
           'focus-visible:ring-3 focus-visible:ring-ring/60',
-          crossPlanScope
-            ? 'border-user bg-user text-primary-foreground shadow-xs hover:bg-user/90'
-            : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground',
+          crossPlanScope ? 'bg-user text-primary-foreground shadow-xs hover:bg-user/90' : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground',
         )}
       >
-        <LayersIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        <LayersIcon aria-hidden="true" className="size-4 shrink-0" />
         <span>{copy.allFloors(floors.length)}</span>
       </button>
-    </div>
+    </nav>
+  )
+}
+
+/** A floor slab seen from above at an angle: the building-level metaphor in 18 px. */
+function SlabIcon({ active }: { active: boolean }) {
+  return (
+    <svg aria-hidden viewBox="0 0 22 14" className="relative h-3.5 w-[22px] shrink-0">
+      <path d="M11 1 21 6 11 11 1 6Z" fill="currentColor" opacity={active ? 0.95 : 0.18} />
+      <path d="M1 6v2l10 5 10-5V6l-10 5Z" fill="currentColor" opacity={active ? 0.55 : 0.32} />
+    </svg>
   )
 }

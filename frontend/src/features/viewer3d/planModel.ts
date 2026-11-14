@@ -39,6 +39,8 @@ export interface PlanModel {
   group: THREE.Group
   /** Footprint size in metres (x, z) and the radius used to frame the camera. */
   size: { w: number; d: number; radius: number }
+  /** Centre of the drawn content relative to the centre of the drawing frame, in metres (x, 0, z). */
+  contentCenter: THREE.Vector3
   rooms: RoomHandle[]
   setWallHeight(h: number): void
   setHighlight(state: { evidence: Set<string>; hovered: string | null; selected: string | null }): void
@@ -207,6 +209,7 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
     })
     const lineGeo = track(new THREE.BufferGeometry().setFromPoints(linePts))
     const lineMat = track(new THREE.LineBasicMaterial({ color: COLORS.selected, transparent: true, opacity: 0 }))
+    lineMat.userData.v3dDynamic = true // its opacity is driven by setHighlight, not by a building fade
     const outline = new THREE.LineLoop(lineGeo, lineMat)
     group.add(outline)
 
@@ -365,6 +368,7 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
   const model: PlanModel = {
     group: root,
     size: { w, d, radius: Math.hypot(w, d) / 2 },
+    contentCenter: new THREE.Vector3(center.x, 0, center.z),
     rooms,
     toWorld,
     setWallHeight(h) {

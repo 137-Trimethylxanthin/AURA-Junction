@@ -1,5 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
-import { BoxIcon, ImageUpIcon, InfoIcon, RotateCcwIcon, Rotate3dIcon, SquareIcon, TagIcon, Undo2Icon, XIcon } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useNavigate } from 'react-router'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import {
+  BoxIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ImageUpIcon,
+  InfoIcon,
+  LayersIcon,
+  RotateCcwIcon,
+  Rotate3dIcon,
+  SquareIcon,
+  TagIcon,
+  Undo2Icon,
+  XIcon,
+} from 'lucide-react'
 import type { Box, Drawing } from '@/api/contract'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
@@ -11,7 +26,10 @@ import { useUi } from '@/i18n/uiLang'
 import { isBoxRejected, isRoomIncluded } from '@/lib/answer'
 import { fmtArea } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { myProjects } from '@/api/library'
+import { readActiveProject, resolveProjectForDrawing } from '@/features/plan/badges'
 import { actions, selectIsPending, useActiveTurn, useAppStore } from '@/store'
+import { buildBuilding, type BuildingModel, type FloorEvidence, type FloorInput, type StackMode } from './buildingModel'
 import { Engine, type CameraPreset } from './engine'
 import { buildImageModel, type ImageMode, type ImageModel } from './imageModel'
 import { DEFAULT_WALL_H, buildPlanModel, type PlanModel } from './planModel'
@@ -21,7 +39,13 @@ import './viewer3d.css'
 /** What is on screen: the open drawing, or an image the user dropped in (kept in the browser only). */
 type Source = { kind: 'drawing' } | { kind: 'file'; name: string; url: string }
 
-type Status = { state: 'loading' } | { state: 'ready'; model: 'plan' | 'image' } | { state: 'error'; message: string }
+type Status =
+  | { state: 'loading' }
+  | { state: 'ready'; model: 'plan' | 'image' | 'building' }
+  | { state: 'error'; message: string }
+
+type AnyModel = PlanModel | ImageModel | BuildingModel
+const isBuilding = (m: AnyModel | null): m is BuildingModel => !!m && 'floorIds' in m
 
 /** An image without a known scale is shown 20 m wide: a house-sized sheet, so default wall heights look plausible. */
 const ASSUMED_SHEET_M = 20
@@ -50,6 +74,17 @@ function loadImage(url: string, cors: boolean): Promise<HTMLImageElement> {
 }
 
 /** Builds the plan model from plan.svg when the drawing has one with walls; otherwise null (use the image). */
+/** One floor (or a single drawing): the CAD/IFC plan when there is one, else the image extruded as walls. */
+async function floorModel(drawing: Drawing, signal: AbortSignal, stroke: number): Promise<PlanModel | ImageModel> {
+  const plan = await tryPlan(drawing, signal)
+  if (plan) return plan
+  const img = await loadImage(drawing.images.rebuilt, true)
+  const widthM = drawing.m_per_pct_x > 0 ? drawing.m_per_pct_x * 100 : ASSUMED_SHEET_M
+  const m = buildImageModel(img, { widthM, minStroke: stroke })
+  m.setMode('walls')
+  return m
+}
+
 async function tryPlan(drawing: Drawing, signal: AbortSignal): Promise<PlanModel | null> {
   const url = drawing.images.rebuilt
   if (!/\.svg(\?|$)/i.test(url) && drawing.kind === 'raster') return null
@@ -66,10 +101,30 @@ export default function Viewer3D() {
   const askLang = useAppStore((s) => s.session.lang)
   const pending = useAppStore(selectIsPending)
   const turn = useActiveTurn()
+  const navigate = useNavigate()
+  const reducedMotion = useReducedMotion() ?? false
+
+  // The building this drawing belongs to (2+ floors), lowest floor first.
+  const storeProject = useAppStore(readActiveProject)
+  const [projRev, setProjRev] = useState(0)
+  useEffect(() => myProjects.subscribe(() => setProjRev((r) => r + 1)), [])
+  const project = useMemo(() => {
+    void projRev
+    return resolveProjectForDrawing(storeProject, drawing.id)
+  }, [storeProject, drawing.id, projRev])
+  const floorList = useMemo(
+    () => (project && project.floors.length >= 2 ? [...project.floors].sort((a, b) => a.order - b.order) : null),
+    [project],
+  )
+  const buildingKey = floorList ? `${project!.id}:${floorList.map((f) => f.drawing_id).join(',')}` : null
+  const drawingRef = useRef(drawing)
+  useLayoutEffect(() => {
+    drawingRef.current = drawing
+  }, [drawing])
 
   const hostRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<Engine | null>(null)
-  const modelRef = useRef<PlanModel | ImageModel | null>(null)
+  const modelRef = useRef<AnyModel | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Checked once up front; an engine that still fails to start shows the same message.
@@ -89,6 +144,24 @@ export default function Viewer3D() {
   const [selected, setSelected] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
+  // Building view: the whole exploded stack, or one floor in focus.
+  const [stackMode, setStackMode] = useState<StackMode>('stack')
+  const [floorHover, setFloorHover] = useState<string | null>(null)
+
+  /** Go to a floor: focus it in 3D and make it the app's current drawing (chat and 2D follow). */
+  const goFloor = useCallback(
+    (id: string) => {
+      setStackMode('floor')
+      setFloorHover(null)
+      if (id !== drawingRef.current.id) void navigate(`/d/${encodeURIComponent(id)}`)
+    },
+    [navigate],
+  )
+  const goFloorRef = useRef(goFloor)
+  useLayoutEffect(() => {
+    goFloorRef.current = goFloor
+  }, [goFloor])
+  const invalidate = () => engineRef.current?.invalidate()
 
   // ---- engine lifetime ----
   useEffect(() => {
@@ -103,6 +176,8 @@ export default function Viewer3D() {
       return () => cancelAnimationFrame(id)
     }
     engineRef.current = engine
+    // Dev-only handle for debugging and Playwright (frame state, springs).
+    if (import.meta.env.DEV) (window as unknown as { __v3d?: Engine }).__v3d = engine
     return () => {
       engine.dispose()
       engineRef.current = null
@@ -114,19 +189,50 @@ export default function Viewer3D() {
     const engine = engineRef.current
     if (!engine) return
     const ac = new AbortController()
-    let model: PlanModel | ImageModel | null = null
+    let model: AnyModel | null = null
     setStatus({ state: 'loading' })
     setSelected(null)
     setHovered(null)
     ;(async () => {
       try {
-        if (source.kind === 'drawing') {
-          model = await tryPlan(drawing, ac.signal)
-          if (!model) {
-            const img = await loadImage(drawing.images.rebuilt, true)
-            const widthM = drawing.m_per_pct_x > 0 ? drawing.m_per_pct_x * 100 : ASSUMED_SHEET_M
-            model = buildImageModel(img, { widthM, minStroke: stroke })
+        const drawing = drawingRef.current
+        if (source.kind === 'drawing' && floorList) {
+          // Every floor of the building, fetched in parallel (cached floors switch instantly afterwards).
+          const loaded = await Promise.all(
+            floorList.map(async (f): Promise<FloorInput | null> => {
+              try {
+                const d = f.drawing_id === drawing.id ? drawing : await actions().warmDrawing(f.drawing_id)
+                if (!d) return null
+                return { id: f.drawing_id, label: f.label, drawing: d, model: await floorModel(d, ac.signal, stroke) }
+              } catch {
+                return null
+              }
+            }),
+          )
+          const inputs = loaded.filter((x): x is FloorInput => !!x)
+          if (ac.signal.aborted) {
+            for (const i of inputs) i.model.dispose()
+            return
           }
+          if (inputs.length >= 2) {
+            const b = buildBuilding(inputs, {
+              onFloorClick: (id) => goFloorRef.current(id),
+              onFloorHover: (id) => setFloorHover(id),
+              reducedMotion,
+            })
+            model = b
+            modelRef.current = b
+            setStackMode('stack')
+            b.setMode('stack', drawing.id)
+            engine.show(b, wallH, false, b.framing('stack', drawing.id), 24)
+            setPreset('persp')
+            setStatus({ state: 'ready', model: 'building' })
+            return
+          }
+          for (const i of inputs) i.model.dispose()
+        }
+        if (source.kind === 'drawing') {
+          model = await floorModel(drawing, ac.signal, stroke)
         } else {
           const img = await loadImage(source.url, false)
           model = buildImageModel(img, { widthM: ASSUMED_SHEET_M, minStroke: stroke })
@@ -142,7 +248,7 @@ export default function Viewer3D() {
           m.setRelief(relief / 100)
           m.setMode(mode)
         }
-        engine.show(model, wallH, true)
+        engine.show(model as PlanModel | ImageModel, wallH, true)
         setPreset('persp')
         setStatus({ state: 'ready', model: isImage ? 'image' : 'plan' })
       } catch (e) {
@@ -158,22 +264,50 @@ export default function Viewer3D() {
         if (modelRef.current === model) modelRef.current = null
       }
     }
-    // Rebuild only when what is shown changes; sliders update the live model below.
+    // Rebuild only when what is shown changes: the building (not the floor within it), a single drawing, or a file.
+    // Sliders and the current floor update the live model below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawing, source])
+  }, [buildingKey ?? drawing, source])
+
+  // ---- building: mode and current floor drive the stack and the camera ----
+  const framedRef = useRef('')
+  useEffect(() => {
+    const m = modelRef.current
+    if (status.state !== 'ready' || !isBuilding(m)) return
+    m.setMode(stackMode, drawing.id)
+    const key = `${stackMode}:${stackMode === 'floor' ? drawing.id : ''}`
+    if (framedRef.current !== key) {
+      // The first framing comes from show(); after that every mode or floor change glides the camera there.
+      if (framedRef.current) engineRef.current?.goTo(preset, m.framing(stackMode, drawing.id))
+      framedRef.current = key
+    }
+    setSelected(null)
+    invalidate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stackMode, drawing.id, status])
+  useEffect(() => {
+    if (status.state !== 'ready') framedRef.current = ''
+  }, [status])
+  useEffect(() => {
+    const m = modelRef.current
+    if (isBuilding(m)) m.setHover(stackMode === 'stack' ? floorHover : null)
+    invalidate()
+     
+  }, [floorHover, stackMode, status])
 
   // ---- live settings ----
-  const invalidate = () => engineRef.current?.invalidate()
   useEffect(() => engineRef.current?.setWallHeight(wallH), [wallH])
   useEffect(() => engineRef.current?.setSpin(spin), [spin])
   useEffect(() => {
     const m = modelRef.current
-    if (m && 'setLabels' in m) m.setLabels(labels)
+    if (isBuilding(m)) m.setRoomLabels(labels)
+    else if (m && 'setLabels' in m) m.setLabels(labels)
     invalidate()
+     
   }, [labels, status])
   useEffect(() => {
     const m = modelRef.current
-    if (m && 'setMode' in m) m.setMode(imageMode)
+    if (m && !isBuilding(m) && 'setMode' in m) m.setMode(imageMode)
     invalidate()
   }, [imageMode, status])
   useEffect(() => {
@@ -193,38 +327,86 @@ export default function Viewer3D() {
   // Keyed on content: a streaming answer makes a new turn object per token, which must not rebuild the pins.
   const roomIds = !ev || !turn ? [] : ev.rooms.filter((r) => isRoomIncluded(r, turn.toggles)).map((r) => r.room_id)
   const roomKey = roomIds.join('|')
-  const evidenceRooms = useMemo(() => new Set(roomKey ? roomKey.split('|') : []), [roomKey])
+  const evidenceRooms = useStable(new Set(roomIds), roomKey)
   const pinBoxes = !ev || !turn ? [] : ev.boxes.filter((b) => !isBoxRejected(b.id, turn.toggles) && b.subject !== 'label')
   const pinKey = pinBoxes.map((b) => b.id).join('|')
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const pins: Box[] = useMemo(() => pinBoxes, [pinKey])
+  const pins: Box[] = useStable(pinBoxes, pinKey)
+
+  // Per floor: a cross-floor answer tags each box and room with its floor's drawing id; others belong here.
+  const roomFloors = !ev || !turn ? '' : ev.rooms.map((r) => (r as { drawing_id?: string }).drawing_id ?? '').join('|')
+  const boxFloors = pinBoxes.map((b) => (b as { drawing_id?: string }).drawing_id ?? '').join('|')
+  const perFloorNow = (() => {
+    const per = new Map<string, FloorEvidence>()
+    const scoped = /[^|]/.test(roomFloors) || /[^|]/.test(boxFloors)
+    const slot = (fid: string | undefined) => {
+      const id = fid || (scoped ? '' : drawing.id)
+      if (!id) return null
+      if (!per.has(id)) per.set(id, { rooms: new Set(), boxes: [] })
+      return per.get(id)!
+    }
+    const rf = roomFloors ? roomFloors.split('|') : []
+    roomIds.forEach((id) => {
+      const i = ev?.rooms.findIndex((r) => r.room_id === id) ?? -1
+      slot(rf[i])?.rooms.add(id)
+    })
+    for (const b of pins) slot((b as { drawing_id?: string }).drawing_id)?.boxes.push(b)
+    return per
+  })()
+  const perFloor = useStable(perFloorNow, `${roomKey}#${pinKey}#${roomFloors}#${boxFloors}#${drawing.id}`)
+  const floorCounts = useMemo(() => {
+    const c = new Map<string, number>()
+    for (const [id, e] of perFloor) c.set(id, e.boxes.length + e.rooms.size)
+    return c
+  }, [perFloor])
 
   useEffect(() => {
     const m = modelRef.current
-    if (!m || !('setHighlight' in m)) return
-    m.setHighlight({ evidence: evidenceRooms, hovered, selected })
+    if (isBuilding(m)) {
+      m.setEvidence(perFloor, hovered, selected)
+      m.setCounts(floorCounts)
+    } else if (m && 'setHighlight' in m) m.setHighlight({ evidence: evidenceRooms, hovered, selected })
     invalidate()
-  }, [evidenceRooms, hovered, selected, status])
+     
+  }, [evidenceRooms, perFloor, floorCounts, hovered, selected, status, stackMode, drawing.id])
   useEffect(() => {
     const m = modelRef.current
-    if (!m || !('setPins' in m)) return
+    if (!m || isBuilding(m) || !('setPins' in m)) return
     m.setPins(pins)
     invalidate()
+     
   }, [pins, status])
 
   // ---- picking: hover and click (a drag is not a click) ----
   const down = useRef<{ x: number; y: number } | null>(null)
+  /** Rooms of the floor in focus only: faded floors let the ray through. */
+  const pickRoom = (x: number, y: number) => {
+    const m = modelRef.current
+    if (isBuilding(m)) return engineRef.current?.pick(x, y, 'roomId', (o) => m.floorOf(o) === drawing.id) ?? null
+    return engineRef.current?.pick(x, y, 'roomId') ?? null
+  }
+  const inStack = status.state === 'ready' && status.model === 'building' && stackMode === 'stack'
   const onPointerMove = (e: React.PointerEvent) => {
-    if (e.pointerType !== 'mouse' || status.state !== 'ready' || status.model !== 'plan') return
-    const id = engineRef.current?.pick(e.clientX, e.clientY, 'roomId') ?? null
+    if (e.pointerType !== 'mouse' || status.state !== 'ready') return
+    if (inStack) {
+      const id = engineRef.current?.pick(e.clientX, e.clientY, 'floorId') ?? null
+      if (id !== floorHover) setFloorHover(id)
+      return
+    }
+    if (status.model === 'image') return
+    const id = pickRoom(e.clientX, e.clientY)
     if (id !== hovered) setHovered(id)
   }
   const onPointerUp = (e: React.PointerEvent) => {
     const d = down.current
     down.current = null
     if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) return
-    if (status.state !== 'ready' || status.model !== 'plan') return
-    const id = engineRef.current?.pick(e.clientX, e.clientY, 'roomId') ?? null
+    if (status.state !== 'ready' || status.model === 'image') return
+    if (inStack) {
+      const id = engineRef.current?.pick(e.clientX, e.clientY, 'floorId') ?? null
+      if (id) goFloor(id)
+      return
+    }
+    const id = pickRoom(e.clientX, e.clientY)
     setSelected((cur) => (cur === id ? null : id))
   }
 
@@ -251,8 +433,22 @@ export default function Viewer3D() {
   const room = selected ? drawing.rooms.find((r) => r.room_id === selected) : undefined
   const unitLabel = room?.unit ? drawing.units.find((u) => u.id === room.unit)?.label ?? room.unit : null
   const isImage = status.state === 'ready' && status.model === 'image'
-  const isPlan = status.state === 'ready' && status.model === 'plan'
+  const isBuildingView = status.state === 'ready' && status.model === 'building'
+  // Plan-like: rooms, labels and the room card (one drawing, or the floor in focus of a building).
+  const isPlan = (status.state === 'ready' && status.model === 'plan') || (isBuildingView && stackMode === 'floor')
   const showWalls = isPlan || (isImage && imageMode === 'walls')
+  const floorIdx = floorList ? floorList.findIndex((f) => f.drawing_id === drawing.id) : -1
+  const currentFloor = floorIdx >= 0 ? floorList![floorIdx] : null
+  const stepTo = (delta: 1 | -1) => {
+    if (!floorList || floorIdx < 0) return
+    const next = floorList[floorIdx + delta]
+    if (next) goFloor(next.drawing_id)
+    else setStackMode('floor')
+  }
+  // Direction of the last floor change, so the title slides the way the building moved (derived state).
+  const [floorNav, setFloorNav] = useState({ idx: floorIdx, dir: 1 as 1 | -1 })
+  if (floorNav.idx !== floorIdx) setFloorNav({ idx: floorIdx, dir: floorIdx > floorNav.idx ? 1 : -1 })
+  const direction = floorNav.idx !== floorIdx ? (floorIdx > floorNav.idx ? 1 : -1) : floorNav.dir
   const note = isPlan ? tu('v3d_note_cad') : isImage ? tu(imageMode === 'walls' ? 'v3d_note_walls' : 'v3d_note_relief') : null
 
   if (noWebgl)
@@ -284,8 +480,85 @@ export default function Viewer3D() {
         onPointerDown={(e) => (down.current = { x: e.clientX, y: e.clientY })}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerLeave={() => setHovered(null)}
+        onPointerLeave={() => {
+          setHovered(null)
+          setFloorHover(null)
+        }}
       />
+
+      {/* Where am I: building and floor, sliding in the direction the building moved */}
+      {isBuildingView && project && currentFloor ? (
+        <div className="pointer-events-none absolute top-3 left-1/2 z-10 -translate-x-1/2" aria-live="polite">
+          <div className="v3d-glass flex h-10 items-center gap-2 overflow-hidden rounded-full px-4 text-sm" data-v3d-title="">
+            <span className="max-w-48 truncate font-semibold tracking-tight">{project.title}</span>
+            <span aria-hidden className="h-4 w-px bg-foreground/15" />
+            <span className="relative grid">
+              <AnimatePresence initial={false} mode="popLayout" custom={direction}>
+                <motion.span
+                  key={stackMode === 'stack' ? 'all' : currentFloor.drawing_id}
+                  custom={direction}
+                  initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: direction * -14, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                  exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: direction * 14, filter: 'blur(4px)' }}
+                  transition={{ type: 'spring', bounce: 0, duration: 0.4 }}
+                  className="col-start-1 row-start-1 whitespace-nowrap text-muted-foreground"
+                >
+                  {stackMode === 'stack' ? (
+                    tu('v3d_all_floors', { n: floorList!.length })
+                  ) : (
+                    <>
+                      <span className="num mr-1.5 font-semibold text-foreground">L{floorIdx + 1}</span>
+                      {currentFloor.label}
+                    </>
+                  )}
+                </motion.span>
+              </AnimatePresence>
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Floor stepper: up, whole building, down (right edge, vertically centred) */}
+      {isBuildingView && floorList ? (
+        <div
+          className="v3d-glass absolute top-1/2 right-3 z-10 flex -translate-y-1/2 flex-col overflow-hidden rounded-2xl"
+          role="group"
+          aria-label={tu('v3d_floors')}
+          data-v3d-stepper=""
+        >
+          <button
+            type="button"
+            className="v3d-step"
+            onClick={() => stepTo(1)}
+            disabled={stackMode === 'floor' && floorIdx >= floorList.length - 1}
+            aria-label={tu('v3d_floor_up')}
+            title={tu('v3d_floor_up')}
+          >
+            <ChevronUpIcon className="size-5" />
+          </button>
+          <button
+            type="button"
+            className={cn('v3d-step', stackMode === 'stack' && 'is-on')}
+            onClick={() => setStackMode((m) => (m === 'stack' ? 'floor' : 'stack'))}
+            aria-pressed={stackMode === 'stack'}
+            aria-label={tu('v3d_all_floors', { n: floorList.length })}
+            title={tu('v3d_all_floors', { n: floorList.length })}
+            data-v3d-stack-toggle=""
+          >
+            <LayersIcon className="size-5" />
+          </button>
+          <button
+            type="button"
+            className="v3d-step"
+            onClick={() => stepTo(-1)}
+            disabled={stackMode === 'floor' && floorIdx <= 0}
+            aria-label={tu('v3d_floor_down')}
+            title={tu('v3d_floor_down')}
+          >
+            <ChevronDownIcon className="size-5" />
+          </button>
+        </div>
+      ) : null}
 
       {/* Controls: top left */}
       <div className="v3d-panel absolute top-3 left-3 flex max-w-[calc(100%-1.5rem)] flex-col gap-2">
@@ -298,7 +571,8 @@ export default function Viewer3D() {
             onValueChange={(v) => {
               if (!v) return
               setPreset(v as CameraPreset)
-              engineRef.current?.goTo(v as CameraPreset)
+              const m = modelRef.current
+              engineRef.current?.goTo(v as CameraPreset, isBuilding(m) ? m.framing(stackMode, drawing.id) : undefined)
             }}
             aria-label={tu('view_toggle')}
             className="bg-background"
@@ -320,7 +594,8 @@ export default function Viewer3D() {
             title={tu('v3d_reset')}
             onClick={() => {
               setPreset('persp')
-              engineRef.current?.goTo('persp')
+              const m = modelRef.current
+              engineRef.current?.goTo('persp', isBuilding(m) ? m.framing(stackMode, drawing.id) : undefined)
             }}
           >
             <RotateCcwIcon />
@@ -328,14 +603,14 @@ export default function Viewer3D() {
           <Toggle variant="outline" className="bg-background" pressed={spin} onPressedChange={setSpin} aria-label={tu('v3d_spin')} title={tu('v3d_spin')}>
             <Rotate3dIcon />
           </Toggle>
-          {isPlan ? (
+          {isPlan || isBuildingView ? (
             <Toggle variant="outline" className="bg-background" pressed={labels} onPressedChange={setLabels} aria-label={tu('v3d_labels')} title={tu('v3d_labels')}>
               <TagIcon />
             </Toggle>
           ) : null}
         </div>
 
-        {status.state === 'ready' ? (
+        {status.state === 'ready' && !inStack ? (
           <div className="flex w-64 max-w-full flex-col gap-3 rounded-lg border bg-background/95 p-3 shadow-sm backdrop-blur">
             {isImage ? (
               <ToggleGroup
@@ -425,7 +700,9 @@ export default function Viewer3D() {
         {isPlan && (pins.length > 0 || evidenceRooms.size > 0) ? (
           <span className="v3d-chip is-evidence">{tu('v3d_evidence', { n: pins.length || evidenceRooms.size })}</span>
         ) : null}
-        {status.state === 'ready' ? <span className="v3d-chip max-md:hidden">{tu('v3d_hint')}</span> : null}
+        {status.state === 'ready' ? (
+          <span className="v3d-chip max-md:hidden">{inStack ? tu('v3d_hint_stack') : tu('v3d_hint')}</span>
+        ) : null}
       </div>
 
       {/* Selected room: bottom right */}
@@ -478,6 +755,16 @@ export default function Viewer3D() {
       ) : null}
     </div>
   )
+}
+
+/** The same object for as long as `key` is unchanged: content-keyed identity without a hand-written memo. */
+function useStable<T>(value: T, key: string): T {
+  const [held, setHeld] = useState({ key, value })
+  if (held.key !== key) {
+    setHeld({ key, value })
+    return value
+  }
+  return held.value
 }
 
 function SliderRow({ label, value, children }: { label: string; value: string; children: React.ReactNode }) {
