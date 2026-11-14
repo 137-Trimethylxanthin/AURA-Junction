@@ -418,6 +418,23 @@ class LoadedDrawing:
         out.setdefault("capabilities", self.engine.capabilities())
         out.setdefault("kind", "cad_dxf")
         out.setdefault("source", self.source)
+        out["images"] = self._versioned(out.get("images"))
+        if isinstance(out.get("thumbnail"), str):
+            out["thumbnail"] = self._versioned({"t": out["thumbnail"]})["t"]
+        return out
+
+    def _versioned(self, images):
+        """Image URLs that change when the file changes (`?v=<mtime>`): files are served with a public cache, so
+        without this a re-imported plan.svg or original.png stays stale in browsers for up to an hour."""
+        if not isinstance(images, dict) or self.dir is None:
+            return images
+        out = dict(images)
+        for k, url in images.items():
+            if not isinstance(url, str) or "?" in url:
+                continue
+            p = self.file(url.rsplit("/", 1)[-1])
+            if p is not None:
+                out[k] = f"{url}?v={int(p.stat().st_mtime)}"
         return out
 
     def image_path(self) -> Path | None:
@@ -446,6 +463,7 @@ class Registry:
         self.uploads_dir = uploads_dir  # looked up by id only, never listed
         self._cache: dict[str, LoadedDrawing] = dict(extra or {})
         self.skipped: set[str] = set()  # unreadable entries (count shown in /health)
+        self._loaded_at: dict[str, float | None] = {}  # drawing.json mtime when each cached entry was read
 
     def evict(self, drawing_id: str) -> None:
         self._cache.pop(drawing_id, None)
@@ -476,7 +494,11 @@ class Registry:
 
     def get(self, drawing_id: str) -> LoadedDrawing | None:
         if drawing_id in self._cache:
-            return self._cache[drawing_id]
+            cached = self._cache[drawing_id]
+            # A drawing re-imported on disk (scripts/import_building.py, preprocess) is read again, not served stale.
+            if drawing_id not in self._loaded_at or self._loaded_at[drawing_id] == _mtime(cached.dir):
+                return cached
+            del self._cache[drawing_id]
         if not ID_RE.match(drawing_id):
             return None
         bases = [*self.dirs, *([self.uploads_dir] if self.uploads_dir else [])]
@@ -492,7 +514,15 @@ class Registry:
                     return None
                 self.skipped.discard(drawing_id)
                 self._cache[drawing_id] = d
+                self._loaded_at[drawing_id] = _mtime(p)
                 return d
+        return None
+
+
+def _mtime(d: Path) -> float | None:
+    try:
+        return (d / "drawing.json").stat().st_mtime
+    except OSError:
         return None
 
 
