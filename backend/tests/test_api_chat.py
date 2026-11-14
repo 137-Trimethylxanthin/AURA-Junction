@@ -132,3 +132,14 @@ def test_unknown_drawing_errors_before_streaming(tmp_path):
     with TestClient(make_app(tmp_path)) as c:
         r = c.post("/chat", json={"drawing_id": "nope", "message": "How many doors?"})
         assert r.status_code == 404 and r.json()["code"] == "unknown_drawing"
+
+
+def test_client_cannot_choose_a_new_conversation_id(tmp_path):
+    """L4: an unknown client-chosen conversation id is replaced by a server-issued one."""
+    with TestClient(make_app(tmp_path)) as c:
+        ev = sse(c, {"drawing_id": SWISS, "conversation_id": "c-chosen-by-attacker",
+                     "message": "How many doors?"})
+        conv = ev[0][1]["conversation_id"]
+        assert conv != "c-chosen-by-attacker" and len(conv) >= 34
+        again = sse(c, {"drawing_id": SWISS, "conversation_id": conv, "message": "and windows?"})
+        assert again[0][1]["conversation_id"] == conv

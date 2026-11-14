@@ -49,6 +49,9 @@ def setup_logging() -> None:
     root.addHandler(h)
     root.setLevel(logging.INFO)
     root.propagate = False
+    # uvicorn's own access log prints raw client IPs and capability paths (up-…, a-…, c-…);
+    # our AccessLogMiddleware logs hashed IPs and redacted ids instead (privacy page, M3).
+    logging.getLogger("uvicorn.access").disabled = True
 
 
 class AccessLogMiddleware:

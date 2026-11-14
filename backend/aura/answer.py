@@ -157,7 +157,10 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
           overrides: list | None, intent_tag: str = "router",
           intent_conf: float | None = None) -> Built:
     subject = tr.subject or "room"
-    value = int(tr.value or 0)
+    if tr.value is None:  # never show a missing value as 0
+        return unclear(question, lang, d, intent_tag=intent_tag,
+                       look="The tool returned no value for this count.")
+    value = int(tr.value)
     plural = noun(subject, 2)
     gold = None if overrides or scope.get("kind") == "region" or tr.method == "vision" else (
         gold_for(d, lang, "count", subject, scope, value))
@@ -230,7 +233,10 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
 def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict,
          overrides: list | None, intent_tag: str = "router",
          intent_conf: float | None = None) -> Built:
-    value = round(float(tr.value or 0), 2)
+    if tr.value is None:  # never show a missing value as 0
+        return unclear(question, lang, d, intent_tag=intent_tag,
+                       look="The tool returned no value for this area.")
+    value = round(float(tr.value), 2)
     rooms = tr.rooms
     included = [r for r in rooms if r.included]
     out = len(rooms) - len(included)

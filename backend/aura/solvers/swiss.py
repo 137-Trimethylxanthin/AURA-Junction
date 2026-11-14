@@ -28,6 +28,26 @@ from shapely.geometry import Point, Polygon, box
 
 # --- probe constants (verbatim) -------------------------------------------------------------
 OUT = re.compile(r'balk|balc|logg|terr|terass|sitzpl', re.IGNORECASE)
+# Rules added after reading the misses on the full set (eval/results/swiss_misses.md; not a held-out
+# measure). eval/swiss_full.py --probe-rules switches them all off to reproduce 18,606/18,792.
+RULES = ('shared_outline_once',    # P1: two room numbers on one outline: its area is summed once
+         'garden_patio_outdoor',   # P2: Garten/Patio (jardin, giardino) are outdoor like balconies
+         'wintergarten_outdoor',   # P2b: measured separately, see ADOPTED
+         'fixture_mark_smallest')  # P3: a basin/WC mark belongs to the smallest rectangle around it
+ADOPTED = ('shared_outline_once', 'garden_patio_outdoor')
+ACTIVE_RULES: set[str] = set(ADOPTED)
+GARDEN = re.compile(r'(?<!winter)garten|patio|jardin|giardino', re.IGNORECASE)
+WINTERGARDEN = re.compile(r'wintergarten|jardin d.hiver|giardino d.inverno', re.IGNORECASE)
+
+
+def is_outdoor(name: str | None) -> bool:
+    if not name:
+        return False
+    if OUT.search(name):
+        return True
+    if 'garden_patio_outdoor' in ACTIVE_RULES and GARDEN.search(name):
+        return True
+    return 'wintergarten_outdoor' in ACTIVE_RULES and bool(WINTERGARDEN.search(name))
 NUM = re.compile(r'[A-Z]{0,2}\d+(\.\d+)?')
 APP_PREFIX = re.compile(r'(App|Whg|Apt|Log)\.')
 APP_LABEL = re.compile(r'(App|Whg|Apt|Log)\.?\s')
@@ -208,8 +228,16 @@ def load(dxf_path: str | Path, drawing_id: str | None = None) -> SwissModel:
         else:
             kind = {48: 'ell', 69: 'tub'}.get(len(p), 'line')
             inner.append((kind, Polygon(p).centroid if len(p) > 2 else Point(*p[0])))
-    for r in rects:
-        ins = collections.Counter(k for k, pt in inner if r.buffer(0.01).contains(pt))
+    owner: dict[int, int] = {}  # P3: mark index -> the smallest rectangle containing it
+    if 'fixture_mark_smallest' in ACTIVE_RULES:
+        for mi, (k, pt) in enumerate(inner):
+            if k in ('ell', 'dot'):
+                hold = [ri for ri, r in enumerate(rects) if r.buffer(0.01).contains(pt)]
+                if len(hold) > 1:
+                    owner[mi] = min(hold, key=lambda ri: rects[ri].area)
+    for ri, r in enumerate(rects):
+        ins = collections.Counter(k for mi, (k, pt) in enumerate(inner)
+                                  if owner.get(mi, ri) == ri and r.buffer(0.01).contains(pt))
         if ins['tub']:
             kind = 'bathtub'
         elif ins['ell'] and ins['dot']:
@@ -267,7 +295,7 @@ def load(dxf_path: str | Path, drawing_id: str | None = None) -> SwissModel:
     for t, v in rinfo.items():
         rooms.append({'room_id': t, 'num': t, 'name': v['name'], 'area': v['area'], 'geo': v['geo'],
                           'unit_idx': v['unit_idx'], 'unit': letter(v['unit_idx']),
-                          'outdoor': bool(v['name'] and OUT.search(v['name'])),
+                          'outdoor': is_outdoor(v['name']),
                           'polygon': v['polygon'], 'label_xy': [v['x'], v['y']]})
 
     units = [{'idx': i, 'polygon': _ring(u), 'letters': sorted(k for k, v in applabel.items() if v == i)}
@@ -372,12 +400,19 @@ def _build_boxes(model: SwissModel, subject: str) -> list[dict]:
             if r['unit']:
                 bx['unit'] = r['unit']
         out.append(bx)
-    for bx in out:
-        twins = [o for o in out if (o['x'], o['y'], o['w'], o['h']) == (bx['x'], bx['y'], bx['w'], bx['h'])]
-        if len(twins) > 1 and subject == 'door':
-            bx['note'] = DOUBLE_DOOR_NOTE
-            if twins[0] is not bx:  # contract 1.1: later copies point at the first (UI draws one box)
-                bx['duplicate_of'] = twins[0]['id']
+    if subject == 'door':  # O(n): a crafted DXF with thousands of doors must not stall the server
+        first: dict[tuple, dict] = {}
+        count: dict[tuple, int] = {}
+        for bx in out:
+            key = (bx['x'], bx['y'], bx['w'], bx['h'])
+            first.setdefault(key, bx)
+            count[key] = count.get(key, 0) + 1
+        for bx in out:
+            key = (bx['x'], bx['y'], bx['w'], bx['h'])
+            if count[key] > 1:
+                bx['note'] = DOUBLE_DOOR_NOTE
+                if first[key] is not bx:  # contract 1.1: later copies point at the first (UI draws one box)
+                    bx['duplicate_of'] = first[key]['id']
     return out
 
 
@@ -584,15 +619,24 @@ def answer(model: SwissModel, family: str, scope: dict | None = None,
         # Probe: room and label areas include outdoor rooms; floor, unit and region exclude them.
         drop_outdoor = k in ('floor', 'unit', 'region')
         ev, parts = [], []
+        outlines: set = set()  # P1: outlines already summed for a room without a printed area
+        shared = 0
         for r in rooms:
             a, edited = _room_area(r, ov)
             unknown = a is None
+            twin = False
+            if ('shared_outline_once' in ACTIVE_RULES and k != 'room' and not edited
+                    and r['area'] is None and r.get('polygon')):
+                key = tuple(map(tuple, r['polygon']))
+                twin = key in outlines
+                outlines.add(key)
             if unknown:
                 if k == 'room':
                     return _abstain(rid, family, scope, 'unclear_question',
                                     f"Room {r['room_id']} has no printed area and no outline.")
                 a = 0  # listed but excluded: an unknown area is never summed as 0 m² (never seen in the dataset)
-            inc = not (drop_outdoor and r['outdoor']) and not unknown
+            inc = not (drop_outdoor and r['outdoor']) and not unknown and not twin
+            shared += twin and not unknown and not (drop_outdoor and r['outdoor'])
             row = {'room_id': r['room_id'], 'included': inc, 'area_m2': round(a, 2)}
             if edited:
                 row['edited'] = True
@@ -601,12 +645,18 @@ def answer(model: SwissModel, family: str, scope: dict | None = None,
                 parts.append(round(a, 2))
         value = round(sum(parts), 2)  # = what the UI recomputes from the rounded rows
         n_out = sum(1 for e in ev if not e['included'])
+        n_unknown = sum(1 for r in rooms if _room_area(r, ov)[0] is None and not (drop_outdoor and r['outdoor']))
+        n_outdoor = n_out - n_unknown - shared
+        left = '; '.join(x for x in ((f'{n_outdoor} outdoor left out' if n_outdoor else ''),
+                                     (f'{n_unknown} without a printed area or outline left out' if n_unknown else ''),
+                                     (f'{shared} sharing an outline with another room number counted once'
+                                      if shared else '')) if x)
         return {'result_id': rid, 'family': family, 'scope': scope,
                     'answer': {'kind': 'area', 'value': value, 'unit': 'm2'}, 'value': value,
-                    'numbers': [value, len(parts)] + ([n_out] if n_out else []) + parts,
+                    'numbers': [value, len(parts)] + ([n_out] if n_out else []) + ([n_unknown] if n_unknown else []) + ([shared] if shared else []) + parts,
                     'evidence': {'boxes': [], 'rooms': ev},
                     'summary': f'Sum of {len(parts)} net room area{"s" if len(parts) != 1 else ""} {where} = '
-                            f'{value} m²' + (f'; {n_out} outdoor left out.' if n_out else '.')}
+                            f'{value} m²' + (f'; {left}.' if left else '.')}
 
     raise ValueError(f'unknown family {family!r}; expected one of {FAMILIES}')
 

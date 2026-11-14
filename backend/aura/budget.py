@@ -18,6 +18,7 @@ Counters:
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 import time
 from collections import defaultdict, deque
@@ -67,6 +68,51 @@ class Reservation:
     day: str
     t: float = field(default_factory=time.time)
     done: bool = False
+    row_id: int | None = None  # the ledger row written before the request is sent
+
+
+class Ledger:
+    """H3: the request count is durable BEFORE a request leaves.
+
+    Each reservation is INSERTed and committed synchronously on its own connection (WAL,
+    synchronous=FULL), so a crash, a failed writer batch or a lost buffer can never lose a
+    sent request: a row whose request never settled still counts (status -1). Commit fills in
+    tokens/cost; release (never sent) deletes the row. `near_cap` triggers `flush` (the Modal
+    Volume commit) so the count also survives a container that dies near the cap.
+    """
+
+    def __init__(self, db_path, flush: Callable[[], None] | None = None):
+        import sqlite3
+
+        self._con = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None,
+                                    timeout=10)
+        self._con.execute("PRAGMA journal_mode=WAL")
+        self._con.execute("PRAGMA synchronous=FULL")
+        self._flush = flush
+
+    def reserve(self, res: Reservation, near_cap: bool) -> int:
+        cur = self._con.execute(
+            "INSERT INTO requests(t, day, model, purpose, bucket, ip_hash, status) "
+            "VALUES (?,?,?,?,?,?,-1)", (res.t, res.day, "", res.purpose, res.bucket, res.ip_hash))
+        if near_cap and self._flush is not None:
+            self._flush()
+        return int(cur.lastrowid)
+
+    def settle(self, row_id: int, rec: RequestRecord) -> None:
+        self._con.execute(
+            "UPDATE requests SET t=?, model=?, input_tokens=?, output_tokens=?, cost_usd=?, "
+            "latency_ms=?, status=? WHERE id=?",
+            (rec.t, rec.model, rec.input_tokens, rec.output_tokens, rec.cost_usd, rec.latency_ms,
+             rec.status, row_id))
+
+    def release(self, row_id: int) -> None:
+        self._con.execute("DELETE FROM requests WHERE id=?", (row_id,))
+
+    def close(self) -> None:
+        self._con.close()
+
+
+NEAR_CAP = 50  # flush the volume on every request once this close to the event cap
 
 
 @dataclass
@@ -118,6 +164,7 @@ class Budget:
         clock: Callable[[], float] = time.time,
         recent_ip_agent: dict[str, list[float]] | None = None,
         raster_public_used: int = 0,
+        ledger: Ledger | None = None,
     ):
         self.s = settings
         self._lock = threading.Lock()
@@ -132,6 +179,7 @@ class Budget:
         for ip, ts in (recent_ip_agent or {}).items():  # persisted: limits survive a restart
             self._ip_agent[ip].extend(sorted(ts))
         self._raster_public = raster_public_used  # a lifetime cap over the database
+        self.ledger = ledger
         self._tz = ZoneInfo(settings.budget_tz)
 
     # ---- views ---------------------------------------------------------------------------
@@ -239,6 +287,17 @@ class Budget:
                 t=now,
             )
             self._next_id += 1
+            if self.ledger is not None:
+                try:
+                    near = self._event_used_locked() + 1 >= self.s.event_cap - NEAR_CAP
+                    res.row_id = self.ledger.reserve(res, near)
+                except Exception as e:  # fail closed: an uncounted request is never sent
+                    if res.purpose in RASTER_PURPOSES and not presenter and bucket == "public":
+                        self._raster_public = max(0, self._raster_public - 1)
+                    if purpose in AGENT_PURPOSES and ip_hash and self._ip_agent[ip_hash]:
+                        self._ip_agent[ip_hash].pop()
+                    raise BudgetError("budget_exhausted",
+                                      "The request counter could not be written.") from e
             self._pending[res.id] = res
             return res
 
@@ -275,6 +334,11 @@ class Budget:
             latency_ms=latency_ms,
             status=status,
         )
+        if self.ledger is not None and res.row_id is not None:
+            try:
+                self.ledger.settle(res.row_id, rec)  # the row already counts; this adds cost
+            except Exception:  # the count is safe (row written at reserve); only cost is lost
+                logging.getLogger("aura.budget").warning("ledger settle failed", exc_info=True)
         if self._sink is not None:
             self._sink(rec)
         return rec
@@ -286,6 +350,8 @@ class Budget:
                 return
             res.done = True
             self._pending.pop(res.id, None)
+            if self.ledger is not None and res.row_id is not None:
+                self.ledger.release(res.row_id)
             if res.purpose in RASTER_PURPOSES and not res.presenter and res.bucket == "public":
                 self._raster_public = max(0, self._raster_public - 1)
             if res.purpose in AGENT_PURPOSES and res.ip_hash and not res.presenter:

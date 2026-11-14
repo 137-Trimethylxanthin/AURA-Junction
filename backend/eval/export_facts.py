@@ -17,7 +17,8 @@ DRAWINGS = BACKEND / 'build' / 'drawings'
 
 
 # IFC question families the API answers today (update when L2 serves more): eval/ifc_full.py family names
-IFC_SERVED = {'storey_count_IfcDoor', 'storey_count_IfcWindow', 'storey_count_IfcSpace', 'room_area', 'storey_area'}
+IFC_SERVED = {'storey_count_IfcDoor', 'storey_count_IfcWindow', 'storey_count_IfcSpace', 'room_area', 'storey_area',
+              'wall_len', 'wall_side', 'wall_vol', 'slab_vol'}  # model-wide counts: only some phrasings route
 DEV = 'Measured on the challenge dataset the solver was developed against, not a held-out result.'  # the probes and solvers were written while looking at this dataset
 
 
@@ -102,9 +103,10 @@ def facts() -> list[dict]:
             'caveat': (f"Two rules were added after reading the {pr['questions'] - pr['correct']} misses on this same set, "
                        f"so this is not a held-out measure; with the original rules: {pr['correct']:,}/{pr['questions']:,} "
                        f"= {pct(pr['correct'], pr['questions'])}."
-                       + (f' The live app serves {served:,} of these {ic["questions"]:,} questions today (door, window '
-                          'and room counts per storey, room and storey areas); whole-model counts, walls, columns, '
-                          'stairs and wall/slab quantities are solved in this evaluation but not yet answered in the app.'
+                       + (f' The live app serves the families of {served:,} of these {ic["questions"]:,} questions on its '
+                          'library storeys (door, window and room counts per storey, room and storey areas, wall length, '
+                          'wall side area, wall and slab volume); whole-model counts and wall, column and stair counts are '
+                          'solved in this evaluation but not reliably answered in the app.'
                           if served < ic['questions'] else '')),
         })
     cc = load(RESULTS / 'cubicasa.json')

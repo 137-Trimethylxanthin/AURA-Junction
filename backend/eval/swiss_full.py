@@ -61,6 +61,18 @@ def ui_value(m, res):
     return len(res['evidence']['boxes'])
 
 
+def _set_rules(rules) -> None:
+    swiss.ACTIVE_RULES = set(rules)
+
+
+def score_all(by_file: dict, rules, jobs: int) -> list[dict]:
+    rows = []
+    with ProcessPoolExecutor(jobs, initializer=_set_rules, initargs=(tuple(rules),)) as ex:
+        for out in ex.map(score_file, sorted(by_file.items()), chunksize=4):
+            rows.extend(out)
+    return rows
+
+
 def score_file(args):
     path, rows = args
     m = swiss.load(path)
@@ -85,6 +97,8 @@ def main():
     ap.add_argument('--data', default=str(DEFAULT_DATA))
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
     ap.add_argument('--out', default=str(BACKEND / 'eval' / 'results' / 'swiss.json'))
+    ap.add_argument('--probe-rules', action='store_true',
+                    help='the original probe rules only (18,606/18,792); no result file written')
     a = ap.parse_args()
     data = Path(a.data)
     by_file = collections.defaultdict(list)
@@ -96,11 +110,21 @@ def main():
             if '/swiss_dwellings/' in r['path'] and r['question'].startswith(('How', 'What')):
                 p = data / r['path'].replace('.pdf', '.dxf')
                 by_file[str(p)].append((i, r))
+    if a.probe_rules:
+        base = score_all(by_file, (), a.jobs)
+        print(f"probe rules: {sum(r['ok'] for r in base)}/{len(base)} (no result file written)")
+        return
     t0 = time.time()
-    rows = []
-    with ProcessPoolExecutor(a.jobs) as ex:
-        for out in ex.map(score_file, sorted(by_file.items()), chunksize=4):
-            rows.extend(out)
+    base = score_all(by_file, (), a.jobs)
+    ok0 = {r['line']: r['ok'] for r in base}
+    rules = []
+    for rule in swiss.RULES:
+        alone = score_all(by_file, (rule,), a.jobs)
+        gain = sum(1 for r in alone if r['ok'] and not ok0[r['line']])
+        loss = [r for r in alone if not r['ok'] and ok0[r['line']]]
+        rules.append({'rule': rule, 'adopted': rule in swiss.ADOPTED, 'gain': gain, 'loss': len(loss),
+                      'lost': [{k: v for k, v in r.items() if k not in ('ok', 'nbox')} for r in loss][:10]})
+    rows = score_all(by_file, swiss.ADOPTED, a.jobs)
     secs = time.time() - t0
     fam = collections.defaultdict(lambda: [0, 0])
     for r in rows:
@@ -119,6 +143,11 @@ def main():
                    'the rooms carry the letter and the UI apartment count equals the answer. No score changes.'),
                    'Area values are the sum of per-room areas rounded to 2 dp (what the UI recomputes).'], 'correct': correct, 'pct': round(100 * correct / len(rows), 2),
                'probe_reference': {'correct': 18606, 'questions': 18792, 'pct': 99.01},
+               'probe_rules_reproduced': {'correct': sum(r['ok'] for r in base), 'questions': len(base)},
+               'rules': rules,
+               'rules_caveat': ('Rules added after reading the misses on this same set; not a held-out measure. '
+                                'Each rule is measured alone against the original probe rules (gain, loss); '
+                                '`correct` uses the adopted rules together.'),
                'runtime_s': round(secs, 1), 'jobs': a.jobs,
                'measured_at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds'),
                'families': {k: {'correct': v[0], 'n': v[1]} for k, v in sorted(fam.items())},

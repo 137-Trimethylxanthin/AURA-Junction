@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -46,6 +47,9 @@ __all__ = [
     "strip_images",
     "text_part",
 ]
+
+
+log = logging.getLogger("aura.gemini")
 
 
 class GeminiError(Exception):
@@ -325,7 +329,8 @@ class GeminiClient:
             meter.add(rec)
         if status != 200:
             msg = (data.get("error") or {}).get("message", "") if isinstance(data, dict) else ""
-            raise GeminiError(status, str(msg)[:300])
+            log.warning("gemini error %s: %s", status, str(msg)[:300])  # details in the log only
+            raise GeminiError(status, "the model service returned an error")  # L7
         return data, tin, tout, latency
 
     async def decisions(

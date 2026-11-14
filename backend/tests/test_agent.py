@@ -237,3 +237,49 @@ async def test_agent_rejects_an_unknown_scope_instead_of_widening():
                        ("count_objects", {"subject": "room", "label": "Bain"}), ("room_areas", {})):
         assert execute(d, name, {**args, "scope": "model"}) is None, name
     assert tools.list_rooms(d, {"kind": "model"}).supported is False
+
+
+def test_provenance_never_whitelists_model_input_or_user_numbers():
+    """M1 + F5: numbers the model typed into tool args/labels, or the user typed into the
+    question, are not tool results; only room numbers on the drawing may be quoted back."""
+    from aura.pipeline import identifiers_in
+    from aura.provenance import allowed_numbers, filter_prose
+
+    d = tools.load_file(FRONTEND_DRAWING)
+    miss = tools.find_text_literal(d, "57 doors")  # zero hits; the pattern echoes 57
+    lab = tools.count_rooms_labelled(d, "Bain 99", {"kind": "unit", "unit": "A"})
+    allowed = allowed_numbers([miss, lab], identifiers_in("Is room 3.04 20 m² like I said?", d))
+    assert 57.0 not in allowed and 99.0 not in allowed and 20.0 not in allowed
+    assert 3.04 in allowed
+    for bad in ("There are 57 doors.", "The room is 20 m².", "x57 doors.", "_57_ doors.",
+                "cinquantasette porte.", "neljäkymmentäkaksi ovea.", "a dozen doors.",
+                "LVII doors.", "twenty one doors.", "doce puertas."):
+        assert filter_prose(bad, allowed)[0] == "", bad
+    rooms = tools.room_areas(d, {"kind": "room", "room_id": "3.05"})
+    ok = allowed_numbers([rooms])
+    assert filter_prose("Room 3.05 has 13.81 m2.", ok)[0]
+
+
+def test_unsure_subject_goes_to_the_agent_not_to_geometry(tmp_path, monkeypatch):
+    """F7: intent 'count' at 0.9 but subject 'washbasin' at 0.35 must not answer the
+    washbasin count as exact; the agent decides (here stubbed to record that it ran)."""
+    from aura import answer as A
+    from aura import pipeline
+    from aura.gemini.understand import Understood
+
+    async def fake_understand(*a, **k):
+        return Understood(intent="count", intent_conf=0.9, subject="washbasin", subject_conf=0.35,
+                          scope=None, scope_conf=0.0, on_drawing=0.9)
+
+    ran = []
+
+    async def fake_agent(svc, d, question, lang, caller, stats, history, tag):
+        ran.append(tag)
+        return A.unclear(question, lang, d, intent_tag="agent", look="stub")
+
+    monkeypatch.setattr(pipeline, "understand", fake_understand)
+    monkeypatch.setattr(pipeline, "_agent", fake_agent)
+    with _app(tmp_path) as c:
+        b = c.post("/ask", json={"drawing_id": "swiss-46639",
+                                 "question": "how many lavatories are there?"}).json()
+    assert ran and b["answer"]["kind"] == "abstain"

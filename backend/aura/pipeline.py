@@ -32,7 +32,8 @@ from aura.writer import Writer
 
 log = logging.getLogger("aura.pipeline")
 
-MODEL_STEP_TIMEOUT_S = 8.0  # a model step never holds a geometry answer past the 15 s client abort
+MODEL_STEP_TIMEOUT_S = 8.0  # one model step (choice or check); the agent has AGENT_TIMEOUT_S
+CHECK_RETRY_AFTER_S = 600.0  # a failed check of one layer is not re-sent for 10 minutes
 
 
 class PipelineError(Exception):
@@ -53,6 +54,7 @@ class Services:
     answers: AnswerCache
     checks: CheckCache
     check_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    check_failures: dict[str, float] = field(default_factory=dict)  # key → time of last failure
 
     def models_usable(self) -> bool:
         return (self.client is not None and self.client.available() and models_enabled()
@@ -268,7 +270,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
 
     if intent == "find_text":
         pattern = r.pattern or FIRE_PATTERN
-        tr = tools.find_text(d, pattern, subject or "label")
+        tr = await asyncio.to_thread(tools.find_text, d, pattern, subject or "label")
         if tr.text:
             return A.text(question, lang, d, tr, subject or "label", intent_tag=tag)
         n_texts = len(d.drawing.get("texts") or [])
@@ -281,7 +283,8 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
         return A.abstain_topic(question, lang, r.topic or "material", intent_tag=tag)
 
     if intent == "quantity":
-        tr = tools.measure(d, subject or "", req_scope or text_scope or {"kind": "floor"})
+        tr = await asyncio.to_thread(tools.measure, d, subject or "",
+                                     req_scope or text_scope or {"kind": "floor"})
         if not tr.supported or tr.kind == "none":
             return A.abstain(question, lang, tr.args["scope"], "not_supported_yet",
                              "(an IFC quantity)", tr.summary, intent_tag=tag, results=[tr])
@@ -291,7 +294,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
 
     if intent == "count":
         subj = subject or "room"
-        tr = tools.count_objects(d, subj, scope)
+        tr = await asyncio.to_thread(tools.count_objects, d, subj, scope)
         if not tr.supported or tr.meta.get("abstain") == "not_supported_yet":
             return A.not_supported(question, lang, scope, tr, intent_tag=tag)
         if tr.kind == "none":
@@ -302,7 +305,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
         return A.abstain(question, lang, scope, "not_supported_yet", "What is the net floor area",
                          "No rooms with areas are extracted from this drawing yet.",
                          intent_tag=tag)
-    tr = tools.room_areas(d, scope, overrides or None)
+    tr = await asyncio.to_thread(tools.room_areas, d, scope, overrides or None)
     if tr.kind == "none":
         return A.unclear(question, lang, d, scope, intent_tag=tag)
     return A.area(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf)
@@ -313,7 +316,7 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
     subject = built.subject
     if not built.check_ids or subject not in BOX_SUBJECTS:
         return None
-    layer = tools.count_objects(d, subject, {"kind": "floor"})
+    layer = await asyncio.to_thread(tools.count_objects, d, subject, {"kind": "floor"})
     boxes = [b.model_dump() for b in layer.boxes]
     ids = [b["id"] for b in boxes]
     key = check_key(d.id, subject, ids)
@@ -327,10 +330,16 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
         image = d.image_path()
         if image is None or not svc.models_usable():
             return None
+        failed_at = svc.check_failures.get(key)
+        if failed_at is not None and time.time() - failed_at < CHECK_RETRY_AFTER_S:
+            stats["check_note"] = "a check of this layer failed a moment ago; not retried yet"
+            return None  # M5: a slow or failing check is not re-sent on every ask
         lock = svc.check_locks.setdefault(key, asyncio.Lock())
         async with lock:  # concurrent first asks share one request
             full = svc.checks.get(key, d.dir, subject)
             cached = full is not None
+            if full is None and key in svc.check_failures:
+                return None  # failed while this ask waited for the lock
             if full is None:
                 anchors = d.anchors or default_anchors(d.drawing.get("rooms", []), boxes)
                 cm: Meter = stats["check_meter"]
@@ -343,6 +352,8 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
                             meter=cm)
                 except (BudgetError, GeminiError, TimeoutError) as e:
                     log.warning("check skipped: %s", e or "timeout")
+                    if not isinstance(e, BudgetError):
+                        svc.check_failures[key] = time.time()
                     stats["check_note"] = str(e) or "timeout"
                     stats["no_cache"] = True
                     _settle_check_cost(stats)
@@ -353,6 +364,7 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
                     return None
                 full["key"] = key
                 svc.checks.put(key, d.id, subject, full)
+        svc.check_locks.pop(key, None)  # R3: the result is cached; the lock is not needed again
     vision = d.drawing.get("kind") == "raster"
     sliced = slice_check(full, built.check_ids, image="upload" if vision else "dataset_png")
     if sliced is not None and vision:
@@ -428,7 +440,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     if hit is not None:
         # A fresh answer id, persisted: its CSV link and /stats see this answer too.
         body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
-                            "answer_id": "a-" + uuid.uuid4().hex[:16],
+                            "answer_id": "a-" + uuid.uuid4().hex,
                             "latency_ms": int((time.perf_counter() - t0) * 1000)}
         _persist(svc, d.id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
         yield "understood", {"detected_lang": body["detected_lang"],
@@ -479,7 +491,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     body["calls"] = meters["answer"].calls  # every request sent for the answer, failed or not
     body["cost_usd"] = round(meters["answer"].cost_usd, 8)
     body["route"] = stats["route"]
-    body["answer_id"] = "a-" + uuid.uuid4().hex[:16]
+    body["answer_id"] = "a-" + uuid.uuid4().hex
     body["latency_ms"] = int((time.perf_counter() - t0) * 1000)
     resp = AskResponse.model_validate(body)  # contract gate: fails loudly on a bad body
     out = resp.model_dump(exclude_none=True)
@@ -526,9 +538,10 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
     cancelled and the stream ends with error {code: 'timeout'} then done.
     """
     store, writer = svc.store, svc.writer
-    conv_id = body.conversation_id or "c-" + uuid.uuid4().hex[:20]
+    existing = store.conversation(body.conversation_id) if store and body.conversation_id else None
+    # L4: ids are issued by the server; an unknown client-chosen id starts a NEW conversation.
+    conv_id = body.conversation_id if existing is not None else "c-" + uuid.uuid4().hex
     turn_id = "t-" + uuid.uuid4().hex[:16]
-    existing = store.conversation(conv_id) if store else None
     now = time.time()
     if writer is not None and existing is None:
         await writer.execute("INSERT OR IGNORE INTO conversations(id, t, drawing_id) VALUES (?,?,?)",

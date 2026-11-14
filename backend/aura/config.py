@@ -44,9 +44,10 @@ class Settings(BaseSettings):
         ],
         alias="ALLOWED_ORIGINS",
     )
-    # Cloudflare Pages production + preview subdomains.
+    # Cloudflare Pages production + preview subdomains of ONE pinned project (M2: a prefix match
+    # let anyone's "aura-…" project in). Set ALLOWED_ORIGIN_REGEX if the project is named otherwise.
     allowed_origin_regex: str = Field(
-        default=r"^https://([a-z0-9-]+\.)?aura[a-z0-9-]*\.pages\.dev$",
+        default=r"^https://([a-z0-9-]+\.)?aura-j26\.pages\.dev$",
         alias="ALLOWED_ORIGIN_REGEX",
     )
 
@@ -71,6 +72,10 @@ class Settings(BaseSettings):
     volume_commit_every_s: float = Field(default=60.0, alias="AURA_VOLUME_COMMIT_S")
     cleanup_every_s: float = Field(default=3600.0, alias="AURA_CLEANUP_S")
     upload_ttl_s: float = Field(default=24 * 3600.0, alias="AURA_UPLOAD_TTL_S")
+    # Upload abuse limits (checked before the body is read).
+    uploads_per_ip_hour: int = Field(default=10, alias="AURA_UPLOADS_PER_IP_HOUR")
+    max_queued_uploads: int = Field(default=20, alias="AURA_MAX_QUEUED_UPLOADS")
+    upload_quota_bytes: int = Field(default=2 * 1024**3, alias="AURA_UPLOAD_QUOTA_BYTES")
 
     @field_validator("allowed_origins", mode="before")
     @classmethod
@@ -99,8 +104,11 @@ def get_settings() -> Settings:
 
 
 def models_enabled() -> bool:
-    """Kill switch, read from the environment on every call."""
-    return os.environ.get("AURA_MODELS", "on").strip().lower() not in {"off", "0", "false", "no"}
+    """Kill switch, read on every call: AURA_MODELS=off, or a file MODELS_OFF in DATA_DIR (H3e:
+    on Modal the environment is fixed at start, but a file on the Volume can be created live)."""
+    if os.environ.get("AURA_MODELS", "on").strip().lower() in {"off", "0", "false", "no"}:
+        return False
+    return not (Path(os.environ.get("DATA_DIR") or BACKEND_DIR / ".data") / "MODELS_OFF").exists()
 
 
 def live_allowed() -> bool:

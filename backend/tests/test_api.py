@@ -173,11 +173,11 @@ def test_budget_and_stats_shapes(client):
 
 
 def test_cors_allowlist(client):
-    ok = client.options("/ask", headers={"origin": "https://aura-demo.pages.dev",
+    ok = client.options("/ask", headers={"origin": "https://aura-j26.pages.dev",
                                          "access-control-request-method": "POST",
                                          "access-control-request-headers": "content-type"})
-    assert ok.headers.get("access-control-allow-origin") == "https://aura-demo.pages.dev"
-    preview = client.options("/ask", headers={"origin": "https://abc123.aura-demo.pages.dev",
+    assert ok.headers.get("access-control-allow-origin") == "https://aura-j26.pages.dev"
+    preview = client.options("/ask", headers={"origin": "https://abc123.aura-j26.pages.dev",
                                               "access-control-request-method": "DELETE"})
     assert preview.headers.get("access-control-allow-origin")
     bad = client.options("/ask", headers={"origin": "https://evil.example",
@@ -251,9 +251,10 @@ def test_gemini_network_failure_never_breaks_a_geometry_answer(tmp_path):
         assert "1 request sent" in next(n for n in u["trace"] if n["id"] == "look")["body"]
         assert boom.calls == 2
         assert c.get("/budget").json()["event_used"] == 96  # sent requests count
-        # Not cached: the next ask tries again.
-        ask(c, "How many washbasins are drawn on this floor plan?")
-        assert boom.calls == 3
+        # The answer is not cached, but the failed check is not re-sent for 10 minutes (M5).
+        again = ask(c, "How many washbasins are drawn on this floor plan?")
+        assert boom.calls == 2 and again["route"] != "cache" and "check" not in again
+        assert "not retried" in next(n for n in again["trace"] if n["id"] == "check")["body"]
 
 
 def test_cached_answer_does_not_replay_live_check_cost(live_client):
@@ -540,3 +541,16 @@ def test_ifc_counts_without_footprints_carry_rows(tmp_path):
         m = c.post("/ask", json={"drawing_id": src.name,
                                  "question": "How many doors are in the whole building?"}).json()
         assert m["scope"] == {"kind": "model"} and m["answer"]["value"] >= 46
+
+
+def test_deploy_refuses_public_salt_and_implicit_seed(monkeypatch):
+    from aura.config import Settings
+    from aura.main import _check_deploy_settings
+
+    monkeypatch.delenv("AURA_BUDGET_SEED", raising=False)
+    with pytest.raises(RuntimeError, match="SALT"):
+        _check_deploy_settings(Settings())
+    with pytest.raises(RuntimeError, match="SEED"):
+        _check_deploy_settings(Settings(AURA_IP_SALT="s3cret"))
+    monkeypatch.setenv("AURA_BUDGET_SEED", "230")
+    _check_deploy_settings(Settings(AURA_IP_SALT="s3cret"))

@@ -386,14 +386,16 @@ def answer(model: IfcModel, family: str, scope: dict | None = None) -> dict:
         parts = [round(r['area'] or 0, 2) for r in rr]
         value = round(sum(parts), 2)
         geo = sum(1 for r in rr if r['area_source'] == 'geometry')
+        missing = sum(1 for r in rr if r['area'] is None)  # listed, not included, never summed as 0
         return {'result_id': rid, 'family': family, 'scope': scope,
                 'answer': {'kind': 'area', 'value': value, 'unit': 'm2'}, 'value': value,
                 'numbers': [value, len(parts)] + ([geo] if geo else []) + parts,
                 'evidence': {'boxes': [], 'rows': [],
                              'rooms': [{'room_id': r['room_id'], 'included': r['area'] is not None, 'area_m2': a}
                                        for r, a in zip(rr, parts, strict=True)]},
-                'summary': f'Sum of {len(parts)} IfcSpace net floor area{"s" if len(parts) != 1 else ""} = {value} m²'
-                           + (f'; {geo} from the space geometry (no NetFloorArea quantity).' if geo else '.')}
+                'summary': f'Sum of {len(parts) - missing} IfcSpace net floor area{"s" if len(parts) - missing != 1 else ""} = {value} m²'
+                           + (f'; {geo} from the space geometry (no NetFloorArea quantity)' if geo else '')
+                           + (f'; {missing} without an area left out' if missing else '') + '.'}
 
     if family in TOTAL_FAMILIES:
         if k != 'floor':

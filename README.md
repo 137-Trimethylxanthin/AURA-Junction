@@ -72,8 +72,8 @@ To re-create the frontend snapshot: `scripts/snapshot.sh`.
 | `DATA_DIR` | set in `modal_app.py` | Volume mount (`/data`) |
 | `AURA_IP_SALT` | Modal secret `aura-presenter` | Salt for hashed client IPs |
 | `ALLOWED_ORIGINS` | backend env | CORS origins (comma list) |
-| `ALLOWED_ORIGIN_REGEX` | backend env | CORS regex; default matches `aura*.pages.dev`, set it if the Pages project is named otherwise |
-| `AURA_BUDGET_SEED` | backend env | Initial event budget (default 94; the lead may set 98 to count 4 dev live calls) |
+| `ALLOWED_ORIGIN_REGEX` | backend env | CORS regex; default pins the Pages project `aura-j26` (and its preview subdomains). Set it to the real project name if it differs |
+| `AURA_BUDGET_SEED` | backend env, **required on Modal** | Requests already used on this key before this database (default 94 locally) |
 | `AURA_MODELS` | backend env | Gemini model names |
 | `VITE_API_URL` | frontend build | API base URL |
 | `AURA_LIVE` | tests | `1` enables live Gemini tests |
@@ -82,7 +82,16 @@ Secrets are never committed. `.env` files are git-ignored.
 
 ## Gemini budget rules
 
-Every Gemini call goes through `budget.reserve` and is committed or released. There is an event-wide total, a daily cap, per-IP buckets, a presenter bypass and a kill switch. Library answers are precomputed and cached. Hitting a cap returns a clear error, not a silent fallback.
+Every Gemini call goes through `budget.reserve` and is committed or released. There is an event-wide total, a daily cap, per-IP buckets, a presenter bypass and a kill switch. Library answers are precomputed and cached. Hitting a cap returns a clear error, not a silent fallback. Every request that was sent is reported in the answer's `calls`/`cost_usd`, also when the model step then fails or times out.
+
+What the 1,000-request event cap does and does not guarantee:
+
+- **Durable count.** Each request is written to the `requests` table and committed on its own connection *before* it is sent (status -1 until it settles). A crash, a failed write batch or a timeout cannot lose it. A request that was reserved but never sent is deleted again. Within 50 of the cap the Modal Volume is committed on every request.
+- **One database only.** The cap counts what this database has seen, plus `AURA_BUDGET_SEED`. It does not know about requests from other servers, eval scripts, teammates or an earlier Volume that use the same key. A fresh Volume starts at the seed.
+- **The seed is explicit.** On Modal the app refuses to start unless `AURA_BUDGET_SEED` is set at deploy time, e.g. `AURA_BUDGET_SEED=230 modal deploy backend/modal_app.py`. Set it to the usage shown in Google's console, not a guess. Locally the default is 94.
+- **Two containers.** During a redeploy the old and new container can briefly run together, each with its own in-memory counter. Stop the old app first (`modal app stop aura-backend`).
+- **Kill switch.** `AURA_MODELS=off` (fixed when a container starts) or, live, a file `MODELS_OFF` in `DATA_DIR` (on the Volume: `/data/MODELS_OFF`). The immediate hard stop is `modal app stop aura-backend`.
+- **Not a provider quota.** The only hard guarantee across restarts, redeploys and other clients is a request quota on the key in Google Cloud Console. Set one if the key is shared.
 
 ## Data and licences
 

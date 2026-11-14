@@ -10,10 +10,13 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import re
 import shutil
 import statistics
 import tempfile
 import time
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -26,7 +29,7 @@ from starlette.datastructures import UploadFile
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from aura import tools, uploads
-from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, RequestRecord
+from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, Ledger, RequestRecord
 from aura.cache import AnswerCache, CheckCache
 from aura.config import Settings, get_settings, models_enabled
 from aura.contract import (
@@ -56,6 +59,27 @@ NO_STORE = "private, no-store"
 def _err(code: str, message: str, status: int, **extra) -> JSONResponse:
     return JSONResponse({"contract_version": CONTRACT_VERSION, "error": message, "code": code,
                          **extra}, status_code=status)
+
+
+def _check_deploy_settings(settings: Settings) -> None:
+    """Fail closed on a deploy: a public IP salt makes the hashed IPs reversible (M3), and an
+    implicit budget seed would ignore requests made before this database existed (H3)."""
+    if settings.ip_salt.get_secret_value() == "aura-local-salt":
+        raise RuntimeError("AURA_IP_SALT must be set (Modal secret aura-presenter).")
+    if not os.environ.get("AURA_BUDGET_SEED", "").strip():
+        raise RuntimeError("AURA_BUDGET_SEED must be set explicitly at deploy time: the number of "
+                           "Gemini requests already used on this key (see Google's console).")
+
+
+def _dir_bytes(root: Path) -> int:
+    total = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            try:
+                total += os.stat(os.path.join(dirpath, f)).st_size
+            except OSError:
+                pass
+    return total
 
 
 def _spent(*meters) -> dict:
@@ -90,6 +114,8 @@ def create_app(
     settings = settings or get_settings()
     setup_logging()
     on_modal = _on_modal()
+    if on_modal:
+        _check_deploy_settings(settings)
     holder: dict[str, Services] = {}
     mcp_app = build_mcp(lambda: holder["svc"]).http_app(path="/", stateless_http=True,
                                                         json_response=True)
@@ -112,12 +138,8 @@ def create_app(
         reqlog = RequestLogFile(settings.logs_dir)
 
         def sink(rec: RequestRecord) -> None:
+            # The DB row was written by the Ledger before the request was sent (H3).
             row = rec.as_dict()
-            writer.submit(
-                "INSERT INTO requests(t, day, model, purpose, bucket, ip_hash, input_tokens, "
-                "output_tokens, cost_usd, latency_ms, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (rec.t, rec.day, rec.model, rec.purpose, rec.bucket, rec.ip_hash,
-                 rec.input_tokens, rec.output_tokens, rec.cost_usd, rec.latency_ms, rec.status))
             reqlog.write(row)
             logging.getLogger("aura.model").info("", extra={"fields": {"kind": "model", **row}})
 
@@ -131,7 +153,9 @@ def create_app(
         recent_ip, raster_used = store.recent_limits(time.time(), AGENT_PURPOSES, RASTER_PURPOSES)
         budget = Budget(settings, persisted_total=total, persisted_by_bucket=by_bucket,
                         persisted_by_day=by_day, sink=sink, recent_ip_agent=recent_ip,
-                        raster_public_used=raster_used)
+                        raster_public_used=raster_used,
+                        ledger=Ledger(settings.db_path,
+                                      flush=volume.commit if volume else None))
         client = GeminiClient(settings, budget, transport) if use_gemini else None
         registry = tools.Registry(settings.drawing_dirs(),
                                   {d.id: d for d in extra_drawings or []},
@@ -154,12 +178,15 @@ def create_app(
                 await cleanup
             await jobs.cancel_all()
             await writer.stop()
+            if budget.ledger is not None:
+                budget.ledger.close()
             closer = getattr(client.transport if client and client._transport else None,
                              "aclose", None)
             if closer:
                 await closer()
 
-    app = FastAPI(title="AURA API", version=CONTRACT_VERSION, lifespan=lifespan)
+    docs = {} if not on_modal else {"docs_url": None, "redoc_url": None, "openapi_url": None}  # L3
+    app = FastAPI(title="AURA API", version=CONTRACT_VERSION, lifespan=lifespan, **docs)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
@@ -281,10 +308,39 @@ def create_app(
         await _remove_upload(svc(request), drawing_id)
         return Response(status_code=204)
 
+    upload_times: dict[str, deque[float]] = defaultdict(deque)  # ip_hash → recent uploads
+
+    origin_rx = re.compile(settings.allowed_origin_regex) if settings.allowed_origin_regex else None
+
+    def upload_refused(request: Request, presenter: bool) -> JSONResponse | None:
+        """H1: per-IP, queue and storage limits, checked BEFORE the body is read. M2: a
+        multipart POST needs no CORS preflight, so a foreign Origin is refused here."""
+        origin = request.headers.get("origin")
+        if origin and origin not in settings.allowed_origins and not (
+                origin_rx and origin_rx.fullmatch(origin)):
+            return _err("bad_request", "Uploads are only accepted from the AURA app.", 403)
+        jobs = request.app.state.jobs
+        if len(jobs.tasks) >= settings.max_queued_uploads:
+            return _err("rate_limited", "Uploads are busy; try again in a few minutes.", 429)
+        if _dir_bytes(settings.uploads_dir) >= settings.upload_quota_bytes:
+            return _err("rate_limited", "Upload storage is full; try again later.", 429)
+        ip = client_ip_hash(request, settings)
+        if not presenter and ip:
+            q, now = upload_times[ip], time.time()
+            while q and now - q[0] > 3600:
+                q.popleft()
+            if len(q) >= settings.uploads_per_ip_hour:
+                return _err("rate_limited", "Too many uploads from this address; try again later.",
+                            429)
+            q.append(now)
+        return None
+
     @app.post("/uploads", status_code=202)
     async def post_upload(request: Request):
         s = svc(request)
         presenter = is_presenter(request, settings)
+        if (refused := upload_refused(request, presenter)) is not None:
+            return refused
         try:
             form = await request.form(max_files=1, max_fields=4)
         except Exception:  # noqa: BLE001 - malformed multipart
@@ -301,7 +357,9 @@ def create_app(
         except uploads.UploadError as e:
             return _err(e.code, str(e), e.status)
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkstemp(dir=settings.uploads_dir, prefix=".tmp-")[1])
+        fd, name = tempfile.mkstemp(dir=settings.uploads_dir, prefix=".tmp-")
+        os.close(fd)  # H2: a leaked descriptor kept deleted uploads on disk until restart
+        tmp = Path(name)
         await asyncio.to_thread(_copy_to, f.file, tmp)
         acc = uploads.store(settings.uploads_dir, kind, tmp)
         now = time.time()
@@ -338,7 +396,10 @@ def create_app(
         if p is None:
             return _err("not_found", "No such file.", 404)
         cache = NO_STORE if is_upload or d.source == "upload" else LIBRARY_CACHE
-        return FileResponse(p, headers={"cache-control": cache})
+        # L1: a plan.svg opened directly from the API origin can never run script.
+        return FileResponse(p, headers={"cache-control": cache, "x-content-type-options": "nosniff",
+                                        "content-security-policy": "default-src 'none'; "
+                                        "style-src 'unsafe-inline'; img-src data:; sandbox"})
 
     def not_ready(request: Request, drawing_id: str) -> JSONResponse | None:
         row = upload_row(request, drawing_id)
@@ -544,18 +605,27 @@ async def _remove_upload(s: Services, drawing_id: str) -> None:
         "DELETE FROM turns WHERE conversation_id IN "
         "(SELECT id FROM conversations WHERE drawing_id=?)", (drawing_id,))
     await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
+    await w.execute("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     s.answers.drop_drawing(drawing_id)
+    s.checks.forget_drawing(drawing_id)
 
 
-async def cleanup_once(s: Services) -> int:
+async def cleanup_once(s: Services, now: float | None = None) -> int:
     """Delete expired uploads (files, rows) and answers/conversations past the TTL."""
-    now = time.time()
+    now = time.time() if now is None else now
     expired = [r["id"] for r in s.store.upload_rows() if r["expires_at"] and r["expires_at"] < now]
     for did in expired:
         await _remove_upload(s, did)
     cutoff = now - s.settings.upload_ttl_s
     for table in ("answers", "turns", "conversations"):
         await s.writer.execute(f"DELETE FROM {table} WHERE t < ?", (cutoff,))  # type: ignore[union-attr]
+    # Upload folders with no DB row (a failure between storing and the INSERT) are swept too.
+    known = {r["id"] for r in s.store.upload_rows()}
+    for p in s.settings.uploads_dir.glob("up-*") if s.settings.uploads_dir.is_dir() else []:
+        if p.is_dir() and p.name not in known and p.stat().st_mtime < now - 3600:
+            await asyncio.to_thread(shutil.rmtree, p, True)
+    await s.writer.execute(  # type: ignore[union-attr]
+        "DELETE FROM check_cache WHERE drawing_id LIKE 'up-%' AND t < ?", (cutoff,))
     # Stray temp files from interrupted uploads.
     for p in s.settings.uploads_dir.glob(".tmp-*") if s.settings.uploads_dir.is_dir() else []:
         if p.stat().st_mtime < now - 3600:

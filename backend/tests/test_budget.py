@@ -166,3 +166,75 @@ def test_commit_records_cost_and_calls_sink():
     assert rec.cost_usd == pytest.approx(0.0025854)
     assert rec.as_dict()["tokens"] == 25854
     assert b.event_used() == 95
+
+
+def test_per_ip_and_raster_limits_survive_a_restart(tmp_path):
+    """F14: the per-IP hour and the public raster cap are seeded from the requests table."""
+    import time
+
+    from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES
+    from aura.store import Store, init_db
+
+    db = tmp_path / "a.sqlite3"
+    init_db(db)
+    import sqlite3
+
+    con = sqlite3.connect(db)
+    now = time.time()
+    for i in range(3):
+        con.execute("INSERT INTO requests(t, day, model, purpose, bucket, ip_hash) VALUES "
+                    "(?,?,?,?,?,?)", (now - 60 * i, "2026-11-14", "m", "agent", "public", "ipA"))
+    con.execute("INSERT INTO requests(t, day, model, purpose, bucket, ip_hash) VALUES "
+                "(?,?,?,?,?,?)", (now - 7200, "2026-11-14", "m", "agent", "public", "ipA"))
+    con.execute("INSERT INTO requests(t, day, model, purpose, bucket, ip_hash) VALUES "
+                "(?,?,?,?,?,?)", (now, "2026-11-14", "m", "raster_detect", "public", "ipB"))
+    con.commit()
+    con.close()
+    recent, raster = Store(db).recent_limits(now, AGENT_PURPOSES, RASTER_PURPOSES)
+    assert len(recent["ipA"]) == 3 and raster == 1  # the 2 h old request is outside the hour
+    s = Settings(AURA_IP_AGENT_PER_HOUR=3, AURA_RASTER_PUBLIC_CAP=1)
+    b = Budget(s, recent_ip_agent=recent, raster_public_used=raster)
+    with pytest.raises(BudgetError):
+        b.reserve("agent", "public", ip_hash="ipA")
+    with pytest.raises(BudgetError):
+        b.reserve("raster_detect", "public", ip_hash="ipC")
+    b.reserve("agent", "public", ip_hash="ipD")
+
+
+def test_ledger_counts_a_request_before_it_is_sent_and_survives_a_crash(tmp_path):
+    """H3: the row is committed at reserve time on its own connection; a process that dies
+    before commit (or whose writer batch fails) still leaves the request counted."""
+    import sqlite3
+
+    from aura.budget import Ledger
+    from aura.store import Store, init_db
+
+    db = tmp_path / "a.sqlite3"
+    init_db(db)
+    b = Budget(Settings(), ledger=Ledger(db))
+    res = b.reserve("agent", "public", ip_hash="ip1")
+    # Visible to another connection immediately, before anything was sent:
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
+    # "Crash": a new Budget over the same database counts it although it never settled.
+    total, by_bucket, _ = Store(db).request_counts()
+    assert total == 1 and by_bucket == {"public": 1}
+    b.commit(res, model="gemini-3.1-flash-lite", input_tokens=100, output_tokens=10)
+    row = sqlite3.connect(db).execute("SELECT model, input_tokens, status FROM requests").fetchone()
+    assert row == ("gemini-3.1-flash-lite", 100, 200)
+    never_sent = b.reserve("agent", "public", ip_hash="ip1")
+    b.release(never_sent)
+    assert Store(db).request_counts()[0] == 1
+    # Fail closed: if the counter cannot be written, nothing is sent.
+    b.ledger.close()
+    with pytest.raises(BudgetError):
+        b.reserve("agent", "public", ip_hash="ip1")
+    assert b.event_used() == b.seed + 1  # the refused reservation is not left pending
+
+
+def test_kill_switch_file_turns_models_off_live(tmp_path, monkeypatch):
+    from aura.config import models_enabled
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert models_enabled()
+    (tmp_path / "MODELS_OFF").touch()
+    assert not models_enabled()

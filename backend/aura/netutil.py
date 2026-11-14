@@ -12,7 +12,17 @@ from aura.config import Settings
 
 
 def client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+    """IPv4 as is; IPv6 bucketed by /64 (one subscriber's prefix), so rotating addresses inside
+    it does not reset the per-IP limits (L6)."""
+    host = request.client.host if request.client else None
+    if host and ":" in host:
+        import ipaddress
+
+        try:
+            return str(ipaddress.ip_network(f"{host}/64", strict=False))
+        except ValueError:
+            return host
+    return host
 
 
 def client_ip_hash(request: Request, settings: Settings) -> str | None:

@@ -8,6 +8,7 @@ cleans up its own uploads. Nothing here is scheduled and nothing else writes to
 the Volume. Drawings are put on the Volume locally with `modal volume put`.
 """
 
+import os
 from pathlib import Path
 
 import modal
@@ -36,7 +37,10 @@ image = (
         "google-genai",
         "fastmcp",
     )
-    .env({"DATA_DIR": "/data", "PYTHONPATH": "/root"})
+    # The deployer states the requests already used on this key; the app refuses to start without
+    # it (README, "Gemini budget rules"). e.g. AURA_BUDGET_SEED=230 modal deploy modal_app.py
+    .env({"DATA_DIR": "/data", "PYTHONPATH": "/root",
+          "AURA_BUDGET_SEED": os.environ.get("AURA_BUDGET_SEED", "")})
     .add_local_dir(HERE / "aura", remote_path="/root/aura", ignore=["__pycache__", "*.pyc"])
 )
 

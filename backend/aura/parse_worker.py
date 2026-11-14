@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing as mp
+import os
 import resource
 from pathlib import Path
 
@@ -20,9 +21,26 @@ CPU_LIMIT_S = 60
 MAX_PIXELS = 40_000_000
 
 
+FSIZE_LIMIT = 200 * 1024 * 1024  # no single output file (plan.svg, model.json) past 200 MB
+NOFILE_LIMIT = 64
+MAX_ITEMS = 3000  # countable objects in one uploaded DXF (the dataset's largest has ~600)
+MAX_TEXTS = 20000
+KEEP_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONPATH", "TMPDIR")
+
+
+class TooLarge(ValueError):
+    """The model has more objects than an uploaded floor plan plausibly has."""
+
+
 def _limits() -> None:
+    """M4: the child holds no secrets (it never needs Settings) and gets hard resource limits."""
+    for k in [k for k in os.environ if k not in KEEP_ENV]:
+        os.environ.pop(k, None)
     resource.setrlimit(resource.RLIMIT_AS, (AS_LIMIT, AS_LIMIT))
     resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_S, CPU_LIMIT_S + 5))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (FSIZE_LIMIT, FSIZE_LIMIT))
+    _soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (min(NOFILE_LIMIT, hard), hard))
 
 
 def _write_json(p: Path, obj: dict) -> None:
@@ -35,10 +53,15 @@ def parse_dxf(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
     from aura.solvers import swiss
 
     model = swiss.load(src, drawing_id)
+    if sum(len(v) for v in model.items.values()) > MAX_ITEMS or len(model.texts) > MAX_TEXTS:
+        raise TooLarge  # H1: refused here, before any O(n) work reaches the web process
     model.id = drawing_id
     drawing = build_drawing(model, source="upload", original=None, thumbnail=None)
     drawing.update(meta)
     drawing["title"] = meta.get("title") or drawing.get("title") or "Uploaded DXF"
+    # Not the dataset's credit: this is the user's own file (M3).
+    drawing["credit"] = {"text": "Uploaded by a user; deleted after 24 hours or when you delete it.",
+                         "license": "user upload", "license_name": "Your upload"}
     caps = drawing.get("capabilities") or []
     # A DXF without Swiss layers: rendered, nothing to count (answers abstain not_supported_yet).
     if not model.rooms and not any(model.boxes()[s] for s in swiss.BOX_SUBJECTS):
@@ -93,6 +116,9 @@ def _child(kind: str, src: str, out: str, drawing_id: str, meta: dict, conn) -> 
         conn.send({"ok": True, **res})
     except MemoryError:
         conn.send({"ok": False, "error": "The file needs more memory than allowed."})
+    except TooLarge:
+        conn.send({"ok": False, "error": (f"This drawing has more than {MAX_ITEMS:,} objects or "
+                                          f"{MAX_TEXTS:,} texts; uploads are limited to one floor plan.")})
     except Exception as e:  # noqa: BLE001 - report any parse failure to the parent
         conn.send({"ok": False, "error": f"Could not read this file ({type(e).__name__})."})
     finally:

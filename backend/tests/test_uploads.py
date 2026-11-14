@@ -158,7 +158,7 @@ def test_not_ready_drawing_is_409_for_ask_and_get(tmp_path):
     app = make_app(tmp_path, job_options={"join_timeout_s": 30, "target": loop_forever})
     with TestClient(app) as c:
         did = upload(c, plain_dxf()).json()["drawing_id"]
-        time.sleep(0.3)
+        assert c.get(f"/drawings/{did}/status").json()["status"] in ("queued", "processing")
         assert c.get(f"/drawings/{did}").status_code == 409
         r = c.post("/ask", json={"drawing_id": did, "question": "How many doors?"})
         assert r.status_code == 409 and r.json()["code"] == "processing"
@@ -180,15 +180,34 @@ def test_parse_that_loops_forever_is_killed_and_server_stays_up(tmp_path):
 def test_cleanup_removes_expired_uploads(tmp_path):
     from aura.main import cleanup_once
 
-    app = make_app(tmp_path, AURA_UPLOAD_TTL_S=0.5)
+    app = make_app(tmp_path, AURA_UPLOAD_TTL_S=60)
     with TestClient(app) as c:
         did = upload(c, plain_dxf()).json()["drawing_id"]
         wait_status(c, did)
-        time.sleep(0.6)
-        n = c.portal.call(cleanup_once, c.app.state.svc)
+        assert c.portal.call(cleanup_once, c.app.state.svc) == 0  # not expired yet
+        orphan = tmp_path / "data" / "uploads" / "up-orphan0000000000000000000000"
+        orphan.mkdir()
+        n = c.portal.call(cleanup_once, c.app.state.svc, time.time() + 3601)  # injected clock
         assert n == 1
+        assert not orphan.exists()  # M3: a folder without a DB row is swept too
         assert c.get(f"/drawings/{did}/status").status_code == 404
         assert not (tmp_path / "data" / "uploads" / did).exists()
+
+
+def test_uploads_cut_off_by_a_restart_are_marked_failed(tmp_path):
+    """F1: a job lives in one process; after a restart its row must not poll 'processing'."""
+    import sqlite3
+
+    with TestClient(make_app(tmp_path)) as c:
+        did = upload(c, plain_dxf()).json()["drawing_id"]
+        wait_status(c, did)
+    db = sqlite3.connect(tmp_path / "data" / "aura.sqlite3")
+    db.execute("UPDATE drawings SET status='processing' WHERE id=?", (did,))
+    db.commit()
+    db.close()
+    with TestClient(make_app(tmp_path)) as c:
+        st = c.get(f"/drawings/{did}/status").json()
+        assert st["status"] == "failed" and "restarted" in st["error"]
 
 
 def test_csv_escapes_formula_labels(tmp_path):
@@ -267,6 +286,7 @@ def test_upload_files_no_store_409_404_and_allow_list(tmp_path):
         assert gone.status_code == 404
 
 
+@pytest.mark.dataset
 def test_library_files_stay_publicly_cacheable(tmp_path):
     from aura.config import Settings
     from aura.main import create_app
@@ -361,3 +381,93 @@ def test_raster_detection_failure_marks_upload_failed(tmp_path):
         did = upload(c, tiny_png(), "a.png", headers={"x-aura-presenter": "p"}).json()["drawing_id"]
         st = wait_status(c, did)
         assert st["status"] == "failed" and st["error"]
+
+
+def _open_paths() -> list[str]:
+    import os
+
+    out = []
+    for fd in os.listdir("/proc/self/fd"):
+        try:
+            out.append(os.readlink(f"/proc/self/fd/{fd}"))
+        except OSError:
+            pass
+    return out
+
+
+@pytest.mark.skipif(not __import__("os").path.isdir("/proc/self/fd"), reason="needs /proc")
+def test_deleted_upload_leaves_no_file_and_no_descriptor(tmp_path):
+    """H2: the temp-file descriptor is closed, so a deleted upload is really gone."""
+    with TestClient(make_app(tmp_path)) as c:
+        r = upload(c, plain_dxf()).json()
+        did = r["drawing_id"]
+        wait_status(c, did)
+        assert c.get(f"/drawings/{did}").json()["credit"]["license"] == "user upload"  # M3
+        c.portal.call(c.app.state.svc.writer.execute,
+                      "INSERT INTO check_cache(key, t, drawing_id, subject, result) VALUES "
+                      "(?,?,?,?,?)", ("k1", 0.0, did, "door", "{}"))
+        assert c.delete(f"/drawings/{did}",
+                        headers={"x-delete-token": r["delete_token"]}).status_code == 204
+        c.portal.call(c.app.state.svc.writer.flush)
+        assert c.app.state.svc.store.check("k1") is None  # M3: its cached checks go too
+        up = tmp_path / "data" / "uploads"
+        assert not (up / did).exists() and not list(up.glob(".tmp-*"))
+        assert not [p for p in _open_paths() if did in p or ".tmp-" in p]
+
+
+def test_uploads_are_limited_per_ip_queue_and_storage(tmp_path):
+    """H1: limits are checked before the body is read."""
+    with TestClient(make_app(tmp_path, AURA_UPLOADS_PER_IP_HOUR=2, AURA_PRESENTER_TOKEN="pres")) as c:
+        assert upload(c, plain_dxf()).status_code == 202
+        assert upload(c, plain_dxf()).status_code == 202
+        r = upload(c, plain_dxf())
+        assert r.status_code == 429 and r.json()["code"] == "rate_limited"
+        # the presenter is not limited per IP
+        assert upload(c, plain_dxf(), headers={"x-aura-presenter": "pres"}).status_code == 202
+    with TestClient(make_app(tmp_path / "q", AURA_UPLOAD_QUOTA_BYTES=1)) as c:
+        (tmp_path / "q" / "data" / "uploads").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "q" / "data" / "uploads" / "x").write_bytes(b"12")
+        assert upload(c, plain_dxf()).status_code == 429
+    app = make_app(tmp_path / "j", AURA_MAX_QUEUED_UPLOADS=1,
+                   job_options={"join_timeout_s": 30, "target": loop_forever})
+    with TestClient(app) as c:
+        assert upload(c, plain_dxf()).status_code == 202
+        assert upload(c, plain_dxf()).status_code == 429
+
+
+def test_child_drops_secrets_and_refuses_oversized_models(monkeypatch):
+    """M4 + H1: the parse child keeps no secret env vars; a DXF with thousands of doors is
+    refused in the child instead of reaching the web process."""
+    import os
+
+    from aura import parse_worker
+
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.setattr(parse_worker.resource, "setrlimit", lambda *a: None)  # not in-process
+    parse_worker._limits()
+    assert "GEMINI_API_KEY" not in os.environ and "PATH" in os.environ
+
+
+def test_dxf_with_too_many_objects_is_refused_in_the_child(tmp_path, monkeypatch):
+    from aura import parse_worker
+
+    src = tmp_path / "a.dxf"
+    src.write_bytes(plain_dxf())
+    monkeypatch.setattr(parse_worker, "MAX_TEXTS", 0)  # plain_dxf has one text
+    with pytest.raises(parse_worker.TooLarge):
+        parse_worker.parse_dxf(src, tmp_path / "out", "up-x", {})
+
+
+def test_cors_is_pinned_and_foreign_origins_cannot_upload(tmp_path):
+    """M2: only the pinned Pages project (and its previews) pass; a look-alike does not."""
+    with TestClient(make_app(tmp_path)) as c:
+        def pre(origin):
+            return c.options("/ask", headers={"origin": origin,
+                                             "access-control-request-method": "POST"}).headers
+        assert pre("https://aura-j26.pages.dev").get("access-control-allow-origin")
+        assert pre("https://1a2b3c4d.aura-j26.pages.dev").get("access-control-allow-origin")
+        for bad in ("https://aura-attacker.pages.dev", "https://evil.aura.pages.dev"):
+            assert not pre(bad).get("access-control-allow-origin"), bad
+        r = upload(c, plain_dxf(), headers={"origin": "https://aura-attacker.pages.dev"})
+        assert r.status_code == 403
+        assert upload(c, plain_dxf(), headers={"origin": "https://aura-j26.pages.dev"}).status_code == 202

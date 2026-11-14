@@ -8,6 +8,7 @@ the explanation passes the provenance filter before it is shown.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 
@@ -118,7 +119,7 @@ async def run_agent(client: GeminiClient, d: tools.LoadedDrawing, question: str,
             if fc.name == "final_answer":
                 final_call = fc
                 continue
-            tr = execute(d, fc.name, fc.args)
+            tr = await asyncio.to_thread(execute, d, fc.name, fc.args)  # CPU work off the loop
             if tr is None:
                 replies.append({"functionResponse": {"name": fc.name, "response": {
                     "error": f"unknown tool or bad arguments ({BAD_SCOPE})"}}})
@@ -132,7 +133,8 @@ async def run_agent(client: GeminiClient, d: tools.LoadedDrawing, question: str,
             if res.final is not None and res.final.kind == "rooms" and label:
                 # A room list named with a label: the answer is that list's per-label count,
                 # recomputed by the tool (never the model's number), with those rooms as evidence.
-                counted = tools.count_rooms_labelled(d, label, res.final.args.get("scope"))
+                counted = await asyncio.to_thread(tools.count_rooms_labelled, d, label,
+                                                  res.final.args.get("scope"))
                 res.results.append(counted)
                 res.final = counted if counted.value else res.final
             res.explanation = str(final_call.args.get("explanation", ""))[:1000]

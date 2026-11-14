@@ -52,6 +52,12 @@ class CheckCache:
         self.store = store
         self.writer = writer
         self._mem: dict[str, dict] = {}
+        self._bundles: dict[Path, dict] = {}  # parsed checks.json per library dir (read once)
+
+    def forget_drawing(self, drawing_id: str) -> None:
+        """Deleting an upload also drops its cached checks from memory."""
+        for k in [k for k, v in self._mem.items() if v.get("drawing_id") == drawing_id]:
+            del self._mem[k]
 
     def get(self, key: str, bundle_dir: Path | None = None, subject: str | None = None) -> dict | None:
         if key in self._mem:
@@ -63,12 +69,13 @@ class CheckCache:
                 return v
         if bundle_dir is not None and subject:
             # Precomputed library checks: checks.json = {subject: run_check(...) result + "key"}.
-            p = bundle_dir / "checks.json"
-            if p.is_file():
-                v = json.loads(p.read_text()).get(subject)
-                if v and v.get("key") == key:
-                    self._mem[key] = v
-                    return v
+            if bundle_dir not in self._bundles:
+                p = bundle_dir / "checks.json"
+                self._bundles[bundle_dir] = json.loads(p.read_text()) if p.is_file() else {}
+            v = self._bundles[bundle_dir].get(subject)
+            if v and v.get("key") == key:
+                self._mem[key] = v
+                return v
         return None
 
     def put(self, key: str, drawing_id: str, subject: str, result: dict) -> None:
