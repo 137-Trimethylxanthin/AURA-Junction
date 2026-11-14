@@ -523,6 +523,17 @@ class Registry:
         return None
 
 
+def data_version(d: LoadedDrawing, scope: dict | None = None) -> int:
+    """Newest drawing.json time among this drawing and the floors an all-floors scope names (0 when unknown)."""
+    ids = [d.id, *((scope or {}).get("drawing_ids") or [])] if (scope or {}).get("kind") == "project" else [d.id]
+    newest = 0.0
+    for i in ids:
+        fd = d if i == d.id else (d.registry.get(i) if d.registry is not None else None)
+        t = _mtime(fd.dir) if fd is not None and fd.dir is not None else None
+        newest = max(newest, t or 0.0)
+    return int(newest)
+
+
 def _mtime(d: Path) -> float | None:
     try:
         return (d / "drawing.json").stat().st_mtime
@@ -721,9 +732,9 @@ def _box_on_sibling_floors(d: LoadedDrawing, subject: str, raw: dict) -> dict:
             continue
         sd = d.registry.get(sid)
         for b in ((sd.drawing.get("evidence") or {}).get(subject) or []) if sd is not None else []:
-            note = b.get("note") or ""
-            if note.startswith("IFC "):
-                by_guid[note[4:].strip()] = (sid, b)
+            m = re.search(r"\bIFC (\S+)$", b.get("note") or "")
+            if m:
+                by_guid[m.group(1)] = (sid, b)
     boxes, left = [], []
     for r in rows:
         hit = by_guid.get(str(r.get("id")))

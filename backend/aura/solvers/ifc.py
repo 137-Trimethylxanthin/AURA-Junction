@@ -206,6 +206,7 @@ def load(ifc_path: str | Path, storey: str | None = None, drawing_id: str | None
 
     footprints: dict[str, list[dict]] = {}
     frame = None
+    units = float(ifcopenshell.util.unit.calculate_unit_scale(f))
     if geometry and storey is not None:
         by_id = {e.id(): e for c in ('IfcDoor', 'IfcWindow', 'IfcWall', 'IfcColumn', 'IfcStair')
                  for e in f.by_type(c)}
@@ -215,7 +216,12 @@ def load(ifc_path: str | Path, storey: str | None = None, drawing_id: str | None
                 if el['storey'] != storey:
                     continue
                 fp = world_fp(by_id[el['id']]) if el['id'] in by_id else None
-                out.append({'guid': el['guid'], 'polygon': ring(fp) if fp is not None else None})
+                g = {'guid': el['guid'], 'polygon': ring(fp) if fp is not None else None}
+                if fam in BOX_SUBJECTS and el['id'] in by_id:
+                    desc = opening_desc(by_id[el['id']], units)
+                    if desc:
+                        g['desc'] = desc
+                out.append(g)
             footprints[fam] = out
         # Plan extent: the storey's walls (+ 2 m). Footprints wholly outside it (e.g. warmond's loggia spaces
         # placed 20-100 m away from the building) are not drawn; they still count and sum, they just cannot be lit.
@@ -310,14 +316,36 @@ def label_at(model: IfcModel, r: dict) -> list[float] | None:
     return model.pct(p.x, p.y)
 
 
+def opening_desc(el, unit_scale: float) -> str:
+    """What tells one window or door from another on the same spot of the plan: its type, size, and height of
+    its base above its storey (stacked windows share a footprint), e.g. 'M_Casement · 0.93 m up · 819×759 mm'."""
+    import ifcopenshell.util.element as ue
+    import ifcopenshell.util.placement as up
+
+    kind = (el.Name or '').split(':')[0].strip()[:40]
+    up_m = None
+    st = ue.get_container(el)
+    base = getattr(st, 'Elevation', None) if st is not None and st.is_a('IfcBuildingStorey') else None
+    if base is not None and el.ObjectPlacement is not None:
+        up_m = (up.get_local_placement(el.ObjectPlacement)[2][3] - float(base)) * unit_scale
+    w, h = getattr(el, 'OverallWidth', None), getattr(el, 'OverallHeight', None)
+    # Height before size: it is what separates stacked windows, and a narrow list cuts the end off first.
+    parts = [p for p in (kind, f'{up_m:.2f} m up' if up_m is not None else '',
+                         f'{w * unit_scale * 1000:.0f}×{h * unit_scale * 1000:.0f} mm' if w and h else '') if p]
+    return ' · '.join(parts)
+
+
 def boxes(model: IfcModel, family: str) -> list[dict] | None:
     """Door/window boxes on the drawing's storey, reading order; None when any element has no footprint."""
     fps = model.footprints.get(family)
     if fps is None or model.frame is None or any(g['polygon'] is None for g in fps):
         return None
-    bs = sorted((_bbox_pct(model, g['polygon']) | {'guid': g['guid']} for g in fps), key=lambda b: (b['y'], b['x']))
+    bs = sorted((_bbox_pct(model, g['polygon']) | {'guid': g['guid'], 'desc': g.get('desc')} for g in fps),
+                key=lambda b: (b['y'], b['x']))
+    # The distinguishing part first (it survives truncation in a list); the GlobalId last, always present.
     return [{'id': f'{PREFIX[family]}-{k + 1:02d}', 'x': b['x'], 'y': b['y'], 'w': b['w'], 'h': b['h'],
-             'subject': family, 'note': f"IFC {b['guid']}"} for k, b in enumerate(bs)]
+             'subject': family, 'note': f"{b['desc']} · IFC {b['guid']}" if b['desc'] else f"IFC {b['guid']}"}
+            for k, b in enumerate(bs)]
 
 
 def _rows(els):

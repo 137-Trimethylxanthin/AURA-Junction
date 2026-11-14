@@ -955,8 +955,10 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     question = req.question.strip()
     scope_dump = req.scope.model_dump(exclude_none=True) if req.scope else None
     ov_dump = [o.model_dump() for o in req.overrides] if req.overrides else None
+    # The drawings' data version is part of the key: a re-imported drawing (or any floor of an all-floors scope)
+    # must not keep answering from the old data out of the cache.
     key = (answer_key(d.id, question, scope_dump, ov_dump, req.lang_hint, models_enabled())
-           + f"|router:{ROUTER_VERSION}")
+           + f"|router:{ROUTER_VERSION}|data:{tools.data_version(d, scope_dump)}")
     prev_resp = last_turn_response(history)
     r_pre = route(question, d.ctx)
     has_followup_semantics = prev_resp is not None and (
