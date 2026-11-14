@@ -650,6 +650,8 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
             elif u.intent == "area":
                 intent = "area"
             elif u.intent == "length":
+                if d.ctx.printed_dimensions:                 # the store read dimensions printed on the sheet
+                    return await _agent(svc, d, question, lang, caller, stats, history, tag)
                 return A.abstain_topic(question, lang, "length", intent_tag=tag)
             elif u.intent == "text":
                 return A.abstain(

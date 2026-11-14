@@ -206,6 +206,7 @@ class Model:
     storey: "Storey | None" = None                        # the storey shown (a drawing with an IFC model)
     storeys: list = field(default_factory=list)           # every storey view of the drawing, in library order
     elsewhere: dict[int, dict] = field(default_factory=dict)   # entities of the other storeys: {kind, storey}
+    n_dimensions: int = 0                                      # printed dimensions an answer may cite
     shapes: list = field(default_factory=list)            # (style, geometry in percent): footprints of the storey's elements
     pages: set | None = None                              # a storey view: the (file_id, page_no) of the model that show it,
     page_files: set = field(default_factory=set)          # and the files that show it on every page; None: any page
@@ -736,6 +737,7 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
         m.items.append(item)
         m.by_entity[it["entity_id"]] = item
     dims = [dict(x) for x in data.get("dimensions") or []]
+    m.n_dimensions = len(dims)
     for n, x in enumerate(dims, 1):
         g = place(x)
         item = dict(id=f"dim-{n:0{max(2, len(str(len(dims))))}d}", subject="label", kind="dimension",
@@ -923,6 +925,7 @@ def drawing_doc(m: Model, project_meta: dict | None = None) -> dict:
     if m.upload:                                        # an upload is named after its file, not after its key
         credit = dict(text="Uploaded file", license="LicenseRef-upload", license_name="Uploaded by you")
     return _clean(dict(
+        printed_dimensions=m.n_dimensions or None,     # additive: lengths can be answered from the sheet
         contract_version=CONTRACT_VERSION, id=did, title=m.title,
         subtitle=" · ".join(x for x in (project.split("/", 1)[0], " + ".join(f.upper() for f in formats), scale,
                                         storey_note(m.storey)) if x),

@@ -427,6 +427,7 @@ class LoadedDrawing:
             room_ids=[r["room_id"] for r in rooms],
             units=[u["id"] for u in self.drawing.get("units", [])],
             kind=self.drawing.get("kind", "cad_dxf"),
+            printed_dimensions=int(self.drawing.get("printed_dimensions") or 0),
         )
 
     def public_drawing(self) -> dict:

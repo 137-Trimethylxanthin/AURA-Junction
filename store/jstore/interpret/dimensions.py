@@ -143,7 +143,8 @@ def parse(text: str, hint: str | None = None) -> dict | None:
         return None
     lv = _LEVEL.match(s)
     if lv and (lv["s"] or lv["rest"] != s):
-        v = parse_length(lv["rest"], hint)
+        dec = re.fullmatch(r"\d+[.,]\d+", lv["rest"].strip())        # "+104.50", "-0,400": a level in metres, whatever
+        v = dict(value_m=_f(dec[0]), unit="m") if dec else parse_length(lv["rest"], hint)   # unit the lengths are in
         if v and v["value_m"] is not None:
             sign = -1.0 if lv["s"] == "-" else 1.0
             return dict(kind="level", value_m=sign * v["value_m"], unit=v["unit"])
@@ -588,8 +589,12 @@ def image_records(db: DB, f: dict, rooms: list[dict], t0: float) -> tuple[list[d
     def_id = define(db, f["file_id"], "dimension", "reader", spec, 0.7, BY)
     for page, items, m, to_file, sc, mpp_frame in per_page:
         on_first = page["page_no"] == per_page[0][0]["page_no"]
-        longest = max((i["parsed"]["value_m"] for i in items if i["parsed"] and i["parsed"]["kind"] == "linear"
-                       and i["line"]), default=None)
+        span = {}                                             # extent of all dimension lines, per direction
+        for i in items:
+            if i["line"] and i["parsed"] and i["parsed"]["kind"] == "linear":
+                ax = 0 if orientation(*i["line"]) == "horizontal" else 1
+                lo, hi, n = span.get(ax, (math.inf, -math.inf, 0))
+                span[ax] = (min(lo, i["line"][0][ax], i["line"][1][ax]), max(hi, i["line"][0][ax], i["line"][1][ax]), n + 1)
         for i in items:
             p = i["parsed"]
             b = i["box"]
@@ -618,9 +623,10 @@ def image_records(db: DB, f: dict, rooms: list[dict], t0: float) -> tuple[list[d
                     mid = g.interpolate(0.5, normalized=True).coords[0] if g.geom_type == "LineString" else g.coords[0]
                     room = _room_at(rooms, mid, 0.0 if p["kind"] == "linear" else 0.3)
             kind = p["kind"]
-            if kind == "linear" and longest and p["value_m"] >= 0.999 * longest and \
-                    sum(1 for j in items if j["parsed"] and j["parsed"]["kind"] == "linear") >= 4:
-                kind = "overall"
+            if kind == "linear" and i["line"] and ori in ("horizontal", "vertical"):
+                lo, hi, n = span[0 if ori == "horizontal" else 1]
+                if n >= 3 and math.dist(*i["line"]) >= 0.75 * (hi - lo):
+                    kind = "overall"
             attrs = dict(text=i["text"], value_m=p.get("value_m"), unit=p.get("unit"), orientation=ori, dim_kind=kind,
                          room=(room and (room["number"] or room["label"])) or i["room"],
                          room_id=room and room["entity_id"], page_no=page["page_no"],

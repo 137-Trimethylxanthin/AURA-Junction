@@ -94,6 +94,11 @@ def test_levels(text, metres):
     assert got["value_m"] == pytest.approx(metres, abs=1e-4)
 
 
+def test_a_decimal_level_is_in_metres_on_a_millimetre_sheet():
+    assert D.parse("+104.50", "mm")["value_m"] == pytest.approx(104.5)
+    assert D.parse("-0,400", "mm")["value_m"] == pytest.approx(-0.4)
+
+
 @pytest.mark.parametrize("text", ["", "Kitchen", "A-101", "1:100", "2.01", "10/11/2019", "608.251.8777", "B2",
                                   "1/8\" = 1'-0\"", "ROOM 12 x"])
 def test_what_is_not_a_dimension(text):

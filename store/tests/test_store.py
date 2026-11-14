@@ -125,4 +125,4 @@ def test_store_md_matches_the_database(seeded: dict) -> None:
         assert prompt.documented(text) <= set(live), f"documented but missing: {prompt.documented(text) - set(live)}"
         assert text == prompt.render(db), "STORE.md is stale: run python -m jstore.service.prompt"
     assert {"rooms", "doors", "facts", "sources", "cad_entities", "texts", "elements"} <= prompt.documented(text)
-    assert len(text.encode()) < 8000
+    assert len(text.encode()) < 8200

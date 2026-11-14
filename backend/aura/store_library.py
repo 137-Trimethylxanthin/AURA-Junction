@@ -341,6 +341,8 @@ def to_drawing(entry: Entry, built: dict, signature: str) -> dict:
     doc["thumbnail"] = ours(sdoc.get("thumbnail")) or doc["images"].get("rebuilt")
     doc["status"] = "ready"
     doc["source"] = "library"
+    if sdoc.get("printed_dimensions"):                 # dimensions printed on the sheet (q.dimensions): lengths are askable
+        doc["printed_dimensions"] = int(sdoc["printed_dimensions"])
     # Layer 2 (q.rooms, q.doors ...) has no storey scope: on one storey of a multi-storey model a query
     # would count the whole model, so there the document's own index stays the owner.
     owner = "store" if entry.slug is None or entry.siblings <= 1 else "ours"
