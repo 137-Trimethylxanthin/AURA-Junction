@@ -116,11 +116,14 @@ def _store_map_at(path: str, mtime: float) -> dict:
 def _store_map(base: Path | None) -> dict:
     if base is None:
         return {}
-    p = base / "store-map.json"
-    try:
-        return _store_map_at(str(p), p.stat().st_mtime)
-    except OSError:
-        return {}
+    # Beside the drawing dirs, or one level up (the live build dir sits inside build/, where
+    # scripts/ingest-bundled.sh writes the map).
+    for p in (base / "store-map.json", base.parent / "store-map.json"):
+        try:
+            return _store_map_at(str(p), p.stat().st_mtime)
+        except OSError:
+            continue
+    return {}
 
 
 def store_owns_things(d) -> bool:
