@@ -20,7 +20,12 @@ import {
   type DrawingStatusBody,
   type ErrorCode,
   type Health,
+  type ProjectBundle,
+  type ProjectFloor,
+  type ProjectList,
 } from './contract'
+
+export type { ProjectBundle, ProjectFloor, ProjectList }
 
 /** The presenter token, when this browser has one: the server lets only presenters spend model calls on uploads. */
 export function presenterHeader(): Record<string, string> {
@@ -201,20 +206,6 @@ export async function deleteDrawing(opts: ClientOptions, id: string, deleteToken
     { method: 'DELETE', headers: { 'X-Delete-Token': deleteToken } },
     timeoutMs,
   )
-}
-
-export interface ProjectFloor {
-  drawing_id: string
-  label: string
-  order: number
-}
-
-export interface ProjectBundle {
-  id: string
-  title: string
-  floors: ProjectFloor[]
-  auto_matched?: boolean
-  created_at?: string
 }
 
 const isObjRecord = (v: unknown): v is Record<string, unknown> =>

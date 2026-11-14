@@ -2,11 +2,10 @@ import { useUi } from "@/i18n/uiLang"
 import { Suspense, lazy, useMemo } from "react"
 import { BlocksIcon, SquarePenIcon } from "lucide-react"
 import { toast } from "sonner"
-import type { ProjectBundle } from "@/api/client"
 import { displayDrawingTitle } from "@/api/library"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { actions, selectActiveTurn, selectDrawing, useAppStore } from "@/store"
+import { actions, selectActiveProject, selectActiveTurn, selectDrawing, useAppStore } from "@/store"
 import { useEver } from "@/hooks/use-ever"
 
 /** Loaded the first time the Plugins sheet opens. */
@@ -23,17 +22,11 @@ const NEW_CHAT_UNDO_TOAST = "new-chat-undo"
 
 export function DrawingTitle() {
   const d = useAppStore(selectDrawing)
-  const activeProject = useAppStore(
-    (s) =>
-      (s as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
-      (s.session as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
-      null,
-  )
+  const activeProject = useAppStore(selectActiveProject)
   const floorLabel = useMemo(() => {
     const fromProject = activeProject?.floors.find((f) => f.drawing_id === d.id)?.label
     if (fromProject) return fromProject
-    const raw = (d as unknown as { floor_label?: string }).floor_label
-    return typeof raw === "string" && raw.trim() ? raw.trim() : null
+    return typeof d.floor_label === "string" && d.floor_label.trim() ? d.floor_label.trim() : null
   }, [activeProject, d])
   const titleText = activeProject ? activeProject.title || displayDrawingTitle(d) : displayDrawingTitle(d)
 

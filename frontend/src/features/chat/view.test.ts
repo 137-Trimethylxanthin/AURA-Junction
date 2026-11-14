@@ -157,7 +157,7 @@ describe('rooms with no printed area', () => {
 
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter } from 'react-router'
+import { MemoryRouter, useLocation } from 'react-router'
 import { countPhrase, noun } from '@/lib/format'
 import {
   evidenceGroupsOf,
@@ -238,8 +238,10 @@ describe('1.2 agent_estimate, AnswerNote, categorical groups, and multi-floor ro
 
   it('maps ScopeProject, categorical EvidenceGroup tokens, leastCertain, and cross-floor labels on rows', () => {
     const projectScope = { kind: 'project' as const, project_id: 'proj-1', drawing_ids: ['swiss-46639', 'up-og1', 'up-og2'] }
-    expect(whereText(projectScope, 'en')).toBe('across 3 floors')
-    expect(scopeChipText(projectScope, 'de')).toBe('Über 3 Geschosse')
+    expect(whereText(projectScope, 'en')).toBe('across all 3 floors')
+    expect(scopeChipText(projectScope, 'de')).toBe('Über alle 3 Geschosse')
+    expect(whereText({ kind: 'project', project_id: 'proj-1', drawing_ids: [] }, 'en')).toBe('across all floors')
+    expect(whereText({ kind: 'project', project_id: 'proj-1', drawing_ids: [] }, 'fr')).toBe('sur tous les étages')
     expect(groupCssVars('c2')).toEqual({
       solid: 'var(--group-2, #6d3ab7)',
       surface: 'var(--group-2-surface, #efe7fb)',
@@ -400,7 +402,73 @@ describe('1.2 Slash commands (/clear, /zoom, /color, filtering & Composer DOM ex
     })
     expect(appStore.getState().turns).toHaveLength(0)
 
+    // Clicking a slash option in the listbox preserves typed arguments (/zoom 320 and /color by room type)
     await act(async () => {
+      useDraft.getState().setText('/zoom 320')
+    })
+    const zoomOpt = host.querySelector('[data-slash-cmd="zoom"]')!
+    expect(zoomOpt).not.toBeNull()
+    await act(async () => {
+      zoomOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().ui.zoom).toBe(320)
+
+    await act(async () => {
+      useDraft.getState().setText('/color by room type')
+    })
+    const colorOpt = host.querySelector('[data-slash-cmd="color"]')!
+    expect(colorOpt).not.toBeNull()
+    await act(async () => {
+      colorOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().turns[0]).toMatchObject({
+      role: 'user',
+      text: 'Show and color-code items on this floor plan in different colors by room type',
+    })
+
+    // Guard /whatif in agent mode, and cancel What-If draft when switching to /select
+    await act(async () => {
+      actions().newConversation()
+      actions().setAnswererMode('agent')
+      useDraft.getState().setText('/whatif')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().ui.tool).not.toBe('whatif')
+
+    await act(async () => {
+      actions().setAnswererMode('hybrid')
+      actions().startWhatIf('3.04')
+      useDraft.getState().setText('/select')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().ui.tool).toBe('select')
+    expect(appStore.getState().ui.whatIf.roomId).toBeNull()
+
+    // Multi-floor project scope chip ("All 3 floors") + /all-floors toggle
+    await act(async () => {
+      actions().setActiveProject({
+        id: 'proj-1',
+        title: 'Haus Nord',
+        floors: [
+          { drawing_id: 'swiss-46639', label: 'EG', order: 0 },
+          { drawing_id: 'up-og1', label: '1. OG', order: 1 },
+          { drawing_id: 'up-og2', label: '2. OG', order: 2 },
+        ],
+      })
+      useDraft.getState().setText('/all-floors')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().crossPlanScope).toBe(true)
+    expect(host.querySelector('[data-project-scope-chip="proj-1"]')?.textContent).toContain('All 3 floors')
+
+    await act(async () => {
+      actions().setActiveProject(null)
       root.unmount()
     })
     host.remove()
@@ -568,6 +636,144 @@ describe('1.2 BoxCropThumb, AgentCard, and DrawingTitle DOM verification', () =>
     expect(host.querySelector('[data-stream-queue="2"]')?.textContent).toContain('In queue (#2)')
     expect(host.textContent).toContain('Inspecting drawing (step 1)')
     expect(host.textContent).toContain('Cropping stairwell S1')
+
+    await act(async () => {
+      actions().newConversation()
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('pins GroupLegend on mouse enter+click without un-focusing, clears unpinned hover on leave, jumps to target floor member, and renders cached cross-floor BoxCropThumb', async () => {
+    if (typeof globalThis.ResizeObserver === 'undefined') {
+      globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver
+    }
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    let currentPath = '/d/swiss-46639'
+    function LocationProbe() {
+      const loc = useLocation()
+      currentPath = loc.pathname
+      return null
+    }
+
+    const siblingDrawing = {
+      ...bundledDrawing,
+      id: 'up-og1',
+      title: 'Haus · 1. OG',
+    }
+
+    const crossResp = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      answer: { kind: 'note' as const, value: '2 apartments and 1 stairwell' },
+      check: {
+        method: 'decisions_api' as const,
+        status: 'live' as const,
+        scope: 'drawn_boxes' as const,
+        ranking: ['stair-og1', 'stair-eg'],
+        least_certain_id: 'stair-og1',
+      },
+      evidence: {
+        boxes: [
+          { id: 'apt-a-1', x: 10, y: 15, w: 8, h: 8, subject: 'door' as const, group_id: 'apt-A', drawing_id: 'swiss-46639' },
+          { id: 'stair-eg', x: 30, y: 35, w: 8, h: 8, subject: 'door' as const, group_id: 'stair-1', drawing_id: 'swiss-46639' },
+          { id: 'stair-og1', x: 32, y: 36, w: 8, h: 8, subject: 'door' as const, group_id: 'stair-1', drawing_id: 'up-og1' },
+        ],
+        rooms: [],
+        groups: [
+          { id: 'apt-A', label: 'Apartment A', color: 'c1' as const },
+          { id: 'stair-1', label: 'Stair S1 → 1. OG', color: 'c3' as const, target_drawing_id: 'up-og1' },
+        ],
+      },
+    } as unknown as typeof base
+
+    const turn: AgentTurn = {
+      id: 'a-groups',
+      role: 'agent',
+      replyTo: 'u-groups',
+      status: 'done',
+      response: crossResp,
+      toggles: emptyToggles(),
+      listOpen: true,
+      showCanonical: false,
+      feedback: null,
+    }
+
+    await act(async () => {
+      appStore.setState((s) => ({
+        ...s,
+        turns: [turn],
+        focusedGroupId: null,
+        drawingById: { ...s.drawingById, 'swiss-46639': bundledDrawing, 'up-og1': siblingDrawing },
+        ui: { ...s.ui, activeTurnId: 'a-groups', selectedEvidenceId: null, focusedGroupId: null },
+      }))
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ['/d/swiss-46639'] },
+          createElement(LocationProbe),
+          createElement(AgentCard, { turn, lang: 'en' }),
+        ),
+      )
+    })
+
+    // Cross-floor least-certain box (`stair-og1` on `up-og1`) renders its 56x56 SVG crop from cached `drawingById`!
+    expect(host.querySelector('[data-box-crop="stair-og1"] svg')).not.toBeNull()
+
+    const aptPill = host.querySelector<HTMLButtonElement>('[data-group-pill="apt-A"]')!
+    expect(aptPill.getAttribute('aria-pressed')).toBe('false')
+
+    const fireMousePointer = (el: HTMLElement, type: 'pointerover' | 'pointerout') => {
+      const ev = new MouseEvent(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(ev, 'pointerType', { value: 'mouse' })
+      el.dispatchEvent(ev)
+    }
+
+    // 1. Hover enter -> previews `apt-A` without setting aria-pressed; hover leave -> clears back to null!
+    await act(async () => {
+      fireMousePointer(aptPill, 'pointerover')
+    })
+    expect(appStore.getState().focusedGroupId).toBe('apt-A')
+    expect(aptPill.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => {
+      fireMousePointer(aptPill, 'pointerout')
+    })
+    expect(appStore.getState().focusedGroupId).toBeNull()
+
+    // 2. Hover enter -> click -> hover leave -> pins `apt-A` (`aria-pressed="true"` and `focusedGroupId === 'apt-A'`)!
+    await act(async () => {
+      fireMousePointer(aptPill, 'pointerover')
+    })
+    await act(async () => {
+      aptPill.click()
+    })
+    await act(async () => {
+      fireMousePointer(aptPill, 'pointerout')
+    })
+    expect(appStore.getState().focusedGroupId).toBe('apt-A')
+    expect(aptPill.getAttribute('aria-pressed')).toBe('true')
+
+    // 3. Clicking cross-floor pill `stair-1` (`target_drawing_id: 'up-og1'`) navigates to `/d/up-og1` AND selects `stair-og1`!
+    const stairPill = host.querySelector<HTMLButtonElement>('[data-group-pill="stair-1"]')!
+    await act(async () => {
+      fireMousePointer(stairPill, 'pointerover')
+    })
+    await act(async () => {
+      stairPill.click()
+    })
+    expect(appStore.getState().focusedGroupId).toBe('stair-1')
+    expect(currentPath).toBe('/d/up-og1')
+    expect(appStore.getState().ui.selectedEvidenceId).toBe('stair-og1')
 
     await act(async () => {
       actions().newConversation()

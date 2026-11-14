@@ -16,13 +16,21 @@ import {
   XIcon,
 } from 'lucide-react'
 import type { Drawing, Lang } from '@/api/contract'
-import type { ProjectBundle } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { t, type StringKey } from '@/i18n/strings'
 import { fmtCount, noun } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { actions, selectDrawing, useAppStore, useDerived, type AgentTurn } from '@/store'
+import {
+  actions,
+  selectActiveProject,
+  selectDrawing,
+  selectDrawingById,
+  selectFocusedGroupId,
+  useAppStore,
+  useDerived,
+  type AgentTurn,
+} from '@/store'
 import { BoxCropThumb } from './BoxCropThumb'
 import { StreamSteps } from './StreamSteps'
 import {
@@ -115,8 +123,7 @@ function ElementRow({ row }: { row: Row }) {
 }
 
 function setFocusedGroupSafe(id: string | null) {
-  const act = actions() as unknown as { setFocusedGroup?: (id: string | null) => void }
-  act.setFocusedGroup?.(id)
+  actions().setFocusedGroup(id)
 }
 
 function GroupLegend({
@@ -132,26 +139,40 @@ function GroupLegend({
   drawingId: string
   floorLabels: ReadonlyMap<string, string>
 }) {
+  const { tu } = useUi()
   const navigate = useNavigate()
-  const focusedGroupId = useAppStore((s) => (active ? ((s.ui as { focusedGroupId?: string | null }).focusedGroupId ?? null) : null))
+  const focusedGroupId = useAppStore((s) => (active ? selectFocusedGroupId(s) : null))
+  const [hoverPreview, setHoverPreview] = useState<{ hoveredId: string; restoreId: string | null } | null>(null)
   if (!groups.length) return null
 
-  const memberIdsOf = (gid: string): string[] => {
+  const memberIdsOf = (gid: string, preferDrawingId?: string): string[] => {
     const ev = turn.response?.evidence
     if (!ev) return []
-    const boxIds = ev.boxes
-      .filter((b) => (b as { group_id?: string }).group_id === gid)
-      .map((b) => b.id)
-    const roomIds = ev.rooms
-      .filter((r) => (r as { group_id?: string }).group_id === gid)
-      .map((r) => `room-${r.room_id}`)
-    return [...boxIds, ...roomIds]
+    const preferred: string[] = []
+    const rest: string[] = []
+    for (const b of ev.boxes) {
+      if (b.group_id !== gid) continue
+      const bFloor = b.drawing_id ?? drawingId
+      if (preferDrawingId && bFloor === preferDrawingId) preferred.push(b.id)
+      else rest.push(b.id)
+    }
+    for (const r of ev.rooms) {
+      if (r.group_id !== gid) continue
+      const rFloor = r.drawing_id ?? drawingId
+      const id = `room-${r.room_id}`
+      if (preferDrawingId && rFloor === preferDrawingId) preferred.push(id)
+      else rest.push(id)
+    }
+    return [...preferred, ...rest]
   }
 
+  const pinnedId = hoverPreview ? hoverPreview.restoreId : focusedGroupId
+
   return (
-    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Color groups" data-evidence-groups>
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5" role="group" aria-label={tu('group_legend_aria')} data-evidence-groups>
       {groups.map((g) => {
         const vars = groupCssVars(g.color)
+        const isPinned = pinnedId === g.id
         const isFocused = focusedGroupId === g.id
         const targetFloor =
           g.target_drawing_id && g.target_drawing_id !== drawingId
@@ -163,12 +184,14 @@ function GroupLegend({
             type="button"
             data-group-pill={g.id}
             data-group-color={g.color}
-            aria-pressed={isFocused}
+            aria-pressed={isPinned}
             onPointerEnter={
               active
                 ? mouseOnly(() => {
+                    const restoreId = hoverPreview ? hoverPreview.restoreId : focusedGroupId
+                    setHoverPreview({ hoveredId: g.id, restoreId })
                     setFocusedGroupSafe(g.id)
-                    const ids = memberIdsOf(g.id)
+                    const ids = memberIdsOf(g.id, drawingId)
                     if (ids.length) actions().hover(ids)
                   })
                 : undefined
@@ -176,47 +199,54 @@ function GroupLegend({
             onPointerLeave={
               active
                 ? mouseOnly(() => {
-                    if (!isFocused) setFocusedGroupSafe(null)
+                    if (hoverPreview) {
+                      setFocusedGroupSafe(hoverPreview.restoreId)
+                      setHoverPreview(null)
+                    }
                     actions().hover([])
                   })
                 : undefined
             }
             onClick={() => {
               if (!active) actions().setActive(turn.id)
-              const nextFocus = isFocused ? null : g.id
-              setFocusedGroupSafe(nextFocus)
-              const ids = memberIdsOf(g.id)
-              if (g.target_drawing_id && g.target_drawing_id !== drawingId) {
+              const curPinned = hoverPreview ? hoverPreview.restoreId : focusedGroupId
+              const nextPinned = curPinned === g.id ? null : g.id
+              setHoverPreview(null)
+              setFocusedGroupSafe(nextPinned)
+              if (nextPinned) {
+                const destFloor =
+                  g.target_drawing_id && g.target_drawing_id !== drawingId ? g.target_drawing_id : drawingId
+                const ids = memberIdsOf(g.id, destFloor)
                 if (ids[0]) actions().select(turn.id, ids[0])
-                void navigate(`/d/${encodeURIComponent(g.target_drawing_id)}`)
-              } else if (ids[0]) {
-                actions().select(turn.id, ids[0])
+                if (destFloor !== drawingId) {
+                  void navigate(`/d/${encodeURIComponent(destFloor)}`)
+                }
               }
             }}
             style={
               vars
                 ? {
                     backgroundColor: isFocused ? vars.solid : vars.surface,
-                    color: isFocused ? '#ffffff' : 'var(--foreground)',
+                    color: isFocused ? 'var(--primary-foreground)' : 'var(--foreground)',
                     borderColor: vars.solid,
                   }
                 : undefined
             }
             className={cn(
-              'inline-flex min-h-10 min-w-10 max-w-full items-center gap-1.5 rounded-lg border px-2.5 py-1 text-left text-xs font-semibold transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
+              'inline-flex min-h-10 min-w-10 max-w-full items-center gap-1.5 overflow-hidden rounded-lg border px-2.5 py-1 text-left text-xs font-semibold transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
               isFocused && 'shadow-xs',
             )}
           >
             <span
               aria-hidden="true"
               className="size-2.5 shrink-0 rounded-full ring-2 ring-background"
-              style={vars ? { backgroundColor: isFocused ? '#ffffff' : vars.solid } : undefined}
+              style={vars ? { backgroundColor: isFocused ? 'var(--primary-foreground)' : vars.solid } : undefined}
             />
-            <span className="truncate">{g.label}</span>
+            <span className="min-w-0 truncate">{g.label}</span>
             {targetFloor ? (
-              <span className="inline-flex shrink-0 items-center gap-0.5 opacity-85">
-                <ArrowUpRightIcon className="size-3" aria-hidden="true" />
-                <span className="num">{targetFloor}</span>
+              <span className="inline-flex max-w-28 shrink-0 items-center gap-0.5 opacity-85">
+                <ArrowUpRightIcon className="size-3 shrink-0" aria-hidden="true" />
+                <span className="num truncate">{targetFloor}</span>
               </span>
             ) : null}
           </button>
@@ -252,6 +282,9 @@ function EvidenceRow({
   const grpVars = groupCssVars(row.groupColor)
   const showCrop = row.kind === 'box' && Boolean(row.box) && (selected || hovered || Boolean(row.leastCertain))
   const isCrossFloor = Boolean(row.drawingId && row.drawingId !== drawing.id)
+  const targetDrawing = useAppStore((s) =>
+    isCrossFloor && row.drawingId ? selectDrawingById(s)[row.drawingId] : undefined,
+  )
 
   return (
     <li
@@ -281,7 +314,7 @@ function EvidenceRow({
       >
         <span
           title={row.badge}
-          style={row.on && grpVars ? { backgroundColor: grpVars.solid, color: '#ffffff' } : undefined}
+          style={row.on && grpVars ? { backgroundColor: grpVars.solid, color: 'var(--primary-foreground)' } : undefined}
           className={cn(
             'num inline-flex h-6 max-w-24 min-w-7 shrink-0 items-center justify-center rounded-md px-1.5 text-xs font-semibold',
             row.on
@@ -295,6 +328,7 @@ function EvidenceRow({
           <BoxCropThumb
             box={row.box}
             drawing={drawing}
+            targetDrawing={targetDrawing}
             boxDrawingId={row.drawingId}
             on={row.on}
             accentColor={grpVars?.solid}
@@ -313,10 +347,10 @@ function EvidenceRow({
             {row.floorLabel ? (
               <span
                 data-floor-badge={row.drawingId}
-                className="num inline-flex shrink-0 items-center gap-0.5 rounded border border-border bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground"
+                className="num inline-flex max-w-24 shrink-0 items-center gap-0.5 rounded border border-border bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground"
               >
-                {row.floorLabel}
-                <ArrowUpRightIcon className="size-3" aria-hidden="true" />
+                <span className="truncate">{row.floorLabel}</span>
+                <ArrowUpRightIcon className="size-3 shrink-0" aria-hidden="true" />
               </span>
             ) : null}
           </span>
@@ -379,7 +413,7 @@ function EvidenceList({
       return
     }
     const el = ref.current?.querySelector<HTMLElement>(`[data-evidence-id="${CSS.escape(selectedId)}"]`)
-    el?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' })
+    el?.scrollIntoView?.({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' })
   }, [selectedId, turn.listOpen, turn.id, list, reduce])
 
   if (!list.length) return null
@@ -481,7 +515,7 @@ function CappedScroll({
     ro.observe(el)
     if (el.firstElementChild) ro.observe(el.firstElementChild)
     return () => ro.disconnect()
-  }, [measure])
+  }, [measure, totalCount])
   const scrollable = !expanded && view.cap !== null
   const mask = scrollable && view.top ? 'linear-gradient(to bottom, transparent, black 1.25rem)' : undefined
   return (
@@ -505,7 +539,7 @@ function CappedScroll({
         <Button
           variant="ghost"
           aria-expanded={expanded}
-          className="min-h-10 self-center text-xs text-muted-foreground"
+          className="min-h-10 min-w-10 self-center text-xs text-muted-foreground"
           data-evidence-expand={expanded ? 'open' : 'capped'}
           data-evidence-more={!expanded && view.below > 0 ? view.below : undefined}
           onClick={() => {
@@ -664,7 +698,7 @@ function TextValue({
         {value}
       </blockquote>
       {long ? (
-        <Button variant="link" className="h-10 self-start px-0" onClick={() => setAll((v) => !v)} aria-expanded={all}>
+        <Button variant="link" className="h-10 min-w-10 self-start px-0" onClick={() => setAll((v) => !v)} aria-expanded={all}>
           {t(lang, all ? 'show_less' : expandKey)}
         </Button>
       ) : null}
@@ -693,7 +727,7 @@ function ClampedProse({
         {text}
       </p>
       {long ? (
-        <Button variant="link" className="h-10 self-start px-0 text-xs" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <Button variant="link" className="h-10 min-w-10 self-start px-0 text-xs" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
           {t(lang, open ? 'show_less' : 'show_more')}
         </Button>
       ) : null}
@@ -706,12 +740,7 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
   const active = useAppStore((s) => s.ui.activeTurnId === turn.id)
   const derived = useDerived(turn.id)
   const drawing = useAppStore(selectDrawing)
-  const activeProject = useAppStore(
-    (s) =>
-      (s as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
-      (s.session as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
-      null,
-  )
+  const activeProject = useAppStore(selectActiveProject)
   const floorLabels = useMemo(() => {
     const m = new Map<string, string>()
     for (const f of activeProject?.floors ?? []) m.set(f.drawing_id, f.label)

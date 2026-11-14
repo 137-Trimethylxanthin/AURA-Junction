@@ -1,49 +1,19 @@
 import { useMemo } from 'react'
 import type { Scope } from '@/api/contract'
-import type { ProjectBundle } from '@/api/client'
 import { useUi } from '@/i18n/uiLang'
 import { cn } from '@/lib/utils'
-import { actions, selectDrawing, selectIsPending, useAppStore } from '@/store'
-import { suggestionsFor, type Suggestion } from './draft'
+import { actions, selectActiveProject, selectCrossPlanScope, selectDrawing, selectIsPending, useAppStore } from '@/store'
+import { suggestionsFor } from './draft'
 
 /** Suggested questions with a language tag. `row` = one horizontally scrolling line (composer). */
 export function SuggestionList({ row = false }: { row?: boolean }) {
   const pending = useAppStore(selectIsPending)
   const drawing = useAppStore(selectDrawing)
-  const activeProject = useAppStore(
-    (s) =>
-      (s as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
-      (s.session as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
-      null,
-  )
-  const crossPlanScope = useAppStore(
-    (s) =>
-      (s as unknown as { crossPlanScope?: boolean }).crossPlanScope ??
-      (s.ui as unknown as { crossPlanScope?: boolean }).crossPlanScope ??
-      false,
-  )
+  const activeProject = useAppStore(selectActiveProject)
+  const crossPlanScope = useAppStore(selectCrossPlanScope)
   const { tu } = useUi()
 
-  const list = useMemo(() => {
-    const base = (suggestionsFor as (d?: typeof drawing, p?: ProjectBundle | null) => Suggestion[])(
-      drawing,
-      activeProject,
-    )
-    if (activeProject && activeProject.floors.length >= 2) {
-      const hasMultiFloor = base.some((s) => /across all floors|stairs/i.test(s.text))
-      if (!hasMultiFloor) {
-        return [
-          ...base.slice(0, 4),
-          {
-            lang: 'EN',
-            text: 'Show all stairs and where they lead to across all floors',
-            short: 'Stairs across all floors',
-          } satisfies Suggestion,
-        ]
-      }
-    }
-    return base
-  }, [drawing, activeProject])
+  const list = useMemo(() => suggestionsFor(drawing, activeProject), [drawing, activeProject])
 
   return (
     <ul
@@ -65,11 +35,11 @@ export function SuggestionList({ row = false }: { row?: boolean }) {
                 activeProject.floors.length >= 2 &&
                 (crossPlanScope || /across all floors/i.test(s.text))
               if (useProjectScope) {
-                const projectScope = {
+                const projectScope: Scope = {
                   kind: 'project',
                   project_id: activeProject.id,
                   drawing_ids: activeProject.floors.map((f) => f.drawing_id),
-                } as unknown as Scope
+                }
                 void actions().ask(s.text, { scope: projectScope })
               } else {
                 void actions().ask(s.text)

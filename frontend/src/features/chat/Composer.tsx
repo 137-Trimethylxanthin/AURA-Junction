@@ -11,16 +11,18 @@ import {
 } from "react"
 import { ArrowUpIcon, CrosshairIcon, LayersIcon, MicIcon, SparklesIcon, TerminalIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
-import type { Lang, Scope } from "@/api/contract"
-import type { ProjectBundle } from "@/api/client"
+import type { Scope } from "@/api/contract"
 import { Button } from "@/components/ui/button"
 import { LOCALE, fmtCount } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import {
   actions,
   appStore,
+  selectActiveProject,
   selectActiveTurn,
+  selectAnswererMode,
   selectAttachedMark,
+  selectCrossPlanScope,
   selectDrawing,
   selectIsPending,
   selectSessionLang,
@@ -58,13 +60,6 @@ const VoiceCard = lazy(() =>
 const MAX_LINES = 4
 const LINE_PX = 20
 
-const ALL_FLOORS_LABEL: Record<Lang, (n: string) => string> = {
-  en: (n) => `All ${n} floors`,
-  fr: (n) => `Les ${n} niveaux`,
-  fi: (n) => `Kaikki ${n} kerrosta`,
-  de: (n) => `Alle ${n} Geschosse`,
-}
-
 /** The server's question limit (AskRequest.question max_length); the textarea stops there. */
 const MAX_QUESTION = 2000
 
@@ -73,25 +68,15 @@ export function Composer() {
   const focusTick = useDraft((s) => s.focusTick)
   const pending = useAppStore(selectIsPending)
   const drawing = useAppStore(selectDrawing)
-  const activeProject = useAppStore(
-    (s) =>
-      (s as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
-      (s.session as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
-      null,
-  )
-  const crossPlanScope = useAppStore(
-    (s) =>
-      (s as unknown as { crossPlanScope?: boolean }).crossPlanScope ??
-      (s.ui as unknown as { crossPlanScope?: boolean }).crossPlanScope ??
-      false,
-  )
+  const activeProject = useAppStore(selectActiveProject)
+  const crossPlanScope = useAppStore(selectCrossPlanScope)
   const hintId = useId()
   const slashMenuId = useId()
   const { lang: uiLang, tu } = useUi()
   const mark = useAppStore(selectAttachedMark)
   const hasTurns = useAppStore((s) => s.turns.length > 0)
   const lang = useAppStore(selectSessionLang)
-  const promptBlocks = useMemo(() => promptBlocksFor(drawing), [drawing])
+  const promptBlocks = useMemo(() => promptBlocksFor(drawing, activeProject), [drawing, activeProject])
   const ta = useRef<HTMLTextAreaElement>(null)
   const [voiceOpen, setVoiceOpen] = useState(false)
   const [canSpeak] = useState(speechSupported)
@@ -135,9 +120,15 @@ export function Composer() {
     else el.setSelectionRange(el.value.length, el.value.length)
   }, [focusTick])
 
+  // Keep the highlighted slash option scrolled into view during keyboard navigation.
+  useEffect(() => {
+    if (!slashOpen || !activeSlashCmd) return
+    const opt = document.getElementById(`${slashMenuId}-${activeSlashCmd.id}`)
+    opt?.scrollIntoView?.({ block: "nearest" })
+  }, [slashOpen, activeSlashCmd, slashMenuId])
+
   const setCrossPlanScopeSafe = (on: boolean) => {
-    const act = actions() as unknown as { setCrossPlanScope?: (on: boolean) => void }
-    act.setCrossPlanScope?.(on)
+    actions().setCrossPlanScope(on)
   }
 
   const submitQuestion = (questionText: string) => {
@@ -146,11 +137,11 @@ export function Composer() {
     useDraft.getState().setText("")
     setDismissedSlashText(null)
     if (!mark && crossPlanScope && activeProject && activeProject.floors.length >= 2) {
-      const projectScope = {
+      const projectScope: Scope = {
         kind: "project",
         project_id: activeProject.id,
         drawing_ids: activeProject.floors.map((f) => f.drawing_id),
-      } as unknown as Scope
+      }
       void actions().ask(q, { scope: projectScope })
     } else {
       void actions().ask(q)
@@ -174,7 +165,7 @@ export function Composer() {
     const st = appStore.getState()
     switch (action.id) {
       case "clear": {
-        if (st.turns.length > 0) {
+        if (st.turns.length > 0 || st.ui.marks.length > 0) {
           const restore = actions().newConversation()
           toast(tu("new_chat_cleared"), {
             id: NEW_CHAT_UNDO_TOAST,
@@ -225,11 +216,24 @@ export function Composer() {
         break
       case "select":
       case "mark":
-      case "whatif":
+        if (st.ui.tool === "whatif") actions().cancelWhatIf()
         actions().setTool(action.id)
         break
+      case "whatif": {
+        const canWhatIf = drawing.rooms.some((r) => Boolean(r.rect)) && selectAnswererMode(st) !== "agent"
+        if (canWhatIf) {
+          actions().setTool("whatif")
+        } else {
+          toast("What-If resizing requires CAD room geometry in Exact or Hybrid mode.", { toasterId: CHAT_TOASTER })
+        }
+        break
+      }
       case "undo":
-        actions().undo()
+        if (st.undoStack.length > 0) {
+          actions().undo()
+        } else {
+          actions().undoNewConversation()
+        }
         break
       case "help":
         actions().setShortcutsOpen(true)
@@ -242,6 +246,11 @@ export function Composer() {
     if (spec.id === "zoom" && !/^\/zoom\s+\S+/i.test(text.trim())) {
       useDraft.getState().fill("/zoom ")
       setDismissedSlashText(null)
+      return
+    }
+    const typed = resolveSlashCommand(text, { hasTurns })
+    if (typed && typed.id === spec.id) {
+      executeSlashAction(typed)
       return
     }
     const resolved = resolveSlashCommand(spec.cmd, { hasTurns })
@@ -353,14 +362,14 @@ export function Composer() {
       ) : null}
 
       {mark ? (
-        <div className="flex">
-          <span className="inline-flex items-center gap-1.5 rounded-lg bg-user-surface py-0 pr-0 pl-2.5 text-sm font-medium text-user">
-            <CrosshairIcon className="size-3.5" aria-hidden />
-            {tu('mark_chip', { label: markLabel(mark.label, tu) })}
+        <div className="flex min-w-0">
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-user-surface py-0 pr-0 pl-2.5 text-sm font-medium text-user">
+            <CrosshairIcon className="size-3.5 shrink-0" aria-hidden />
+            <span className="truncate">{tu('mark_chip', { label: markLabel(mark.label, tu) })}</span>
             <Button
               variant="ghost"
               size="icon"
-              className="text-user hover:bg-user/10 hover:text-user"
+              className="shrink-0 text-user hover:bg-user/10 hover:text-user"
               aria-label={tu('mark_remove', { label: markLabel(mark.label, tu) })}
               onClick={() => actions().attachMark(null)}
             >
@@ -369,20 +378,20 @@ export function Composer() {
           </span>
         </div>
       ) : crossPlanScope && activeProject && activeProject.floors.length >= 2 ? (
-        <div className="flex">
+        <div className="flex min-w-0">
           <span
             data-project-scope-chip={activeProject.id}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-info-surface py-0 pr-0 pl-2.5 text-sm font-medium text-info"
+            className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-info-surface py-0 pr-0 pl-2.5 text-sm font-medium text-info"
           >
-            <LayersIcon className="size-3.5" aria-hidden />
-            <span className="num">
-              {ALL_FLOORS_LABEL[uiLang](fmtCount(activeProject.floors.length, uiLang))}
+            <LayersIcon className="size-3.5 shrink-0" aria-hidden />
+            <span className="num truncate">
+              {tu('floor_all_n', { n: fmtCount(activeProject.floors.length, uiLang) })}
             </span>
             <Button
               variant="ghost"
               size="icon"
-              className="text-info hover:bg-info/10 hover:text-info"
-              aria-label={`${ALL_FLOORS_LABEL[uiLang](fmtCount(activeProject.floors.length, uiLang))} — single floor`}
+              className="shrink-0 text-info hover:bg-info/10 hover:text-info"
+              aria-label={`${tu('floor_all_n', { n: fmtCount(activeProject.floors.length, uiLang) })} — single floor`}
               onClick={() => setCrossPlanScopeSafe(false)}
             >
               <XIcon />
@@ -454,6 +463,7 @@ export function Composer() {
           }}
           placeholder={tu('ask_placeholder')}
           aria-label={tu('ask_label')}
+          aria-autocomplete={slashOpen ? "list" : undefined}
           aria-controls={slashOpen ? slashMenuId : undefined}
           aria-activedescendant={slashOpen && activeSlashCmd ? `${slashMenuId}-${activeSlashCmd.id}` : undefined}
           maxLength={MAX_QUESTION}
@@ -518,7 +528,7 @@ export function Composer() {
                 type="button"
                 title={tu('pb_fill', { text: b.text })}
                 onClick={() => fillBlock(b)}
-                className="inline-flex min-h-10 items-center rounded-lg bg-muted px-3 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-accent-foreground/10 focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg bg-muted px-3 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-accent-foreground/10 focus-visible:ring-3 focus-visible:ring-ring/50"
               >
                 {tu(PB_LABEL[b.label] ?? 'pb_list')}
               </button>
