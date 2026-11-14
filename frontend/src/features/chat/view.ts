@@ -111,7 +111,9 @@ export function sentence(resp: AskResponse, d: Derived, drawing: Drawing, lang: 
   if (resp.answer.kind === 'count') return t(lang, 'counted_where', { where })
   if (resp.answer.kind === 'quantity') return t(lang, 'measured_where', { where })
   if (resp.answer.kind === 'text') return t(lang, 'text_found')
-  if (resp.answer.kind === 'note') return t(lang, 'agent_note_found')
+  // A note is only an agent estimate when its method says so; exact notes (e.g. "largest room") come from CAD.
+  if (resp.answer.kind === 'note')
+    return t(lang, resp.method === 'agent_estimate' ? 'agent_note_found' : resp.method === 'cad_geometry' ? 'note_exact' : 'note_read')
   if (resp.answer.kind !== 'area') return ''
   const byId = new Map(drawing.rooms.map((r) => [r.room_id, r]))
   const parts = [t(lang, 'area_where', { where })]

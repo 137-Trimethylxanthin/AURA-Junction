@@ -807,3 +807,39 @@ describe('agentFailure', () => {
     expect(agentFailure(failed('x', { estimate: { confidence: 0.4 } }))).toBeNull()
   })
 })
+
+describe('note answers are labelled by their method, not by their kind', () => {
+  // Real /ask payload (swiss-26874, "what is the biggest room"): an exact CAD note, 0 model calls.
+  const note = (method: AskResponse['method']) =>
+    ({
+      contract_version: '1.2',
+      answer: { kind: 'note', value: 'Séjour/repas (2.16) is the largest room: 35.43 m².', number: 35.43, unit: 'm2' },
+      evidence: { boxes: [], rooms: [] },
+      detected_lang: 'en',
+      canonical_en: 'what is the biggest room',
+      scope: { kind: 'floor' },
+      method,
+      trace: [],
+      calls: 0,
+      cost_usd: 0,
+      latency_ms: 1,
+      source: 'api',
+      route: 'cache',
+    }) as unknown as AskResponse
+
+  it('an exact CAD note reads as exact everywhere on the card', () => {
+    const r = note('cad_geometry')
+    const d = deriveAnswer(r, emptyToggles())
+    expect(chips(r, d, 'en')[0]).toMatchObject({ key: 'method', text: 'Exact · CAD geometry', tone: 'success' })
+    expect(footerParts(r, 'en')[0]).toBe('answer: CAD geometry')
+    expect(sentence(r, d, bundledDrawing, 'en')).toBe('Computed exactly from the CAD geometry.')
+  })
+
+  it('only an agent note is called a model estimate', () => {
+    const r = note('agent_estimate')
+    const d = deriveAnswer(r, emptyToggles())
+    expect(chips(r, d, 'en')[0]).toMatchObject({ text: 'Model estimate · agent', tone: 'info' })
+    expect(footerParts(r, 'en')[0]).toBe('answer: Model estimate · agent')
+    expect(sentence(r, d, bundledDrawing, 'en')).toBe('Estimated from the drawing by the blueprint agent.')
+  })
+})
