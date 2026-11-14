@@ -128,3 +128,19 @@ frontend (compare label, area formatting, `format.ts`) and the store (reader reg
 - Fresh upload (a CubiCasa PNG not in the store) through the upload page: indexed, plan, Compare, 3D, a room
   area by room type and a door count all worked; nothing upload-specific had to be fixed.
 - Deploy: no schema change, no re-interpretation; the cached plan.svg name was bumped so plans are redrawn.
+
+### 23:00–23:45 UTC — live store re-interpreted, wave 2 merged, first deploy
+
+- Backup: `/root/aura-deploy/backup/store-20261114T2301-pre-overnight.dump`.
+- All 759 non-IFC drawings of the live store were re-interpreted with the new readers (dimensions
+  reader off for this pass): 0 failures in 427 s, no new Gemini calls (cache). Result: 316 scans
+  have walls (3,289 wall polygons), 6,290 of 6,449 rooms have polygon geometry, 218 scans carry a
+  nominal scale and 98 a stated one.
+- Streams E and F merged (conflict: one line in `aura_model.room_poly`). Suites on the merged
+  tree: backend 699 passed / 34 skipped, store 158 passed / 1 skipped, frontend 346 passed.
+- Deployed `537b0c6` to https://aura.finanzbetrug.at. Smoke test through the public API: the
+  school plan's `plan.svg` is a vector drawing (741 paths, no embedded scan) and its rooms have up
+  to 24 points; "largest room" is labelled vision; "area of the kitchen in square feet" carries the
+  display unit; the hitos building total is 198 doors.
+- A second pass runs the dimensions reader on a showcase subset of the live store (all CAD
+  drawings, the US sheet PDFs, the school plan, 60 CubiCasa scans).
