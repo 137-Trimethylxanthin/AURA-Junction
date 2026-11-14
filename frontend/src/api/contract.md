@@ -470,6 +470,14 @@ Printed text found on the drawing, e.g. a fire rating. Its box is in `evidence.b
 
 Each SSE message is `event: <name>\ndata: <json>\n\n`. Order: `turn`, `understood`, then any number of `tool_call`/`tool_result` pairs, then `check` (optional), then `answer` **or** `error`, then always `done`.
 
+Confirmed against the live backend (14 Nov):
+- A cached answer (`route: "cache"`) sends no `tool_call`/`tool_result`; it goes `turn`, `understood`, `check`, `answer`, `done`.
+- `tool_call.node` is a full `TraceNode` with `tool` set; its `evidence_ids` name the boxes the matching `tool_result.evidence` carries.
+- `error` is followed by `done`. At the 60 s deadline the code is `timeout`.
+- Comment lines (`: …`) and unknown events are ignored by the client. A known event with a malformed body ends the turn with an error card; no number is shown.
+- The client sends `conversation_id` from the first `turn` event on every later message to the same drawing (follow-ups such as "and in apartment B?"), and stores it in localStorage as `aura.conversation.<drawing_id>` to restore with `GET /conversations/:id` after a reload.
+- When `/chat` answers 404/405 or with a non-SSE body, the client uses `POST /ask` for the rest of the session.
+
 | Event | `data` |
 |---|---|
 | `turn` | `{ conversation_id, turn_id }` |
@@ -508,6 +516,33 @@ All of these except `timeout` are 4xx, so the frontend shows an error card and n
 | `ErrorCode` | adds `"timeout"` | The 60 s chat-turn deadline: SSE `error` event. `/ask` answers `504` (5xx, so the bundled drawing falls back to local answers). |
 
 `detected_lang` stays `en | fr | fi | de`; Italian questions report `"en"` (`canonical_en` is English anyway). A check's own model calls and cost are not added to the answer's `calls`/`cost_usd`; they are reported in `check.calls`, `check.cost_usd`, `check.tokens` and `check.cached`, and in `/stats`. The UI shows both and sums both in the session total.
+
+
+### IFC, rewrite, raster and agent additions (agreed with L1/L2, 14 Nov)
+
+**IFC (L1).**
+- New answer kind `{ kind: 'quantity'; value: number; unit: 'm' | 'm2' | 'm3' }` for wall length, wall net side area and wall/slab net volume per storey. The UI shows the value as given (2 decimals, with its unit) and never recomputes it from evidence.
+- New scope `{ kind: 'model' }`: the whole building model, next to `floor` (the drawing's storey).
+- New optional `evidence.rows: { id: string; name?: string; value?: number }[]` for counted elements without a 2D box (walls, columns, stairs, whole-model counts); `id` is the IFC GlobalId. The card states how many there are.
+
+**`POST /rewrite` (L2).** Request `{ drawing_id, text }` (text ≤ 2000 characters). Response 200:
+
+```ts
+interface RewriteResponse {
+  contract_version: string; drawing_id: string; detected_lang: Lang
+  blocks: { question: string; intent: 'count' | 'area' | 'other'; subject?: string; scope: Scope; scope_exists: boolean; routable: boolean }[]
+  not_answerable: string[]
+  calls: number; cost_usd: number; tokens: number; model: string   // one flash-lite call: show "1 model call · $x"
+}
+```
+
+- Confirm a block by sending `{ question: block.question, scope: block.scope }` to `/ask` or `/chat`: always with the block's scope (the text alone can route differently).
+- `routable: false`: shown greyed out.
+- Errors: 429 `budget_exhausted`, 429 `rate_limited`, 504 `timeout`, 409 `processing`, 404 `unknown_drawing`.
+
+**Raster uploads (presenter token).** Detection runs in the background job (status `processing` with `progress` 0.5, then `ready`, about 60 s). The drawing has `kind: 'raster'` and `capabilities: ['door', 'window']`. Door and window answers have `method: 'vision'`, no `gold`, and a check with `image: 'upload'`, `ranking` and `least_certain_id` but **no** `agreed`. Every other question abstains `not_supported_yet`. A failed detection ends with `status: 'failed'` and a readable `error`.
+
+**Agent route.** `route` may be `'agent'`: on a router miss, flash-lite function calling streams extra `tool_call`/`tool_result` pairs (node ids `agent-N`, tag `agent · flash-lite`). The answer may carry `explanation` (prose after the provenance filter, shown under the sentence) and a `warn` trace node named `provenance` when sentences with invented numbers were removed. Top-level `calls` counts the `choice` call plus the agent calls.
 
 ### Conformance JSON
 

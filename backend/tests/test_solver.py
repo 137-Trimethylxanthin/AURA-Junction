@@ -310,7 +310,7 @@ def test_ifc_library_served_model_and_evidence():
     from aura.solvers import ifc
     lib = json.loads(LIBRARY.read_text(encoding='utf-8')) if LIBRARY.exists() else {}
     for e in lib.get('ifc', []):
-        d = BACKEND / 'build' / 'drawings-ifc-staging' / e['id']
+        d = BACKEND / 'build' / 'ifc_drawings' / e['id']
         if not (d / 'model.json').exists():
             pytest.skip('run scripts/preprocess.py first')
         served = ifc.IfcModel.from_json(json.loads((d / 'model.json').read_text(encoding='utf-8')))

@@ -136,7 +136,8 @@ function Hero() {
                 {swiss.value}
               </span>{" "}
               of <span className="tabular-nums">{fmtInt(swiss.n)}</span> Swiss
-              dataset questions answered correctly from the DXF geometry, with{" "}
+              dataset questions answered correctly from the DXF geometry, on the
+              set the solver was built against, with{" "}
               <span className="tabular-nums">{swiss.model_calls ?? 0}</span>{" "}
               model calls.{" "}
               <a
@@ -249,7 +250,7 @@ function Section({
 // ---- how it works --------------------------------------------------------------------------------
 
 function HowItWorks() {
-  const check = factById("tile-check-cost")
+  const check = factById("check-cost-library")
   const cells = [
     {
       term: "The answer",
@@ -258,10 +259,10 @@ function HowItWorks() {
     },
     {
       term: "The check",
-      value: "1 request per drawing",
+      value: "1 request per kind of item",
       detail: check
-        ? `All boxes in one Decisions API call; ${check.value} measured once (n=${check.n}).`
-        : "All boxes in one Decisions API call.",
+        ? `Every box of one kind on a drawing in one Decisions API call: ${check.value} on average (n=${check.n}).`
+        : "Every box of one kind on a drawing in one Decisions API call.",
     },
     {
       term: "Without CAD data",

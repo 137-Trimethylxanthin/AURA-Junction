@@ -452,6 +452,17 @@ export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lan
           </p>
         ) : null}
         <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        {resp.evidence.rows?.length ? (
+          <p className="text-sm text-muted-foreground" data-evidence-rows={resp.evidence.rows.length}>
+            {t(lang, 'rows_n', { n: fmtCount(resp.evidence.rows.length, lang) })}
+          </p>
+        ) : null}
+        {resp.explanation ? (
+          // Model prose that passed the provenance filter: every number in it comes from a tool result.
+          <p className="text-sm text-pretty text-foreground" data-explanation>
+            {resp.explanation}
+          </p>
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {chipList.map((c) => (

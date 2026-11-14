@@ -392,3 +392,25 @@ def test_precomputed_checks_json_is_used_at_zero_calls(tmp_path):
         b = ask(c, "How many washbasins are drawn on this floor plan?")
         assert b["check"]["cached"] is True and b["check"]["calls"] == 0
         assert b["check"]["total"] == 5 and fake.calls == []
+
+
+@pytest.mark.dataset
+def test_library_precomputed_checks_are_served_at_zero_calls(tmp_path):
+    from aura.config import Settings
+    from aura.gemini.client import FakeTransport
+    from aura.main import create_app
+    from tests.conftest import BACKEND
+
+    build = BACKEND / "build" / "drawings"
+    if not (build / "swiss-22513" / "checks.json").is_file():
+        pytest.skip("dataset: run scripts/precompute_checks.py --live first")
+    fake = FakeTransport(tmp_path / "no-fixtures")
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=build)
+    with TestClient(create_app(s, transport=fake)) as c:
+        for drawing in ("swiss-22513", "swiss-13399"):
+            r = c.post("/ask", json={"drawing_id": drawing,
+                                     "question": "How many doors are drawn on this floor plan?"})
+            b = r.json()
+            assert b["check"]["cached"] is True and b["check"]["calls"] == 0
+            assert b["check"]["total"] == b["answer"]["value"]
+        assert fake.calls == []

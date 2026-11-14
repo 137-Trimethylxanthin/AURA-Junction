@@ -33,6 +33,8 @@ function whereEn(scope: Scope): string {
   switch (scope.kind) {
     case 'floor':
       return 'on this floor plan'
+    case 'model':
+      return 'in the whole model'
     case 'unit':
       return `in apartment ${scope.unit}`
     case 'room':
@@ -48,6 +50,8 @@ function scopeText(scope: Scope): string {
   switch (scope.kind) {
     case 'floor':
       return 'whole floor'
+    case 'model':
+      return 'whole model'
     case 'unit':
       return `apartment ${scope.unit}`
     case 'room':
@@ -63,6 +67,7 @@ function sameScope(a: Scope, b: Scope): boolean {
   if (a.kind !== b.kind) return false
   switch (a.kind) {
     case 'floor':
+    case 'model':
       return true
     case 'unit':
       return a.unit === (b as typeof a).unit
@@ -78,6 +83,7 @@ function sameScope(a: Scope, b: Scope): boolean {
 function roomsInScope(d: DrawingFile, scope: Scope): RoomPoly[] {
   switch (scope.kind) {
     case 'floor':
+    case 'model':
       return d.rooms
     case 'unit':
       return d.rooms.filter((r) => r.unit === scope.unit)
@@ -93,6 +99,7 @@ function roomsInScope(d: DrawingFile, scope: Scope): RoomPoly[] {
 function boxesInScope(d: DrawingFile, all: Box[], scope: Scope): Box[] {
   switch (scope.kind) {
     case 'floor':
+    case 'model':
       return all
     case 'unit':
       return all.filter((b) => b.unit === scope.unit)

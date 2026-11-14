@@ -43,3 +43,43 @@ describe('check chip', () => {
     expect(chip.text).not.toMatch(/agree/)
   })
 })
+
+import { valueParts, sentence } from '@/features/chat/view'
+import { isAskResponse, isRewriteResponse, isScope } from '@/api/contract'
+import { bundledDrawing } from '@/data/drawing'
+
+describe('1.1 answer kinds', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+  it('a measured IFC quantity is shown as given, with its unit, and validates', () => {
+    const r = { ...base, answer: { kind: 'quantity' as const, value: 42.5, unit: 'm3' as const }, scope: { kind: 'model' as const } }
+    expect(isAskResponse(r)).toBe(true)
+    const d = deriveAnswer(r, emptyToggles())
+    expect(valueParts(r, d, 'en')).toEqual(['42.50', 'm³'])
+    expect(sentence(r, d, bundledDrawing, 'en')).toContain('in the whole model')
+  })
+  it('a text answer shows the printed text itself', () => {
+    const r = { ...base, answer: { kind: 'text' as const, value: 'EI 30', subject: 'fire_rating' as const } }
+    expect(valueParts(r, deriveAnswer(r, emptyToggles()), 'en')).toEqual(['EI 30', 'fire rating'])
+  })
+  it('evidence rows and the model scope validate; bad rows do not', () => {
+    expect(isScope({ kind: 'model' })).toBe(true)
+    const rows = [{ id: '2O2Fr$t4X7Zf8NOew3FLOH', name: 'Wall 1', value: 3.2 }]
+    expect(isAskResponse({ ...base, evidence: { ...base.evidence, rows } })).toBe(true)
+    expect(isAskResponse({ ...base, evidence: { ...base.evidence, rows: [{ name: 'x' }] } })).toBe(false)
+  })
+  it('a /rewrite response validates', () => {
+    const r = {
+      contract_version: '1.1',
+      drawing_id: 'swiss-46639',
+      detected_lang: 'en',
+      blocks: [{ question: 'How many washbasins?', intent: 'count', subject: 'washbasin', scope: { kind: 'floor' }, scope_exists: true, routable: true }],
+      not_answerable: ['is the ceiling high enough for a loft bed'],
+      calls: 1,
+      cost_usd: 0.0001,
+      tokens: 900,
+      model: 'gemini-flash-lite',
+    }
+    expect(isRewriteResponse(r)).toBe(true)
+    expect(isRewriteResponse({ ...r, blocks: [{ ...r.blocks[0], scope: { kind: 'planet' } }] })).toBe(false)
+  })
+})

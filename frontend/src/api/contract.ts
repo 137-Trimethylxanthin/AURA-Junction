@@ -183,6 +183,8 @@ export interface UploadResult {
 
 export type Scope =
   | { kind: 'floor' }
+  /** 1.1: the whole building model (IFC), not just the drawing's storey. */
+  | { kind: 'model' }
   | { kind: 'unit'; unit: string }
   | { kind: 'room'; room_id: RoomId }
   | { kind: 'label'; label: string }
@@ -254,10 +256,18 @@ export type Answer =
   | { kind: 'count'; value: number; subject: Subject }
   | { kind: 'area'; value: number; unit: 'm2' }
   | { kind: 'abstain'; reason: AbstainReason; where_to_find?: string }
+  /** 1.1: a measured quantity given as is (IFC wall length, net side area, net volume); never recomputed. */
+  | { kind: 'quantity'; value: number; unit: 'm' | 'm2' | 'm3' }
   /** 1.1: printed text found on the drawing (e.g. a fire rating), with its box in the evidence. */
   | { kind: 'text'; value: string; subject: TextSubject }
 
 export type TextSubject = 'fire_rating' | 'label'
+
+export interface EvidenceRow {
+  id: string
+  name?: string
+  value?: number
+}
 
 export interface EvidenceRoom {
   room_id: RoomId
@@ -312,7 +322,8 @@ export type Method = 'cad_geometry' | 'ocr' | 'detector' | 'vision' | 'none'
 export interface AskResponse {
   contract_version: string
   answer: Answer
-  evidence: { boxes: Box[]; rooms: EvidenceRoom[] }
+  /** `rows` (1.1): counted elements without a 2D box (IFC walls, columns, whole-model counts); id = IFC GlobalId. */
+  evidence: { boxes: Box[]; rooms: EvidenceRoom[]; rows?: EvidenceRow[] }
   detected_lang: Lang
   canonical_en: string
   scope: Scope
@@ -366,6 +377,38 @@ export const CHAT_EVENTS: readonly ChatEventName[] = [
   'error',
   'done',
 ]
+
+/** `POST /rewrite` body (1.1): a rambling message or voice transcript to split into questions. */
+export interface RewriteRequest {
+  drawing_id: string
+  /** ≤ 2000 characters. */
+  text: string
+}
+
+/** One proposed question; confirm it by sending `question` with this exact `scope` to /ask or /chat. */
+export interface RewriteBlock {
+  question: string
+  intent: 'count' | 'area' | 'other'
+  subject?: string
+  scope: Scope
+  scope_exists: boolean
+  /** false: the scope is not on this drawing or the router cannot place it (shown greyed out). */
+  routable: boolean
+}
+
+/** `POST /rewrite` response (1.1). One flash-lite call: show "1 model call · $x" on the rewrite step. */
+export interface RewriteResponse {
+  contract_version: string
+  drawing_id: string
+  detected_lang: Lang
+  blocks: RewriteBlock[]
+  /** Parts of the text that this drawing cannot answer, in the user's words. */
+  not_answerable: string[]
+  calls: number
+  cost_usd: number
+  tokens: number
+  model: string
+}
 
 /** `GET /conversations/:id` body (1.1). */
 export interface Conversation {
@@ -485,6 +528,7 @@ export function isScope(v: unknown): v is Scope {
   if (!isObj(v)) return false
   switch (v.kind) {
     case 'floor':
+    case 'model':
       return true
     case 'unit':
       return isStr(v.unit)
@@ -513,6 +557,7 @@ function isAnswer(v: unknown): v is Answer {
   if (!isObj(v)) return false
   if (v.kind === 'count') return isNum(v.value) && isOneOf(v.subject, SUBJECTS)
   if (v.kind === 'area') return isNum(v.value) && v.unit === 'm2'
+  if (v.kind === 'quantity') return isNum(v.value) && isOneOf(v.unit, ['m', 'm2', 'm3'] as const)
   if (v.kind === 'text') return isStr(v.value) && isOneOf(v.subject, ['fire_rating', 'label'] as const)
   if (v.kind === 'abstain')
     return (
@@ -574,6 +619,11 @@ export function isAskResponse(v: unknown): v is AskResponse {
   if (!isObj(ev) || !Array.isArray(ev.boxes) || !Array.isArray(ev.rooms)) return false
   if (!ev.boxes.every(isBox)) return false
   if (!ev.rooms.every((r) => isObj(r) && isStr(r.room_id) && typeof r.included === 'boolean' && isNum(r.area_m2)))
+    return false
+  if (
+    ev.rows !== undefined &&
+    !(Array.isArray(ev.rows) && ev.rows.every((r) => isObj(r) && isStr(r.id) && optStr(r.name) && optNum(r.value)))
+  )
     return false
   if (v.gold !== undefined) {
     const g = v.gold
@@ -745,4 +795,29 @@ export function isHealth(v: unknown): v is Health {
 /** Major part of a "major.minor" version string. */
 export function majorOf(version: string): string {
   return version.split('.')[0] ?? ''
+}
+
+export function isRewriteResponse(v: unknown): v is RewriteResponse {
+  return (
+    isObj(v) &&
+    isStr(v.contract_version) &&
+    isStr(v.drawing_id) &&
+    isOneOf(v.detected_lang, LANGS) &&
+    Array.isArray(v.blocks) &&
+    v.blocks.every(
+      (b) =>
+        isObj(b) &&
+        isStr(b.question) &&
+        isOneOf(b.intent, ['count', 'area', 'other'] as const) &&
+        isScope(b.scope) &&
+        typeof b.scope_exists === 'boolean' &&
+        typeof b.routable === 'boolean',
+    ) &&
+    Array.isArray(v.not_answerable) &&
+    v.not_answerable.every(isStr) &&
+    isNum(v.calls) &&
+    isNum(v.cost_usd) &&
+    isNum(v.tokens) &&
+    isStr(v.model)
+  )
 }

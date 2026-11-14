@@ -77,6 +77,10 @@ export function deriveAnswer(resp: AskResponse, t: Toggles, drawing?: Drawing): 
         value = new Set(includedRooms.map((r) => unitOf.get(r.room_id)).filter(Boolean)).size
       } else value = answer.value
     } else value = counted.length
+  } else if (answer.kind === 'quantity') {
+    // Measured quantities (IFC) are shown as given; nothing here can recompute them.
+    original = answer.value
+    value = answer.value
   } else if (answer.kind === 'area') {
     original = answer.value
     value = changed ? round2(includedRooms.reduce((s, r) => s + r.area_m2, 0)) : answer.value

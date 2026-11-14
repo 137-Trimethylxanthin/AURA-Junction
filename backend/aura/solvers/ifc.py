@@ -217,6 +217,23 @@ def load(ifc_path: str | Path, storey: str | None = None, drawing_id: str | None
                 fp = world_fp(by_id[el['id']]) if el['id'] in by_id else None
                 out.append({'guid': el['guid'], 'polygon': ring(fp) if fp is not None else None})
             footprints[fam] = out
+        # Plan extent: the storey's walls (+ 2 m). Footprints wholly outside it (e.g. warmond's loggia spaces
+        # placed 20-100 m away from the building) are not drawn; they still count and sum, they just cannot be lit.
+        wpts = [p for g in footprints.get('wall', []) if g['polygon'] for p in g['polygon']]
+        if wpts:
+            cx0, cx1 = min(p[0] for p in wpts) - 2, max(p[0] for p in wpts) + 2
+            cy0, cy1 = min(p[1] for p in wpts) - 2, max(p[1] for p in wpts) + 2
+
+            def outside(poly):
+                xs = [p[0] for p in poly]; ys = [p[1] for p in poly]
+                return min(xs) > cx1 or max(xs) < cx0 or min(ys) > cy1 or max(ys) < cy0
+            for r in rooms:
+                if r['storey'] == storey and r['polygon'] and outside(r['polygon']):
+                    r['polygon'] = None; r['off_plan'] = True
+            for v in footprints.values():
+                for g in v:
+                    if g['polygon'] and outside(g['polygon']):
+                        g['polygon'] = None; g['off_plan'] = True
         pts = [p for r in rooms if r['storey'] == storey and r['polygon'] for p in r['polygon']]
         pts += [p for v in footprints.values() for g in v if g['polygon'] for p in g['polygon']]
         if pts:

@@ -46,7 +46,7 @@ interface StepText {
 }
 
 function useSteps(): StepText[] {
-  const check = factById("tile-check-cost")
+  const check = factById("check-cost-library")
   return [
     {
       tone: "success",
@@ -70,12 +70,12 @@ function useSteps(): StepText[] {
       title: "Gemini checks each box",
       body: check ? (
         <>
-          A zoomed tile around every box goes to the Gemini Decisions API in a
-          single request. Measured once: {check.value} for 37 tiles (n=
-          {check.n}).
+          A zoomed tile around every box of one kind goes to the Gemini
+          Decisions API in one request: {check.value} on average ({check.n}{" "}
+          requests, 710 boxes; 707 agreed).
         </>
       ) : (
-        "A zoomed tile around every box goes to the Gemini Decisions API in a single request."
+        "A zoomed tile around every box of one kind goes to the Gemini Decisions API in one request."
       ),
     },
     {

@@ -16,6 +16,9 @@ RESULTS = BACKEND / 'eval' / 'results'
 DRAWINGS = BACKEND / 'build' / 'drawings'
 
 
+DEV = 'Measured on the challenge dataset the solver was developed against, not a held-out result.'  # the probes and solvers were written while looking at this dataset
+
+
 def pct(num: float, den: float, dp: int = 1) -> str:
     """Truncated percentage, e.g. 18606/18792 -> '99.0 %' (dp=1)."""
     f = 10 ** dp
@@ -37,8 +40,8 @@ def facts() -> list[dict]:
             'scope': f"Every English counting and area question on the {sw['files']} Swiss Dwellings floor plans in the dataset",
             'method': 'DXF layers read with ezdxf and shapely; counts and areas computed in code, no model',
             'measured': sw['measured_at'][:10],
-            'caveat': 'Each question also has a German, French or Italian twin asking the same fact; only the English '
-                   'lines were scored. Areas count as correct within 2 %, as in the dataset.'})
+            'caveat': (f'{DEV} Each question also has a German, French or Italian twin asking the same fact; only the '
+                       'English lines were scored. Areas count as correct within 2 %, as in the dataset.')})
     lib, idx = load(DRAWINGS / 'library.json'), load(DRAWINGS / 'index.json')
     if lib and idx:
         ids = {d['id'] for d in lib['drawings']}
@@ -50,7 +53,7 @@ def facts() -> list[dict]:
                 'value': pct(ok, n), 'numerator': ok, 'denominator': n, 'n': n, 'n_unit': 'questions', 'model_calls': 0, 'cost_usd': 0,
                 'scope': f'The {len(rows)} seeded library drawings (random.Random(46639) over plans with at least 30 questions)',
                 'method': 'Same solver as the full-set run, answers compared with the dataset gold',
-                'measured': min(r['measured_at'] for r in rows)[:10]})
+                'measured': min(r['measured_at'] for r in rows)[:10], 'caveat': DEV})
     ic = load(RESULTS / 'ifc.json')
     if ic:
         pr = ic['probe_rules_reproduced']
@@ -62,8 +65,9 @@ def facts() -> list[dict]:
                      'areas, wall lengths and volumes)',
             'method': 'IfcOpenShell quantities and geometry, computed in code, no model',
             'measured': ic['measured_at'][:10],
-            'caveat': (f"Two rules were added after inspecting the misses on this same set; with the original rules "
-                       f"the result is {pr['correct']:,}/{pr['questions']:,} ({pct(pr['correct'], pr['questions'])})."),
+            'caveat': (f"Two rules were added after reading the {pr['questions'] - pr['correct']} misses on this same set, "
+                       f"so this is not a held-out measure; with the original rules: {pr['correct']:,}/{pr['questions']:,} "
+                       f"= {pct(pr['correct'], pr['questions'])}."),
         })
     cc = load(RESULTS / 'cubicasa.json')
     if cc:

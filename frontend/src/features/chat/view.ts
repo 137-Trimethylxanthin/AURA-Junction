@@ -13,6 +13,8 @@ export function whereText(scope: Scope, lang: Lang): string {
   switch (scope.kind) {
     case 'floor':
       return t(lang, 'where_floor')
+    case 'model':
+      return t(lang, 'where_model')
     case 'unit':
       return t(lang, 'where_unit', { unit: scope.unit })
     case 'room':
@@ -32,18 +34,23 @@ export function scopeChipText(scope: Scope, lang: Lang): string {
 
 /** Formatted value with the unit/noun, e.g. ["12", "windows"] or ["139,34", "m²"]. */
 export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, string] | null {
+  if (resp.answer.kind === 'text') return [resp.answer.value, t(lang, resp.answer.subject === 'fire_rating' ? 'text_fire_rating' : 'text_label')]
   if (d.value === null) return null
   if (resp.answer.kind === 'count') return [fmtCount(d.value, lang), noun(resp.answer.subject, d.value, lang)]
   if (resp.answer.kind === 'area') return [fmtArea(d.value, lang), 'm²']
+  if (resp.answer.kind === 'quantity')
+    return [fmtArea(d.value, lang), { m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]]
   return null
 }
 
 const fmtFor = (resp: AskResponse, n: number, lang: Lang) =>
-  resp.answer.kind === 'area' ? fmtArea(n, lang) : fmtCount(n, lang)
+  resp.answer.kind === 'area' || resp.answer.kind === 'quantity' ? fmtArea(n, lang) : fmtCount(n, lang)
 
 export function sentence(resp: AskResponse, d: Derived, drawing: Drawing, lang: Lang): string {
   const where = whereText(resp.scope, lang)
   if (resp.answer.kind === 'count') return t(lang, 'counted_where', { where })
+  if (resp.answer.kind === 'quantity') return t(lang, 'measured_where', { where })
+  if (resp.answer.kind === 'text') return t(lang, 'text_found')
   if (resp.answer.kind !== 'area') return ''
   const byId = new Map(drawing.rooms.map((r) => [r.room_id, r]))
   const parts = [t(lang, 'area_where', { where }), t(lang, 'rooms_included', { n: fmtCount(d.includedRooms.length, lang) })]

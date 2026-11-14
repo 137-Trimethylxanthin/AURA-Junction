@@ -131,7 +131,7 @@ def process(stem: str, data: Path, qlines, overlays: bool = True) -> dict:
 
 IFC_ROOT = 'ifc_models'
 # New drawing kinds go to staging until L2's loader supports them; L2 moves them into build/drawings.
-IFC_STAGING = 'drawings-ifc-staging'
+IFC_STAGING = 'ifc_drawings'
 
 
 def ifc_gold_rows(model, qlines):
