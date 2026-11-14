@@ -107,7 +107,7 @@ const rejectedCount = (r: { n?: number }[]) => r.reduce((k, x) => k + (x.n ?? 1)
 /** Discover server-created multi-page PDF projects & sibling drawings once a PDF upload finishes processing. */
 async function discoverServerProjects(base: string, onProjectsDiscovered?: () => void) {
   try {
-    const projects = await listProjects({ baseUrl: base })
+    const projects = await listProjects({ baseUrl: base }, { headers: myProjects.listHeaders() })
     if (projects.length > 0) myProjects.syncFromServer(projects)
   } catch {
     /* ignore network / 404 / storage errors */

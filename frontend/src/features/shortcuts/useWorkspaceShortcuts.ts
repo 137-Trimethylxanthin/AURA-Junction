@@ -94,7 +94,7 @@ export async function hydrateActiveProject(opts: {
   if (sourceKind === 'api' && base) {
     let srvProjects: ProjectBundle[] = []
     try {
-      srvProjects = await listProjects({ baseUrl: base }, { timeoutMs: 8_000 })
+      srvProjects = await listProjects({ baseUrl: base }, { timeoutMs: 8_000, headers: myProjects.listHeaders() })
       if (srvProjects.length > 0 && !signal?.aborted) myProjects.syncFromServer(srvProjects)
     } catch {
       if (signal?.aborted) return null

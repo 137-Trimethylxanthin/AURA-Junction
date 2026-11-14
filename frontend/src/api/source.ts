@@ -19,6 +19,7 @@ import type { Conversation } from './contract'
 import { safeUrl } from './contract'
 import { ask as askLocal } from './local'
 import { BUNDLED_DRAWING_ID } from '@/data/ids'
+import { myProjects } from './library'
 
 export type SourceKind = 'api' | 'local'
 export type SourceState = 'waking' | 'ready'
@@ -182,7 +183,11 @@ export function createSource(opts: SourceOptions = {}): Source {
       await init()
       if (status.kind !== 'api' || !baseUrl) return []
       try {
-        return await listProjects({ baseUrl, fetch: opts.fetch }, call)
+        // Ownership credentials, so bundles over this browser's uploads are listed too.
+        return await listProjects(
+          { baseUrl, fetch: opts.fetch },
+          { ...call, headers: { ...myProjects.listHeaders(), ...call?.headers } },
+        )
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return []
         throw e

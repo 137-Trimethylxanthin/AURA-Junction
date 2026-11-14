@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { ProjectBundle } from './contract'
+import { CONTRACT_VERSION, type ProjectBundle } from './contract'
 import { deleteProject, listProjects, saveProject } from './client'
 import { PROJECT_TOKEN_HEADER, myProjects, myUploads } from './library'
 
@@ -48,10 +48,47 @@ describe('myProjects tokens and pruning', () => {
     expect(myProjects.authHeaders(myProjects.get('p1')!)).toEqual({ [PROJECT_TOKEN_HEADER]: 'tok-1' })
   })
 
-  it("falls back to an upload's delete token for upload-backed projects", () => {
+  it('saving sends the project token plus the delete token of every upload floor', () => {
     myUploads.add({ id: 'up-1', name: 'eg.pdf', delete_token: 'del-1', created_at: '2026-11-14T00:00:00Z' })
-    expect(myProjects.authHeaders(bundle('p2', ['x', 'up-1']))).toEqual({ 'x-delete-token': 'del-1' })
+    myUploads.add({ id: 'up-2', name: 'og.pdf', delete_token: 'del-2', created_at: '2026-11-14T00:00:00Z' })
+    expect(myProjects.authHeaders(bundle('p2', ['up-1', 'x', 'up-2']))).toEqual({ 'x-delete-token': 'del-1,del-2' })
     expect(myProjects.authHeaders(bundle('p3', ['x', 'y']))).toEqual({})
+    myProjects.save(bundle('p4', ['up-1', 'x']))
+    myProjects.setToken('p4', 'tok-4')
+    expect(myProjects.authHeaders(myProjects.get('p4')!)).toEqual({
+      [PROJECT_TOKEN_HEADER]: 'tok-4',
+      'x-delete-token': 'del-1',
+    })
+  })
+
+  it('listing sends every stored project token and every upload delete token, omitting empty ones', () => {
+    expect(myProjects.listHeaders()).toEqual({})
+    myProjects.save(bundle('p1', ['a', 'b']))
+    myProjects.setToken('p1', 'tok-1')
+    myProjects.save(bundle('p2', ['c', 'd']))
+    myProjects.setToken('p2', 'tok-2')
+    expect(myProjects.listHeaders()).toEqual({ [PROJECT_TOKEN_HEADER]: 'tok-2,tok-1' })
+    myUploads.add({ id: 'up-1', name: 'eg.pdf', delete_token: 'del-1', created_at: '2026-11-14T00:00:00Z' })
+    expect(myProjects.listHeaders()['x-delete-token']).toBe('del-1')
+  })
+
+  it('the source sends the list credentials on GET /projects', async () => {
+    const { createSource } = await import('./source')
+    myProjects.save(bundle('p1', ['a', 'b']))
+    myProjects.setToken('p1', 'tok-1')
+    let headers: Record<string, string> = {}
+    const src = createSource({
+      baseUrl: 'http://x',
+      fetch: async (url: string, init?: RequestInit) => {
+        if (url.endsWith('/projects')) {
+          headers = (init?.headers ?? {}) as Record<string, string>
+          return new Response(JSON.stringify({ projects: [] }))
+        }
+        return new Response(JSON.stringify({ ok: true, contract_version: CONTRACT_VERSION }))
+      },
+    })
+    await src.projects?.()
+    expect(headers[PROJECT_TOKEN_HEADER]).toBe('tok-1')
   })
 
   it('prunes floors that 404 and drops projects left with fewer than 2 floors', async () => {

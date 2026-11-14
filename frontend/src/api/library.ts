@@ -117,6 +117,10 @@ const tokenField = (p: ProjectBundle): string | undefined => {
   const v = (p as unknown as Record<string, unknown>)[PROJECT_TOKEN_FIELD]
   return typeof v === 'string' && v ? v : undefined
 }
+const tokenHeaders = (projectTokens: string[], deleteTokens: string[]): Record<string, string> => ({
+  ...(projectTokens.length ? { [PROJECT_TOKEN_HEADER]: projectTokens.join(',') } : {}),
+  ...(deleteTokens.length ? { 'x-delete-token': deleteTokens.join(',') } : {}),
+})
 const withToken = (p: ProjectBundle, token: string | undefined): ProjectBundle =>
   token ? ({ ...p, [PROJECT_TOKEN_FIELD]: token } as ProjectBundle) : p
 const UNGROUPED_PROJECTS_KEY = 'aura.projects.ungrouped'
@@ -555,10 +559,19 @@ export const myProjects = {
    */
   authHeaders(bundle: ProjectBundle): Record<string, string> {
     const token = tokenField(bundle) ?? myProjects.tokenOf(bundle.id)
-    if (token) return { [PROJECT_TOKEN_HEADER]: token }
+    // The backend needs the delete token of EVERY upload floor to save a bundle over uploads.
     const uploads = new Map(myUploads.list().map((u) => [u.id, u.delete_token]))
-    const owned = bundle.floors.map((f) => uploads.get(f.drawing_id)).find(Boolean)
-    return owned ? { 'x-delete-token': owned } : {}
+    const floorTokens = [...new Set(bundle.floors.map((f) => uploads.get(f.drawing_id)).filter((t): t is string => !!t))]
+    return tokenHeaders(token ? [token] : [], floorTokens)
+  },
+
+  /**
+   * Credentials for `GET /projects`: every stored project token and every upload delete token of this
+   * browser (comma-joined), so bundles over the user's own uploads are listed. Empty lists are omitted.
+   */
+  listHeaders(): Record<string, string> {
+    const projectTokens = myProjects.list().map(tokenField).filter((t): t is string => !!t)
+    return tokenHeaders([...new Set(projectTokens)], [...new Set(myUploads.list().map((u) => u.delete_token))])
   },
 
   /**
