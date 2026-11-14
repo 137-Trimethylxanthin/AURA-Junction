@@ -20,7 +20,7 @@ import { Slider } from '@/components/ui/slider'
 import { Toggle } from '@/components/ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { cn } from '@/lib/utils'
+import { cn, hasDistinctOriginal } from '@/lib/utils'
 import { ZOOM_MAX, ZOOM_MIN, actions, selectZoom, useAppStore, useAppStoreShallow, useSource, type PlanView, type Tool } from '@/store'
 
 const TOOLS: { id: Tool; label: UiKey; hint: UiKey; Icon: typeof MousePointer2Icon }[] = [
@@ -39,7 +39,7 @@ function pickTool(next: string) {
 export function PlanToolbar() {
   const tool = useAppStore((s) => s.ui.tool)
   const compare = useAppStoreShallow((s) => s.ui.compare)
-  const hasOriginal = useAppStore((s) => !!s.session.drawing.images.original)
+  const hasOriginal = useAppStore((s) => hasDistinctOriginal(s.session.drawing.images))
   // What-if needs rooms with a resizable rectangle, and is hidden only when server answerer is pure 'agent'.
   const canWhatIf = useAppStore((s) => s.session.drawing.rooms.some((r) => !!r.rect))
   const answererMode = useAppStore((s) => s.session.answererMode)

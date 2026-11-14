@@ -1,3 +1,4 @@
+import { hasDistinctOriginal } from '@/lib/utils'
 import { tu } from '@/i18n/uiLang'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type {
@@ -429,7 +430,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
           drawingById: nextMap,
           ui: {
             ...cur.ui,
-            compare: d.images.original ? cur.ui.compare : { ...cur.ui.compare, on: false },
+            compare: hasDistinctOriginal(d.images) ? cur.ui.compare : { ...cur.ui.compare, on: false },
             hoveredEvidenceIds: [],
             marks: [],
             attachedMarkId: null,

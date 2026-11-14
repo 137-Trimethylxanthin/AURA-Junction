@@ -1,3 +1,4 @@
+import { hasDistinctOriginal } from '@/lib/utils'
 import { toast } from 'sonner'
 import {
   Columns2Icon,
@@ -35,7 +36,7 @@ export function PlanContextMenu({
   const rooms = useAppStore((s) => s.session.drawing.rooms)
   const answererMode = useAppStore((s) => s.session.answererMode)
   const { lang, tu } = useUi()
-  const hasOriginal = useAppStore((s) => !!s.session.drawing.images.original)
+  const hasOriginal = useAppStore((s) => hasDistinctOriginal(s.session.drawing.images))
   const [x, y] = point ?? [50, 50]
   const room = point ? nearestRoom(rooms, x, y, 6) : null
 
