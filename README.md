@@ -97,9 +97,11 @@ Generated from `backend/aura/config.py` by `backend/scripts/env_table.py --write
 | `AURA_ANSWERER` | backend env | `hybrid` | Answer routing mode (`hybrid`, `agent`, or `exact`) |
 | `AURA_SIDECAR_URL` | backend env |  | Base URL of the isolated deep-agent sidecar (`agent-service`) |
 | `AURA_SIDECAR_TOKEN_FILE` | backend env |  | Path to the shared bearer token file for `agent-service` |
+| `AURA_SIDECAR_MODEL` | backend env | `gemini-3.8-flash` | Sidecar model used for cost booking until the run reports its own (match JUNCTION_MODEL) |
 | `AURA_AGENT_RUNS_PER_IP_HOUR` | backend env | `3` | Deep-agent sidecar runs per client IP per hour (presenter exempt) |
 | `AURA_AGENT_RUNS_PER_DAY` | backend env | `15` | Public deep-agent sidecar runs per Europe/Helsinki day |
 | `AURA_TURN_DEADLINE_S` | backend env | `60` | Deadline of one /ask or /chat turn (s) |
+| `AURA_AGENT_DEADLINE_S` | backend env | `150` | Deadline of a /chat turn once it escalates to the sidecar agent (s) |
 | `AURA_VOLUME_COMMIT_S` | backend env | `60` | Modal Volume commit interval (s) |
 | `AURA_CLEANUP_S` | backend env | `3600` | Interval of the expiry sweep (s) |
 | `AURA_UPLOAD_TTL_S` | backend env | `86400` | Lifetime of uploads, answers, conversations and cached answers (s) |

@@ -18,6 +18,7 @@ Handles:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -320,7 +321,7 @@ class AgentClient:
         self.budget = budget
         self.client = client
         self.registry = registry
-        base_url = (settings.sidecar_url or "http://127.0.0.1:8100").rstrip("/")
+        base_url = (settings.sidecar_url or "http://127.0.0.1:8090").rstrip("/")
         self._http = httpx.AsyncClient(
             base_url=base_url,
             transport=transport,
@@ -357,7 +358,7 @@ class AgentClient:
         try:
             r = await self._http.get("/health", timeout=1.0)
             ok = r.status_code == 200 and bool(r.json().get("ok", True))
-        except Exception:
+        except Exception:  # noqa: BLE001 - any probe failure just means "not healthy"
             ok = False
         self._health_cache = (now, ok)
         return ok
@@ -474,10 +475,8 @@ class AgentClient:
             if entry is not None:
                 self._save_file_map(mapping)
         if entry and entry.get("file_id"):
-            try:
+            with contextlib.suppress(httpx.HTTPError):
                 await self._http.delete(f"/files/{entry['file_id']}", headers=self._headers(), timeout=5.0)
-            except Exception:
-                pass
 
     async def _ensure_file_id(self, d: tools.LoadedDrawing, *, force: bool = False) -> str:
         src_path, pre_dir = await asyncio.to_thread(self.resolve_drawing_source, d)
@@ -747,6 +746,7 @@ class AgentClient:
 
         settled = False
         run_id: str | None = None
+        run_model = self.settings.sidecar_model  # replaced by the model `run_started` reports
         run_finished_cleanly = False
 
         # 3. Queue / semaphore gate (max 2 concurrent, max 6 waiting)
@@ -901,7 +901,6 @@ class AgentClient:
 
             # 6. Stream `/runs/{run_id}/events` under self-deadline (`deadline_s - 5s`)
             answers_payload: list[dict] | None = None
-            run_model = "gemini-4-pro"
             run_usage: dict[str, Any] = {}
             run_error: str | None = None
             pending_nodes: dict[str, dict] = {}
@@ -931,13 +930,12 @@ class AgentClient:
                             if etype == "run_started":
                                 if ev.get("model"):
                                     run_model = str(ev["model"])
-                                for fmeta in ev.get("files") or []:
-                                    fname = fmeta.get("name")
+                                # Sidecar sends workspace names as strings (CONTRACT.md); tolerate {"name": ...}
+                                for idx_f, fmeta in enumerate(ev.get("files") or []):
+                                    fname = fmeta.get("name") if isinstance(fmeta, dict) else fmeta
                                     # Pair actual workspace names (`drawing.pdf`, `drawing_2.pdf`) in order
-                                    if fname and project_drawings:
-                                        idx_f = (ev.get("files") or []).index(fmeta)
-                                        if 0 <= idx_f < len(project_drawings):
-                                            by_ws_file[fname] = project_drawings[idx_f][1]
+                                    if isinstance(fname, str) and fname and idx_f < len(project_drawings or []):
+                                        by_ws_file[fname] = project_drawings[idx_f][1]
                             elif etype == "tool_started":
                                 step_seq += 1
                                 call_id = str(ev.get("call_id") or f"call-{step_seq}")
@@ -1098,7 +1096,7 @@ class AgentClient:
                     # Run started on sidecar -> book worst-case 40 slots because actual count isn't known yet
                     rec = self.budget.record_external(
                         res,
-                        model="gemini-4-pro",
+                        model=run_model,
                         n_requests=MAX_AGENT_SLOTS,
                         input_tokens=0,
                         output_tokens=0,
@@ -1144,10 +1142,8 @@ class AgentClient:
                 self.budget.release(res)
                 settled = True
             if run_id is not None and not run_finished_cleanly:
-                try:
+                with contextlib.suppress(httpx.HTTPError):
                     await self._http.post(f"/runs/{run_id}/cancel", headers=self._headers(), timeout=3.0)
-                except Exception:
-                    pass
             self._sem.release()
 
     # ---- Answer & evidence conversion (Table 3b) ----
@@ -1198,7 +1194,7 @@ class AgentClient:
                 )
                 if picked in VALID_COUNT_SUBJECTS and p_conf >= 0.80:
                     count_subj = picked
-            except Exception:
+            except Exception:  # noqa: BLE001 - optional relabel after a paid run; never lose the answer
                 count_subj = None
 
         box_subject = count_subj if count_subj in VALID_BOX_SUBJECTS else (
@@ -1333,10 +1329,10 @@ class AgentClient:
                     cy = pct_rect["y"] + pct_rect["h"] / 2.0
                     for dr_r in item_d.drawing.get("rooms") or []:
                         lat = dr_r.get("label_at")
-                        if isinstance(lat, list) and len(lat) >= 2:
-                            if abs(float(lat[0]) - cx) <= 4.0 and abs(float(lat[1]) - cy) <= 4.0:
-                                matched_dr_room = dr_r
-                                break
+                        if (isinstance(lat, list) and len(lat) >= 2
+                                and abs(float(lat[0]) - cx) <= 4.0 and abs(float(lat[1]) - cy) <= 4.0):
+                            matched_dr_room = dr_r
+                            break
                 if matched_dr_room is not None:
                     rkey = (item_d.id, matched_dr_room["room_id"])
                     if rkey not in seen_room_ids:

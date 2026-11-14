@@ -170,7 +170,7 @@ class MockSidecarState:
 
 def default_sidecar_events(run_rec: dict[str, Any]) -> list[dict[str, Any]]:
     return [
-        {"type": "run_started", "model": "gemini-4-pro", "files": [{"name": "drawing.png"}]},
+        {"type": "run_started", "model": "gemini-3.8-flash", "files": ["drawing.png"]},
         {
             "type": "answers",
             "answers": [
@@ -329,7 +329,7 @@ def test_north_windows_streams_candidates_drops_non_north_and_caches_qualifier_s
 
     def sidecar_handler(run_rec: dict[str, Any]) -> list[dict[str, Any]]:
         return [
-            {"type": "run_started", "model": "gemini-4-pro", "files": [{"name": "drawing.png"}]},
+            {"type": "run_started", "model": "gemini-3.8-flash", "files": ["drawing.png"]},
             {
                 "type": "tool_started",
                 "call_id": "v1",
@@ -459,7 +459,7 @@ def test_deictic_spots_like_this_with_region_searches_whole_floor(tmp_path):
             for i in range(6)
         ]
         return [
-            {"type": "run_started", "model": "gemini-4-pro", "files": [{"name": "drawing.png"}]},
+            {"type": "run_started", "model": "gemini-3.8-flash", "files": ["drawing.png"]},
             {
                 "type": "answers",
                 "answers": [
@@ -542,7 +542,7 @@ def test_multiturn_chat_color_in_different_colors_and_show_only_north(tmp_path):
         assert "Prior conversation context" in q
         assert north_room_ids[0] in q
         return [
-            {"type": "run_started", "model": "gemini-4-pro", "files": [{"name": "drawing.png"}]},
+            {"type": "run_started", "model": "gemini-3.8-flash", "files": ["drawing.png"]},
             {
                 "type": "answers",
                 "answers": [
@@ -627,8 +627,8 @@ def test_multiplan_scope_project_stairs_color_groups_links_and_floor_switching(t
         return [
             {
                 "type": "run_started",
-                "model": "gemini-4-pro",
-                "files": [{"name": "drawing.pdf"}, {"name": "drawing_2.pdf"}],
+                "model": "gemini-3.8-flash",
+                "files": ["drawing.pdf", "drawing_2.pdf"],
             },
             {
                 "type": "answers",
@@ -743,7 +743,7 @@ def test_table_3b_confidence_boundary_not_on_drawing_and_quantity_csv(tmp_path):
         item = outcomes[idx]
         idx += 1
         return [
-            {"type": "run_started", "model": "gemini-4-pro", "files": [{"name": "drawing.png"}]},
+            {"type": "run_started", "model": "gemini-3.8-flash", "files": ["drawing.png"]},
             {"type": "answers", "answers": [{"question": run_rec["questions"][0], **item}]},
             {"type": "run_finished", "status": "done", "usage": {"requests": 2, "input_tokens": 800, "output_tokens": 150}},
         ]
@@ -853,8 +853,10 @@ async def test_concurrency_semaphore_emits_queue_position_and_caps_waiting(tmp_p
         use_gemini=True,
     )
 
-    async with app.router.lifespan_context(app):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://aura.test") as ac:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://aura.test") as ac,
+    ):
             t1 = asyncio.create_task(
                 ac.post("/chat", json={"drawing_id": SWISS, "message": "double doors 1?"})
             )
@@ -911,7 +913,7 @@ def test_area_threshold_30m2_or_higher_never_misfires_keyword_area(tmp_path):
         for bid in big_ids:
             assert bid in q
         return [
-            {"type": "run_started", "model": "gemini-4-pro", "files": [{"name": "drawing.png"}]},
+            {"type": "run_started", "model": "gemini-3.8-flash", "files": ["drawing.png"]},
             {
                 "type": "answers",
                 "answers": [

@@ -95,7 +95,7 @@ def _render_single_page(page, out_dir: Path) -> tuple[int, int, str]:
     try:
         tp = page.get_textpage()
         text = tp.get_text_range() or ""
-    except Exception:
+    except Exception:  # noqa: BLE001 - text is optional; pdfium raises assorted errors on odd pages
         text = ""
     return w, h, text
 
@@ -118,7 +118,7 @@ def _build_pdf_drawing_dict(
     *,
     project_id: str | None = None,
     floor_label: str | None = None,
-    floor_order: int | float | None = None,
+    floor_order: float | None = None,
 ) -> dict[str, Any]:
     base = f"/drawings/{drawing_id}"
     d: dict[str, Any] = {

@@ -73,10 +73,13 @@ class Settings(BaseSettings):
     )
     sidecar_url: str | None = Field(default=None, alias="AURA_SIDECAR_URL")
     sidecar_token_file: Path | None = Field(default=None, alias="AURA_SIDECAR_TOKEN_FILE")
+    sidecar_model: str = Field(default="gemini-3.8-flash", alias="AURA_SIDECAR_MODEL")
     agent_runs_per_ip_hour: int = Field(default=3, alias="AURA_AGENT_RUNS_PER_IP_HOUR")
     agent_runs_per_day: int = Field(default=15, alias="AURA_AGENT_RUNS_PER_DAY")
 
     turn_deadline_s: float = Field(default=60.0, alias="AURA_TURN_DEADLINE_S")
+    # /chat turns routed to the sidecar agent (SSE heartbeats keep the client alive meanwhile).
+    agent_deadline_s: float = Field(default=150.0, alias="AURA_AGENT_DEADLINE_S")
     volume_commit_every_s: float = Field(default=60.0, alias="AURA_VOLUME_COMMIT_S")
     cleanup_every_s: float = Field(default=3600.0, alias="AURA_CLEANUP_S")
     upload_ttl_s: float = Field(default=24 * 3600.0, alias="AURA_UPLOAD_TTL_S")

@@ -23,7 +23,14 @@ from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agen
 from aura.budget import Budget, BudgetError
 from aura.cache import AnswerCache, CheckCache, answer_key
 from aura.config import Settings, models_enabled
-from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse, ChatRequest, EvidenceGroup, EvidenceRoom
+from aura.contract import (
+    BOX_SUBJECTS,
+    AskRequest,
+    AskResponse,
+    ChatRequest,
+    EvidenceGroup,
+    EvidenceRoom,
+)
 from aura.gemini.check import check_key, default_anchors, run_check, slice_check
 from aura.gemini.client import GeminiClient, GeminiError, Meter
 from aura.gemini.score import FAMILIES as SCORE_FAMILIES
@@ -736,9 +743,11 @@ async def _finalize_and_emit(
 async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | None = None,
               history: list[dict] | None = None,
               meters: dict[str, Meter] | None = None,
-              deadline_s: float | None = None) -> AsyncIterator[tuple[str, dict]]:
+              deadline_s: float | None = None,
+              agent_deadline_s: float | None = None) -> AsyncIterator[tuple[str, dict]]:
     """`meters` ({'answer', 'check'}) lets a caller read what was spent even if this
-    generator is cancelled at the turn deadline."""
+    generator is cancelled at the turn deadline. `agent_deadline_s` (streaming /chat only)
+    replaces the turn deadline once the turn escalates to the sidecar agent."""
     meters = meters if meters is not None else {"answer": Meter(), "check": Meter()}
     turn_deadline = deadline_s if deadline_s is not None else float(svc.settings.turn_deadline_s)
     t0 = time.perf_counter()
@@ -969,7 +978,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 log.warning("hybrid decision gate skipped (%s); escalating to sidecar agent", e or "timeout")
 
         # 5. Escalate directly to `agent_client` (`deep_agent`) — NEVER fall back to legacy `understand` or `flash-lite`!
-        remaining_s = max(5.0, turn_deadline - (time.perf_counter() - t0))
+        agent_deadline = max(turn_deadline, agent_deadline_s or 0.0)
+        remaining_s = max(5.0, agent_deadline - (time.perf_counter() - t0))
         agent_built: A.Built | None = None
         understood_emitted = False
         async for ev_name, ev_data in svc.agent.run_turn(
@@ -1073,7 +1083,8 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
 
     async def produce() -> None:
         try:
-            async for item in run(svc, req, caller, context, history, meters, deadline_s=deadline_s):
+            async for item in run(svc, req, caller, context, history, meters, deadline_s=deadline_s,
+                                  agent_deadline_s=svc.settings.agent_deadline_s):
                 await queue.put(item)
         except PipelineError as e:
             await queue.put(("error", {"error": str(e), "code": e.code}))
@@ -1121,6 +1132,9 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
             if item is None:
                 break
             event, data = item
+            if event == "understood" and data.get("route") == "agent":
+                # Agent runs take minutes, not seconds; heartbeats keep the stream alive meanwhile.
+                deadline = start_t + max(deadline_s, float(svc.settings.agent_deadline_s))
             if event == "answer":
                 response = data["response"] | {"conversation_id": conv_id, "turn_id": turn_id}
                 data = {"response": response}
