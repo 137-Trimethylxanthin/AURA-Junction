@@ -419,7 +419,8 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
         const badge = new CSS2DObject(el)
         pin.add(ring, stem, badge)
         pin.userData.place = (h: number) => {
-          const top = Math.max(h, 1) + 0.5
+          // Just above the walls: in the exploded stack (low walls) the badge must read as this floor's, not the next.
+          const top = Math.max(h, 0.6) + 0.35
           stem.scale.y = top
           stem.position.y = top / 2
           badge.position.y = top + 0.15

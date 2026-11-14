@@ -114,6 +114,20 @@ function projectIdForDrawing(project: ProjectBundle | null, drawingId: string): 
   return project && project.floors.some((f) => f.drawing_id === drawingId) ? project.id : null
 }
 
+/**
+ * Evidence items without a `drawing_id` get `floor` (the floor the question was asked on); items that name a
+ * floor keep it. Pure; exported for tests.
+ */
+export function stampFloor<E extends { boxes: Box[]; rooms: EvidenceRoom[]; links?: EvidenceLink[] }>(ev: E, floor: string): E {
+  const stamp = <T extends { drawing_id?: string }>(xs: T[]): T[] => xs.map((x) => (x.drawing_id ? x : { ...x, drawing_id: floor }))
+  return {
+    ...ev,
+    boxes: stamp(ev.boxes as (Box & { drawing_id?: string })[]),
+    rooms: stamp(ev.rooms as (EvidenceRoom & { drawing_id?: string })[]),
+    ...(ev.links ? { links: stamp(ev.links as (EvidenceLink & { drawing_id?: string })[]) } : {}),
+  }
+}
+
 /** Fold one chat event into the stream state (pure; exported for tests). */
 export function reduceStream(st: StreamState, e: ChatEvent): StreamState {
   switch (e.event) {
@@ -642,6 +656,9 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         const ctrl = new AbortController()
         inflight = ctrl
         const drawingId = get().session.drawing.id
+        // In a multi-floor building, evidence that does not name its floor belongs to the floor it was asked on,
+        // not to whichever floor is on screen later (it is stamped once, as it arrives).
+        const floorOf = projectIdForDrawing(get().activeProject, drawingId) ? drawingId : null
         let streamAnswered = false
         const currentProjId = () => projectIdForDrawing(get().activeProject, drawingId) ?? activeProjId
         const stillInContext = () => {
@@ -670,9 +687,10 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
                 set((st) => ({ session: { ...st.session, conversationId: e.data.conversation_id } }))
                 return
               }
-              patchAgent(pending.id, (x) => ({
-                stream: reduceStream(x.stream ?? { phase: 'sent', nodes: [], resolved: [], evidence: { boxes: [], rooms: [] } }, e),
-              }))
+              patchAgent(pending.id, (x) => {
+                const st = reduceStream(x.stream ?? { phase: 'sent', nodes: [], resolved: [], evidence: { boxes: [], rooms: [] } }, e)
+                return { stream: floorOf ? { ...st, evidence: stampFloor(st.evidence, floorOf) } : st }
+              })
             },
             ctrl.signal,
           )
@@ -680,7 +698,8 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
           if (ctrl.signal.aborted && (!stillInContext() || !streamAnswered)) {
             throw new DOMException('Stopped', 'AbortError')
           }
-          patchAgent(pending.id, () => ({ status: 'done', response, ...(fellBack ? { fellBack: true } : {}) }))
+          const answered = floorOf ? { ...response, evidence: stampFloor(response.evidence, floorOf) } : response
+          patchAgent(pending.id, () => ({ status: 'done', response: answered, ...(fellBack ? { fellBack: true } : {}) }))
           if (stillInContext() && agent(pending.id)) {
             set((st) => ({ session: { ...st.session, lang: response.detected_lang } }))
           }
@@ -748,7 +767,11 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
             replyTo: user.id,
             status: ct.response ? 'done' : 'error',
             ...(ct.response
-              ? { response: ct.response }
+              ? {
+                  response: projectIdForDrawing(get().activeProject, drawingId)
+                    ? { ...ct.response, evidence: stampFloor(ct.response.evidence, drawingId) }
+                    : ct.response,
+                }
               : { error: { message: ct.error?.error ?? t(get().session.lang, 'something_wrong'), code: ct.error?.code } }),
             toggles: emptyToggles(),
             listOpen: false,

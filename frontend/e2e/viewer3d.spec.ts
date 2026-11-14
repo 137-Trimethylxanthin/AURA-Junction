@@ -26,6 +26,8 @@ test('answer evidence becomes numbered pins in 3D', async ({ page }) => {
 })
 
 test('a dropped-in image is shown locally and the drawing comes back', async ({ page }) => {
+  // Two scene builds in software WebGL: under a fully parallel run this can pass the default 30 s.
+  test.slow()
   await page.getByRole('radio', { name: '3D' }).click()
   await expect(viewer(page)).toHaveAttribute('data-v3d-state', 'ready', { timeout: 20_000 })
   await page.locator('[data-testid="viewer3d"] input[type=file]').setInputFiles('public/og.png')
