@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 14  # 14: printed dimensions of scans; 12/13: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
+ROUTER_VERSION = 15  # 15: "bedroom 2" is BEDROOM #2; 14: printed dimensions of scans; 12/13: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count",
                            "dimension"})
 
@@ -390,6 +390,11 @@ def _norm(s: str) -> str:
 _NUMBERING = re.compile(r"(?:\s*(?:#|no\.?|nr\.?|№)?\s*\d+[a-z]?|\s+[a-z])$", re.IGNORECASE)
 
 
+def _plain(s: str) -> str:
+    """Room-number marks dropped: 'bedroom #2' / 'bedroom no. 2' → 'bedroom 2'."""
+    return re.sub(r"\s+", " ", re.sub(r"#\s*|\b(?:no|nr)\.?\s*(?=\d)|№\s*", " ", s)).strip()
+
+
 def label_base(name: str) -> str:
     """A printed room label without its numbering: 'BEDROOM #2' → 'bedroom', 'Bath 1' → 'bath'."""
     n = _norm(name)
@@ -452,11 +457,16 @@ def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]
     # question words ("Floor", "Plan") count only with a "labelled" cue.
     t = _norm(text)
     cue = bool(LABELLED.search(text))
+    t_plain = _plain(t)
     for lab in sorted(labels, key=len, reverse=True):
         n = _norm(lab)
         if n in QUESTION_WORDS and not cue:
             continue
         if len(n) >= 3 and re.search(rf"(?<!{_LD}){re.escape(n)}(?!{_LD})", t):
+            return lab, lab
+        # "bedroom 2" names the label "BEDROOM #2" ("#", "No." and "Nr." are optional when asking)
+        p = _plain(n)
+        if p != n and len(p) >= 3 and re.search(rf"(?<!{_LD}){re.escape(p)}(?!{_LD})", t_plain):
             return lab, lab
     # Synonyms → a printed label the drawing has.
     probe = " ".join(quoted) + " " + text if quoted else text

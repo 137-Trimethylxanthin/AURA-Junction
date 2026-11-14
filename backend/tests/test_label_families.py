@@ -56,3 +56,10 @@ def test_area_of_a_named_thing_without_a_room_is_not_the_floor_total():
               "What is the total net floor area of the building?"):
         assert route(q, ctx).intent == "area", q
     assert route("What is the area of the kitchen?", CTX).scope == {"kind": "label", "label": "KITCHEN"}
+
+
+def test_numbered_label_named_without_hash():
+    ctx = DrawingCtx(labels=["BEDROOM #1", "BEDROOM #2", "BATH"], kind="raster")
+    assert route("What is the area of bedroom 2?", ctx).scope == {"kind": "label", "label": "BEDROOM #2"}
+    assert route("area of bedroom no. 1", ctx).scope == {"kind": "label", "label": "BEDROOM #1"}
+    assert route("What is the total area of all bedrooms?", ctx).scope == {"kind": "label", "label": "BEDROOM"}
