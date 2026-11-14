@@ -1,6 +1,7 @@
+import { usableDisplay } from '@/api/contract'
 import type { AgentFailure, AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
-import { LOCALE, fmtArea, fmtCount, noun } from '@/lib/format'
+import { LOCALE, displayParts, fmtArea, fmtConverted, fmtCount, noun } from '@/lib/format'
 import { t, type StringKey, type UiKey } from '@/i18n/strings'
 
 /** Pure view-model helpers for the answer card. Every number comes from the response or Derived. */
@@ -79,11 +80,31 @@ export function scopeChipText(scope: Scope | ProjectScopeLike, lang: Lang): stri
   return cap(whereText(scope, lang))
 }
 
+/**
+ * The metric value behind an answer shown in another unit ("341.42 m²"), or null when the answer is
+ * shown in metric anyway. Follows the user's toggles like the headline value.
+ */
+export function metricText(resp: AskResponse, d: Derived, lang: Lang): string | null {
+  const display = usableDisplay(resp.display)
+  if (!display) return null
+  if (resp.answer.kind === 'area' && d.value !== null && display.factors.m2) return `${fmtArea(d.value, lang)} m²`
+  if (resp.answer.kind === 'quantity' && d.value !== null && display.factors[resp.answer.unit])
+    return `${fmtArea(d.value, lang)} ${{ m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]}`
+  if (resp.answer.kind === 'note' && display.value !== undefined && display.metric_text) return display.metric_text
+  return null
+}
+
 /** Formatted value with the unit/noun, e.g. ["12", "windows"] or ["139,34", "m²"]. */
 export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, string] | null {
   if (resp.answer.kind === 'text') return [resp.answer.value, t(lang, resp.answer.subject === 'fire_rating' ? 'text_fire_rating' : 'text_label')]
+  const display = usableDisplay(resp.display)
   if (resp.answer.kind === 'note') {
     if (resp.answer.number !== undefined) {
+      // A note's own unit may be anything ("mm"): the server's converted text is the value to show.
+      if (display?.text && display.value !== undefined) {
+        if (display.style === 'ft_in') return [display.text, '']
+        return [fmtConverted(display.value, lang), display.label]
+      }
       const unit = resp.answer.unit ?? ''
       const isAreaUnit = unit === 'm²' || unit === 'm2'
       const numStr = !isAreaUnit && Number.isInteger(resp.answer.number)
@@ -95,9 +116,9 @@ export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, 
   }
   if (d.value === null) return null
   if (resp.answer.kind === 'count') return [fmtCount(d.value, lang), noun(resp.answer.subject, d.value, lang)]
-  if (resp.answer.kind === 'area') return [fmtArea(d.value, lang), 'm²']
+  if (resp.answer.kind === 'area') return displayParts(d.value, 'm2', display, lang) ?? [fmtArea(d.value, lang), 'm²']
   if (resp.answer.kind === 'quantity')
-    return [fmtArea(d.value, lang), { m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]]
+    return displayParts(d.value, resp.answer.unit, display, lang) ?? [fmtArea(d.value, lang), { m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]]
   return null
 }
 
@@ -305,7 +326,13 @@ export function rows(
   const rooms = resp.evidence.rooms.map((r): Row => {
     const on = isRoomIncluded(r, toggles)
     const poly = byId.get(r.room_id)
-    const area = r.area_m2 === null ? t(lang, 'area_not_printed') : `${fmtArea(r.area_m2, lang)} m²`
+    const conv = r.area_m2 === null ? null : displayParts(r.area_m2, 'm2', usableDisplay(resp.display), lang)
+    const area =
+      r.area_m2 === null
+        ? t(lang, 'area_not_printed')
+        : conv
+          ? `${conv.join(' ')} (${fmtArea(r.area_m2, lang)} m²)`
+          : `${fmtArea(r.area_m2, lang)} m²`
     const rExtra = r as typeof r & { group_id?: string; drawing_id?: string }
     const grp = rExtra.group_id ? groupById.get(rExtra.group_id) : undefined
     const drawingId = rExtra.drawing_id

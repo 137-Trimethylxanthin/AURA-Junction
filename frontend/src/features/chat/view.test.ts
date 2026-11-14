@@ -45,7 +45,7 @@ describe('check chip', () => {
   })
 })
 
-import { valueParts, sentence } from '@/features/chat/view'
+import { metricText, valueParts, sentence } from '@/features/chat/view'
 import { isAskResponse, isRewriteResponse, isScope } from '@/api/contract'
 import { bundledDrawing } from '@/data/drawing'
 
@@ -57,6 +57,28 @@ describe('1.1 answer kinds', () => {
     const d = deriveAnswer(r, emptyToggles())
     expect(valueParts(r, d, 'en')).toEqual(['42.50', 'm³'])
     expect(sentence(r, d, bundledDrawing, 'en')).toContain('in the whole model')
+  })
+  it('an answer asked in another unit shows that unit, with the metric value beside it', () => {
+    const display = {
+      unit: 'sqft', label: 'sq ft', style: 'decimal' as const,
+      factors: { m: 3.280839895, m2: 10.76391042, m3: 35.31466672 },
+      labels: { m: 'ft', m2: 'sq ft', m3: 'cu ft' },
+      value: 3675.01, text: '3,675 sq ft', metric_text: '341.42 m²',
+    }
+    const area = { ...base, answer: { kind: 'area' as const, value: 341.42, unit: 'm2' as const }, display }
+    expect(isAskResponse(area)).toBe(true)
+    const d = deriveAnswer(area, emptyToggles())
+    expect(valueParts(area, d, 'en')).toEqual(['3,675', 'sq ft'])
+    expect(metricText(area, d, 'en')).toBe('341.42 m²')
+    const len = { ...base, answer: { kind: 'quantity' as const, value: 3.81, unit: 'm' as const }, display: { ...display, unit: 'ftin', label: 'ft-in', style: 'ft_in' as const } }
+    expect(valueParts(len, deriveAnswer(len, emptyToggles()), 'en')).toEqual(["12' 6\"", ''])
+    const note = { ...base, answer: { kind: 'note' as const, value: 'Wall 2400 mm.', number: 2400, unit: 'mm' }, display: { ...display, unit: 'ft', label: 'ft', value: 7.874, text: '7.87 ft', metric_text: '2,400 mm' } }
+    expect(valueParts(note, deriveAnswer(note, emptyToggles()), 'en')).toEqual(['7.87', 'ft'])
+    expect(metricText(note, deriveAnswer(note, emptyToggles()), 'en')).toBe('2,400 mm')
+    // no display, or a malformed one: metric as before
+    const bad = { ...area, display: { unit: 'sqft' } as unknown as typeof display }
+    expect(valueParts(bad, d, 'en')).toEqual(['341.42', 'm²'])
+    expect(metricText({ ...area, display: undefined }, d, 'en')).toBeNull()
   })
   it('a text answer shows the printed text itself', () => {
     const r = { ...base, answer: { kind: 'text' as const, value: 'EI 30', subject: 'fire_rating' as const } }

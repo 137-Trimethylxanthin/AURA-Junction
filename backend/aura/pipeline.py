@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from aura import answer as A
-from aura import tools
+from aura import tools, units
 from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agent
 from aura.budget import Budget, BudgetError, watch_refusals
 from aura.cache import AnswerCache, CheckCache, answer_key
@@ -1370,10 +1370,54 @@ def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: d
     )
 
 
+def with_units(base_run):
+    """Wrap a `run`-shaped generator so a question may ask for a unit ("in square feet").
+
+    The one place units are handled: the wrapped run (any route: exact, template, tool steps,
+    cache replay, building totals) answers the metric twin of the question, then the finished
+    response gets its `display` block. The cache therefore only ever holds metric answers.
+    "and in inches?" re-shows the previous turn's answer without running anything.
+    """
+    async def run_units(svc: Services, req: AskRequest, caller: Caller, *args, **kw):
+        up = units.plan(req.question)
+        # Earlier turns are passed on in metric too (args: context, history, ...).
+        if len(args) > 1:
+            history = units.metric_turns(args[1])
+            args = (args[0], history, *args[2:])
+        else:
+            history = units.metric_turns(kw.get("history"))
+            if "history" in kw:
+                kw["history"] = history
+        if up.unit is None and not up.changed:
+            async for item in base_run(svc, req, caller, *args, **kw):
+                yield item
+            return
+        prev = last_turn_response(history)
+        if up.pure and prev is not None and units.has_measure(prev):
+            t0 = time.perf_counter()
+            body = units.apply(prev, up.unit) | {
+                "route": "template", "calls": 0, "cost_usd": 0.0, "answer_id": "a-" + uuid.uuid4().hex}
+            for k in ("conversation_id", "turn_id"):
+                body.pop(k, None)
+            body["latency_ms"] = int((time.perf_counter() - t0) * 1000)
+            _persist(svc, req.drawing_id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
+            yield "understood", {"detected_lang": body["detected_lang"],
+                                 "canonical_en": body["canonical_en"], "route": "template"}
+            yield "answer", {"response": body}
+            return
+        metric_req = req.model_copy(update={"question": up.question}) if up.changed else req
+        async for event, data in base_run(svc, metric_req, caller, *args, **kw):
+            if event == "answer" and up.unit is not None:
+                data = {"response": units.apply(data["response"], up.unit)}
+            yield event, data
+
+    return run_units
+
+
 async def ask(svc: Services, req: AskRequest, caller: Caller,
               meters: dict[str, Meter] | None = None, run_fn=None) -> dict:
     # `run_fn`: a drop-in for `run` (whole-building answers, aura/building.py); default `run`.
-    async for event, data in (run_fn or run)(svc, req, caller, meters=meters,
+    async for event, data in with_units(run_fn or run)(svc, req, caller, meters=meters,
                                              deadline_s=float(svc.settings.turn_deadline_s)):
         if event == "answer":
             return data["response"]
@@ -1410,7 +1454,7 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
 
     async def produce() -> None:
         try:
-            async for item in (run_fn or run)(svc, req, caller, context, history, meters,
+            async for item in with_units(run_fn or run)(svc, req, caller, context, history, meters,
                                               deadline_s=deadline_s,
                                               agent_deadline_s=svc.settings.agent_deadline_s):
                 await queue.put(item)

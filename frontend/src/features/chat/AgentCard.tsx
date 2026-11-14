@@ -45,6 +45,7 @@ import {
   groupCssVars,
   rows,
   sentence,
+  metricText,
   triedText,
   valueParts,
   type AgentFailure,
@@ -902,6 +903,11 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
             </span>
             {parts[1] ? <span className="text-lg font-medium">{parts[1]}</span> : null}
             <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="ml-auto self-center" />
+          </p>
+        ) : null}
+        {parts && derived && metricText(resp, derived, lang) ? (
+          <p className="text-sm font-medium tabular-nums text-muted-foreground" data-answer-metric>
+            = {metricText(resp, derived, lang)}
           </p>
         ) : null}
         {numericNoteProse ? <ClampedProse text={numericNoteProse} lang={lang} kind="note" /> : null}
