@@ -114,3 +114,16 @@ export function shouldIgnoreShortcut(e: {
 
 /** Swipe divider position in % (shared by the compare layer and the context menu without loading the layer). */
 export const swipeSplit = { current: 50 }
+
+/** Stage-local view commands sent by shortcuts / the palette; `PlanStage` listens (it owns scroll, peek and dropped state). */
+export const STAGE_COMMAND_EVENT = 'aura:stage-command'
+export type StageCommand =
+  | { type: 'pan'; dx: number; dy: number }
+  | { type: 'fit' }
+  | { type: 'peek' }
+  | { type: 'dropped' }
+
+export function sendStageCommand(detail: StageCommand): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent<StageCommand>(STAGE_COMMAND_EVENT, { detail }))
+}

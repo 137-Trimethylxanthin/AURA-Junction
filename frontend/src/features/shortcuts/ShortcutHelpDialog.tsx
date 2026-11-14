@@ -12,6 +12,7 @@ import {
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { useUi } from '@/i18n/uiLang'
 import { appStore, type AppStore } from '@/store'
+import { powerRows } from './powerBindings'
 import { CLOSE_DIALOG_LABEL, isMacPlatform } from './useWorkspaceShortcuts'
 
 interface ShortcutRow {
@@ -34,6 +35,8 @@ export function ShortcutHelpDialog({ store = appStore }: { store?: AppStore }) {
   const mac = isMacPlatform()
   const mod = mac ? '⌘' : 'Ctrl'
   const alt = mac ? '⌥' : 'Alt'
+
+  const power = powerRows(tu, alt)
 
   const groups: { id: string; heading: string; rows: ShortcutRow[] }[] = [
     {
@@ -75,6 +78,16 @@ export function ShortcutHelpDialog({ store = appStore }: { store?: AppStore }) {
         { id: 'trace', label: tu('sc_trace'), keys: ['T'], anyKey: true },
         { id: 'undo', label: tu('sc_undo'), keys: [mod, 'Z'] },
       ],
+    },
+    {
+      id: 'stage',
+      heading: tu('sc_group_stage'),
+      rows: power.filter((r) => r.group === 'stage'),
+    },
+    {
+      id: 'workflow',
+      heading: tu('sc_group_workflow'),
+      rows: power.filter((r) => r.group === 'workflow'),
     },
   ]
 

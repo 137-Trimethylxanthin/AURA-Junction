@@ -29,7 +29,14 @@ import {
   resolveProjectForDrawing,
   writeFocusedGroupId,
 } from "./badges"
-import { isEditable, overlayOpen, pctPoint, planAspect } from "./shared"
+import {
+  STAGE_COMMAND_EVENT,
+  isEditable,
+  overlayOpen,
+  pctPoint,
+  planAspect,
+  type StageCommand,
+} from "./shared"
 import { useEver } from "@/hooks/use-ever"
 
 // Loaded on first use: compare and what-if are not needed for the first paint of a drawing.
@@ -142,6 +149,10 @@ export function PlanStage() {
       on: prev.key === turnScopeKey ? !prev.on : true,
     }))
   }, [turnScopeKey])
+
+  // Peek: hide the evidence overlays (rooms, boxes, links, marks) to read the raw linework; evidence stays in the store.
+  const [peek, setPeek] = useState(false)
+  const [handPan, setHandPan] = useState(false)
 
   const effectiveFocusedGroupId =
     storeFocusedGroupId ?? (localGroupState.key === turnScopeKey ? localGroupState.id : null)
@@ -417,6 +428,74 @@ export function PlanStage() {
     })
   }, [selected, reduce])
 
+  // Stage commands from keyboard shortcuts / the palette (pan, fit, peek, dropped candidates).
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const cmd = (e as CustomEvent<StageCommand>).detail
+      const sc = scrollRef.current
+      if (!cmd) return
+      if (cmd.type === "pan") {
+        sc?.scrollBy({ left: cmd.dx, top: cmd.dy, behavior: reduce ? "auto" : "smooth" })
+      } else if (cmd.type === "fit") {
+        centre.current = [0.5, 0.5]
+        actions().resetZoom()
+        if (sc) {
+          sc.scrollLeft = (sc.scrollWidth - sc.clientWidth) / 2
+          sc.scrollTop = (sc.scrollHeight - sc.clientHeight) / 2
+        }
+      } else if (cmd.type === "peek") {
+        setPeek((p) => !p)
+      } else if (cmd.type === "dropped") {
+        toggleShowDropped()
+      }
+    }
+    window.addEventListener(STAGE_COMMAND_EVENT, onCommand)
+    return () => window.removeEventListener(STAGE_COMMAND_EVENT, onCommand)
+  }, [reduce, toggleShowDropped])
+
+  // Space + drag: momentary hand-pan, even while Mark or What-If is active (a capture layer sits over the stage).
+  useEffect(() => {
+    const interactive = "button,a,summary,[role=button],[role=checkbox],[role=switch],[role=menuitem]"
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return
+      if (isEditable(e.target) || overlayOpen()) return
+      if (e.target instanceof Element && e.target.closest(interactive)) return
+      e.preventDefault()
+      setHandPan(true)
+    }
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") setHandPan(false)
+    }
+    const off = () => setHandPan(false)
+    window.addEventListener("keydown", onDown)
+    window.addEventListener("keyup", onUp)
+    window.addEventListener("blur", off)
+    return () => {
+      window.removeEventListener("keydown", onDown)
+      window.removeEventListener("keyup", onUp)
+      window.removeEventListener("blur", off)
+    }
+  }, [])
+
+  const panDrag = useRef<{ x: number; y: number; l: number; t: number } | null>(null)
+  const onPanDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const sc = scrollRef.current
+    if (!sc) return
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    panDrag.current = { x: e.clientX, y: e.clientY, l: sc.scrollLeft, t: sc.scrollTop }
+  }
+  const onPanMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = panDrag.current
+    const sc = scrollRef.current
+    if (!d || !sc) return
+    sc.scrollLeft = d.l - (e.clientX - d.x)
+    sc.scrollTop = d.t - (e.clientY - d.y)
+  }
+  const onPanUp = () => {
+    panDrag.current = null
+  }
+
   // Escape peels one layer: what-if, else the selection, else focused group spotlight, else #spot target ring.
   // Never when something else already handled it (an open menu or dialog, an input, the Mark tool).
   useEffect(() => {
@@ -631,7 +710,7 @@ export function PlanStage() {
                       <CompareLayer stageRef={stageRef} />
                     </Suspense>
                   ) : null}
-                  {tool === "whatif" ? (
+                  {peek ? null : tool === "whatif" ? (
                     <Suspense
                       fallback={
                         <EvidenceLayer
@@ -660,7 +739,7 @@ export function PlanStage() {
                       externalControls
                     />
                   )}
-                  <LiveAgentReticle stageW={width} aspect={aspect} />
+                  {peek ? null : <LiveAgentReticle stageW={width} aspect={aspect} />}
                   {spotTarget ? (
                     <span
                       aria-hidden="true"
@@ -674,7 +753,7 @@ export function PlanStage() {
                       />
                     </span>
                   ) : null}
-                  <MarksLayer />
+                  {peek ? null : <MarksLayer />}
                   {whatIfUsed ? (
                     <Suspense fallback={null}>
                       <WhatIfBox stageRef={stageRef} />
@@ -693,6 +772,25 @@ export function PlanStage() {
         </div>
       </div>
 
+      {handPan ? (
+        <div
+          data-hand-pan
+          className="absolute inset-0 z-40 cursor-grab touch-none active:cursor-grabbing"
+          onPointerDown={onPanDown}
+          onPointerMove={onPanMove}
+          onPointerUp={onPanUp}
+          onPointerCancel={onPanUp}
+        />
+      ) : null}
+      {peek ? (
+        <div
+          role="status"
+          data-peek-badge
+          className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background shadow-md"
+        >
+          {tu("sc_peek")}
+        </div>
+      ) : null}
       <FloorSwitcher />
       <LiveAgentHud offsetTop={hasMultiFloorProject} />
       <StageEvidenceControls

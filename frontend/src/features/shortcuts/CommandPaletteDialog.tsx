@@ -35,13 +35,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from '@/components/ui/command'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { bundledDrawing } from '@/data/drawing'
 import { suggestionsFor, useDraft } from '@/features/chat/draft'
@@ -61,6 +55,7 @@ import {
   type AppStore,
   type Tool,
 } from '@/store'
+import { powerRows, runPowerAction } from './powerBindings'
 import { isMacPlatform } from './useWorkspaceShortcuts'
 
 const LANGUAGE_ITEMS: readonly { code: Lang; name: string }[] = [
@@ -69,6 +64,9 @@ const LANGUAGE_ITEMS: readonly { code: Lang; name: string }[] = [
   { code: 'fi', name: 'Suomi' },
   { code: 'de', name: 'Deutsch' },
 ]
+
+/** Power rows that already have a dedicated palette item (which just shows the pill). */
+const PALETTE_HAS_ITEM = new Set(['fit', 'all-floors', 'export', 'new-chat', 'library', 'plugins'])
 
 export function CommandPaletteDialog({
   store = appStore,
@@ -153,20 +151,21 @@ export function CommandPaletteDialog({
     )
   }, [activeProject])
 
-  const suggestions = useMemo(
-    () => suggestionsFor(drawing, activeProject),
-    [drawing, activeProject],
-  )
+  const suggestions = useMemo(() => suggestionsFor(drawing, activeProject), [drawing, activeProject])
 
   const hasExportableEvidence = Boolean(
     activeTurn?.response &&
-      (activeTurn.response.evidence.boxes.length > 0 ||
-        activeTurn.response.evidence.rooms.length > 0 ||
-        (activeTurn.response.evidence.rows?.length ?? 0) > 0),
+    (activeTurn.response.evidence.boxes.length > 0 ||
+      activeTurn.response.evidence.rooms.length > 0 ||
+      (activeTurn.response.evidence.rows?.length ?? 0) > 0),
   )
 
   const areaFmt = useMemo(
-    () => new Intl.NumberFormat(LOCALE[lang], { minimumFractionDigits: 1, maximumFractionDigits: 2 }),
+    () =>
+      new Intl.NumberFormat(LOCALE[lang], {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 2,
+      }),
     [lang],
   )
 
@@ -202,13 +201,13 @@ export function CommandPaletteDialog({
             skipCloseRestoreRef.current = false
           }
         }}
-        className="top-[18%] translate-y-0 overflow-hidden rounded-xl! p-0 sm:max-w-lg duration-0 data-open:animate-none data-closed:animate-none"
+        className="top-[18%] translate-y-0 overflow-hidden rounded-xl! p-0 duration-0 sm:max-w-lg data-open:animate-none data-closed:animate-none"
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{tu('cmd_title')}</DialogTitle>
           <DialogDescription>{tu('cmd_desc')}</DialogDescription>
         </DialogHeader>
-        <Command className="[&_[data-slot=input-group]]:min-h-10 [&_[data-slot=input-group]]:h-10! [&_[data-slot=input-group]]:border-input [&_[data-slot=input-group]]:bg-background">
+        <Command className="[&_[data-slot=input-group]]:h-10! [&_[data-slot=input-group]]:min-h-10 [&_[data-slot=input-group]]:border-input [&_[data-slot=input-group]]:bg-background">
           <CommandInput placeholder={tu('cmd_placeholder')} aria-label={tu('cmd_title')} />
           <CommandList className="max-h-80">
             <CommandEmpty>{tu('cmd_empty')}</CommandEmpty>
@@ -245,6 +244,13 @@ export function CommandPaletteDialog({
                               <Kbd>{stepArrow}</Kbd>
                             </KbdGroup>
                           </CommandShortcut>
+                        ) : idx < 9 ? (
+                          <CommandShortcut>
+                            <KbdGroup>
+                              <Kbd>{alt}</Kbd>
+                              <Kbd>{idx + 1}</Kbd>
+                            </KbdGroup>
+                          </CommandShortcut>
                         ) : null}
                       </CommandItem>
                     )
@@ -261,6 +267,13 @@ export function CommandPaletteDialog({
                   >
                     <Building2Icon />
                     <span className="truncate">{tu('match_all_floors')}</span>
+
+                    <CommandShortcut>
+                      <KbdGroup>
+                        <Kbd>{alt}</Kbd>
+                        <Kbd>A</Kbd>
+                      </KbdGroup>
+                    </CommandShortcut>
                   </CommandItem>
                 </CommandGroup>
                 <CommandSeparator />
@@ -374,7 +387,10 @@ export function CommandPaletteDialog({
                 <Maximize2Icon />
                 <span>{tu('sc_zoom_fit')}</span>
                 <CommandShortcut>
-                  <Kbd>0</Kbd>
+                  <KbdGroup>
+                    <Kbd>0</Kbd>
+                    <Kbd>F</Kbd>
+                  </KbdGroup>
                 </CommandShortcut>
               </CommandItem>
 
@@ -422,6 +438,12 @@ export function CommandPaletteDialog({
                 >
                   <DownloadIcon />
                   <span>{tu('cmd_export_csv')}</span>
+
+                  <CommandShortcut>
+                    <KbdGroup>
+                      <Kbd>E</Kbd>
+                    </KbdGroup>
+                  </CommandShortcut>
                 </CommandItem>
               ) : null}
 
@@ -443,6 +465,13 @@ export function CommandPaletteDialog({
                 >
                   <MessageSquarePlusIcon />
                   <span>{tu('new_chat')}</span>
+
+                  <CommandShortcut>
+                    <KbdGroup>
+                      <Kbd>{alt}</Kbd>
+                      <Kbd>N</Kbd>
+                    </KbdGroup>
+                  </CommandShortcut>
                 </CommandItem>
               ) : null}
 
@@ -450,18 +479,29 @@ export function CommandPaletteDialog({
                 value={`plugins mcp extensions ${tu('plugins')}`}
                 className="min-h-10"
                 onSelect={() =>
-                  runCommand(() => store.getState().setPluginsOpen(true), { managesOwnFocus: true })
+                  runCommand(() => store.getState().setPluginsOpen(true), {
+                    managesOwnFocus: true,
+                  })
                 }
               >
                 <PlugIcon />
                 <span>{tu('plugins')}</span>
+
+                <CommandShortcut>
+                  <KbdGroup>
+                    <Kbd>{alt}</Kbd>
+                    <Kbd>P</Kbd>
+                  </KbdGroup>
+                </CommandShortcut>
               </CommandItem>
 
               <CommandItem
                 value={`keyboard shortcuts help ${tu('sc_help')}`}
                 className="min-h-10"
                 onSelect={() =>
-                  runCommand(() => store.getState().setShortcutsOpen(true), { managesOwnFocus: true })
+                  runCommand(() => store.getState().setShortcutsOpen(true), {
+                    managesOwnFocus: true,
+                  })
                 }
               >
                 <KeyboardIcon />
@@ -473,6 +513,31 @@ export function CommandPaletteDialog({
                 </CommandShortcut>
               </CommandItem>
 
+              {powerRows(tu, alt)
+                .filter((r) => r.action && !PALETTE_HAS_ITEM.has(r.id))
+                .map((row) => (
+                  <CommandItem
+                    key={`power-${row.id}`}
+                    value={`power shortcut ${row.id} ${row.label}`}
+                    className="min-h-10"
+                    onSelect={() =>
+                      runCommand(() => {
+                        runPowerAction(row.action!, { store, navigate })
+                      })
+                    }
+                  >
+                    <KeyboardIcon />
+                    <span className="truncate">{row.label}</span>
+                    <CommandShortcut>
+                      <KbdGroup>
+                        {row.keys.map((k) => (
+                          <Kbd key={k}>{k}</Kbd>
+                        ))}
+                      </KbdGroup>
+                    </CommandShortcut>
+                  </CommandItem>
+                ))}
+
               <CommandItem
                 value={`library all drawings home ${tu('all_drawings')}`}
                 className="min-h-10"
@@ -480,6 +545,13 @@ export function CommandPaletteDialog({
               >
                 <ArrowLeftIcon />
                 <span>{tu('all_drawings')}</span>
+
+                <CommandShortcut>
+                  <KbdGroup>
+                    <Kbd>{alt}</Kbd>
+                    <Kbd>L</Kbd>
+                  </KbdGroup>
+                </CommandShortcut>
               </CommandItem>
             </CommandGroup>
 
@@ -498,7 +570,9 @@ export function CommandPaletteDialog({
                         onSelect={() =>
                           runCommand(() => {
                             const evId = roomEvidenceId(room.room_id)
-                            if (activeTurn?.response?.evidence.rooms.some((er) => er.room_id === room.room_id)) {
+                            if (
+                              activeTurn?.response?.evidence.rooms.some((er) => er.room_id === room.room_id)
+                            ) {
                               store.getState().select(activeTurn.id, evId)
                             }
                             const spotX = Math.round(rx * 10) / 10
@@ -518,7 +592,10 @@ export function CommandPaletteDialog({
                               }
                               const ev =
                                 typeof HashChangeEvent === 'function'
-                                  ? new HashChangeEvent('hashchange', { oldURL, newURL: window.location.href })
+                                  ? new HashChangeEvent('hashchange', {
+                                      oldURL,
+                                      newURL: window.location.href,
+                                    })
                                   : new Event('hashchange')
                               window.dispatchEvent(ev)
                             }

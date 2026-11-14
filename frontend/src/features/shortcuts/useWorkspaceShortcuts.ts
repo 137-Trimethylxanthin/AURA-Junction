@@ -12,6 +12,7 @@ import { apiBase, inferFloorOrderAndLabel, myProjects } from '@/api/library'
 import { useDraft } from '@/features/chat/draft'
 import { isEditable, overlayOpen, shouldIgnoreShortcut } from '@/features/plan/shared'
 import { appStore, type AgentTurn, type AppState, type AppStore, type Tool } from '@/store'
+import { runPowerAction, type PowerActionId } from './powerBindings'
 
 export type { ProjectBundle, ProjectFloor }
 export { inferFloorOrderAndLabel }
@@ -45,6 +46,10 @@ export function readShortcutModifiers(
   const hasPlainAlt = e.altKey && !isAltGr
   return { isAltGr, hasCmdCtrl, hasPlainAlt }
 }
+
+/** Time `H` went down: holding it longer than {@link PEEK_HOLD_MS} makes peek momentary (released on keyup). */
+let peekDownAt = 0
+const PEEK_HOLD_MS = 350
 
 const hydrationSeq = new WeakMap<AppStore, number>()
 
@@ -256,6 +261,36 @@ export function dispatchWorkspaceShortcut(e: KeyboardEvent, opts: ShortcutDispat
     return true
   }
 
+  // 5b. Power-user Alt chords: Alt+1..9 floors, Alt+A all floors, Alt+H history, Alt+N new chat, Alt+L library,
+  //     Alt+P plugins, Alt+S read aloud, Alt+V dictate, Alt+Shift+V live voice. Letters use `e.key` (layout-aware)
+  //     and fall back to `e.code` for macOS Option, which rewrites `e.key`.
+  if (hasPlainAlt) {
+    const digit = /^(?:Digit|Numpad)([1-9])$/.exec(e.code)
+    const letter = /^[a-z]$/.test(keyLower) ? keyLower : e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : ''
+    let id: PowerActionId | null = null
+    // macOS Option+5/6 produce `[` / `]`: those stay evidence-step keys, not floor jumps.
+    if (digit && !e.shiftKey && !'[]/?+=-'.includes(e.key)) id = `floor-${digit[1]}` as PowerActionId
+    else if (letter === 'v') id = e.shiftKey ? 'live' : 'dictate'
+    else if (!e.shiftKey) {
+      id = ({ a: 'all-floors', h: 'history', n: 'new-chat', l: 'library', p: 'plugins', s: 'speak' } as Record<string, PowerActionId>)[letter] ?? null
+    }
+    if (id) {
+      if (!runPowerAction(id, { store, navigate: opts.navigate })) return false
+      e.preventDefault()
+      return true
+    }
+  }
+
+  // 5c. Shift+1..4 zoom presets (physical digit keys, so FR AZERTY's shifted digits work too).
+  if (e.shiftKey && !hasPlainAlt && !isAltGr) {
+    const m = /^Digit([1-4])$/.exec(e.code)
+    if (m) {
+      e.preventDefault()
+      runPowerAction(`zoom-${[100, 200, 300, 450][Number(m[1]) - 1]}` as PowerActionId, { store })
+      return true
+    }
+  }
+
   // 6. Punctuation keys: evaluated via `e.key` BEFORE `isAltGr`/`hasPlainAlt` rejection so Shift-shifted
   //    (`/`, `?`, `=`, `+`), AltGr-shifted (`[`, `]` on FI/DE/FR), and macOS Option-shifted (`[`, `]`, `/`)
   //    symbols all work natively across EN, FR, FI, and DE keyboards.
@@ -295,6 +330,44 @@ export function dispatchWorkspaceShortcut(e: KeyboardEvent, opts: ShortcutDispat
   // 7. Reject remaining Alt / AltGr chorded keys so e.g. AltGr+2 (`²`/`@`) or AltGr+0 (`}`/`@`)
   //    never misfire physical Digit1/2/3/0 tool or zoom hotkeys.
   if (hasPlainAlt || isAltGr) return false
+
+  // 8a. Power-user plain keys: arrows pan (Shift = fast), F fit, H peek, G / Shift+G colour groups,
+  //     D filtered-out candidates, E CSV export. Arrows stay with focused widgets (radios, tabs, menus, ...).
+  if (e.key.startsWith('Arrow')) {
+    if (e.target instanceof Element && e.target.closest('[role=radio],[role=tab],[role=option],[role=menuitem],[role=treeitem],[role=gridcell]')) {
+      return false
+    }
+    const dir = e.key.slice(5).toLowerCase()
+    e.preventDefault()
+    runPowerAction(`pan-${e.shiftKey ? 'fast-' : ''}${dir}` as PowerActionId, { store })
+    return true
+  }
+  if (!e.shiftKey && !e.repeat && keyLower === 'f') {
+    e.preventDefault()
+    runPowerAction('fit', { store })
+    return true
+  }
+  if (!e.shiftKey && !e.repeat && keyLower === 'h') {
+    e.preventDefault()
+    peekDownAt = performance.now()
+    runPowerAction('peek', { store })
+    return true
+  }
+  if (keyLower === 'g') {
+    if (!runPowerAction(e.shiftKey ? 'group-prev' : 'group-next', { store })) return false
+    e.preventDefault()
+    return true
+  }
+  if (!e.shiftKey && !e.repeat && keyLower === 'd') {
+    e.preventDefault()
+    runPowerAction('dropped', { store })
+    return true
+  }
+  if (!e.shiftKey && !e.repeat && keyLower === 'e') {
+    if (!runPowerAction('export', { store })) return false
+    e.preventDefault()
+    return true
+  }
 
   // 8. Tool selection (`1`/`V`, `2`/`M`, `3`/`W` — supporting FR AZERTY unshifted Digit1..3 via `e.code`).
   if (e.key === '1' || (!e.shiftKey && (e.code === 'Digit1' || keyLower === 'v'))) {
@@ -376,7 +449,17 @@ export function useWorkspaceShortcuts(opts: { store?: AppStore; navigate?: (to: 
     const onKeyDown = (e: KeyboardEvent) => {
       dispatchWorkspaceShortcut(e, { store, navigate })
     }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'h' || peekDownAt === 0) return
+      const held = performance.now() - peekDownAt
+      peekDownAt = 0
+      if (held > PEEK_HOLD_MS) runPowerAction('peek', { store })
+    }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
   }, [store, customNavigate, routerNavigate])
 }

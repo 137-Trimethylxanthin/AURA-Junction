@@ -613,3 +613,79 @@ describe('0ms CommandPaletteDialog, ShortcutHelpDialog, AppShell & TracePanel a1
     }
   })
 })
+
+describe('Expanded power-user keybinds', () => {
+  const bundle: ProjectBundle = {
+    id: 'proj-power',
+    title: 'Power House',
+    floors: [
+      { drawing_id: 'p-1', label: 'EG', order: 0 },
+      { drawing_id: 'p-2', label: '1. OG', order: 1 },
+    ],
+  }
+
+  it('pans, fits, snaps zoom, and toggles peek / dropped via stage commands', () => {
+    const store = makeStore()
+    const seen: { type: string; dx?: number; dy?: number }[] = []
+    const onCmd = (e: Event) => seen.push((e as CustomEvent).detail)
+    window.addEventListener('aura:stage-command', onCmd)
+    try {
+      expect(dispatchWorkspaceShortcut(keyEvent('ArrowRight'), { store })).toBe(true)
+      expect(dispatchWorkspaceShortcut(keyEvent('ArrowUp', { shiftKey: true }), { store })).toBe(true)
+      expect(dispatchWorkspaceShortcut(keyEvent('f'), { store })).toBe(true)
+      expect(dispatchWorkspaceShortcut(keyEvent('h'), { store })).toBe(true)
+      expect(dispatchWorkspaceShortcut(keyEvent('d'), { store })).toBe(true)
+      expect(seen).toEqual([
+        { type: 'pan', dx: 80, dy: 0 },
+        { type: 'pan', dx: 0, dy: -240 },
+        { type: 'fit' },
+        { type: 'peek' },
+        { type: 'dropped' },
+      ])
+      // Shift+2 (US `@`, AZERTY `2`) snaps to 200 %; Shift+4 to 450 %.
+      expect(dispatchWorkspaceShortcut(keyEvent('@', { shiftKey: true, code: 'Digit2' }), { store })).toBe(true)
+      expect(store.getState().ui.zoom).toBe(200)
+      dispatchWorkspaceShortcut(keyEvent('$', { shiftKey: true, code: 'Digit4' }), { store })
+      expect(store.getState().ui.zoom).toBe(450)
+      // Arrows stay with editable fields.
+      const input = document.createElement('input')
+      document.body.append(input)
+      expect(dispatchWorkspaceShortcut(keyEvent('ArrowLeft', {}, input), { store })).toBe(false)
+      input.remove()
+    } finally {
+      window.removeEventListener('aura:stage-command', onCmd)
+    }
+  })
+
+  it('jumps floors with Alt+digit, toggles all-floors scope, and dispatches voice / history events', () => {
+    const store = makeStore({ ...bundledDrawing, id: 'p-1' })
+    store.getState().setActiveProject(bundle)
+    const visited: string[] = []
+    const navigate = (to: string) => visited.push(to)
+    expect(dispatchWorkspaceShortcut(keyEvent('2', { altKey: true, code: 'Digit2' }), { store, navigate })).toBe(true)
+    expect(visited).toEqual(['/d/p-2'])
+    expect(dispatchWorkspaceShortcut(keyEvent('9', { altKey: true, code: 'Digit9' }), { store, navigate })).toBe(false)
+    expect(dispatchWorkspaceShortcut(keyEvent('a', { altKey: true }), { store, navigate })).toBe(true)
+    expect(store.getState().crossPlanScope).toBe(true)
+    expect(dispatchWorkspaceShortcut(keyEvent('l', { altKey: true }), { store, navigate })).toBe(true)
+    expect(visited.at(-1)).toBe('/app')
+    expect(dispatchWorkspaceShortcut(keyEvent('p', { altKey: true }), { store, navigate })).toBe(true)
+    expect(store.getState().ui.pluginsOpen).toBe(true)
+
+    const events: string[] = []
+    const names = ['aura:open-history', 'aura:toggle-dictation', 'aura:toggle-speak', 'aura:toggle-live-voice']
+    const on = (e: Event) => events.push(e.type)
+    names.forEach((n) => window.addEventListener(n, on))
+    try {
+      dispatchWorkspaceShortcut(keyEvent('h', { altKey: true }), { store, navigate })
+      dispatchWorkspaceShortcut(keyEvent('v', { altKey: true }), { store, navigate })
+      dispatchWorkspaceShortcut(keyEvent('s', { altKey: true }), { store, navigate })
+      dispatchWorkspaceShortcut(keyEvent('V', { altKey: true, shiftKey: true }), { store, navigate })
+      expect(events).toEqual(names)
+    } finally {
+      names.forEach((n) => window.removeEventListener(n, on))
+    }
+    // AltGr chords never fire Alt shortcuts.
+    expect(dispatchWorkspaceShortcut(keyEvent('h', { altKey: true, altGraph: true }), { store, navigate })).toBe(false)
+  })
+})
