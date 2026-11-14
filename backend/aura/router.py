@@ -18,6 +18,11 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Literal
 
+# Bumped whenever routing changes what a question resolves to: cached answers written under an
+# older router are ignored (pipeline.answer cache key).
+ROUTER_VERSION = 3
+EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent"})
+
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
                  "room_rank", "adjacent"]
 InternalLang = Literal["en", "fr", "fi", "de", "it"]
@@ -133,12 +138,16 @@ LENGTH = S(r"length|lengths|longueur|pituus|länge|lunghezza|perimeter|périmèt
            r"kapea|breite|breit|schmal|larghezza")
 
 LOCATE = S(
-    r"show|highlight|mark|find|locate|point out|where (?:is|are)|"
-    r"montre\w*|affiche\w*|surlign\w*|où (?:est|sont)|"
-    r"näytä|korosta|missä (?:on|ovat)|etsi|"
-    r"zeig\w*|markier\w*|wo (?:ist|sind)|"
-    r"mostra\w*|dove (?:è|sono)"
+    r"show|highlight|mark|find|locate|point out|where (?:is|are)|list|display|give me|"
+    r"what are (?:the|all)|which are|enumerate|"
+    r"montre\w*|affiche\w*|surlign\w*|où (?:est|sont)|liste\w*|indique\w*|donne-moi|"
+    r"näytä|korosta|missä (?:on|ovat)|etsi|listaa|luettele|"
+    r"zeig\w*|markier\w*|wo (?:ist|sind)|liste\w*|auflist\w*|nenn\w*|"
+    r"mostra\w*|dove (?:è|sono)|elenca\w*|evidenzia\w*"
 )
+# "all doors", "toutes les fenêtres", "alle Türen", "kaikki ovet", "tutte le porte": a bare
+# quantifier + subject asks to show every item, exactly like "show all doors".
+ALL_OF = S(r"all|every|each|toutes?|tous|alle[ns]?|sämtliche|kaikki|tutt[ie]|ogni")
 
 STAIR_ESCALATE = re.compile(
     rf"(?<!{_LD})(?:stairs?|staircases?|stairwells?|escaliers?|portaat|porras|porraskäytäv\w*|"
@@ -146,6 +155,10 @@ STAIR_ESCALATE = re.compile(
     r"\bleads?\s+to\b|\bwhere\s+do(?:es)?\b.*\blead\b|\boù\s+mène|\bmihin\b.*\bjohta|\bwohin\s+führ",
     re.IGNORECASE,
 )
+
+STAIR_LEADS = re.compile(
+    r"\blead|\bconnect|\bgo(?:es)?\s+(?:up|down|to)\b|\bwhere\s+do(?:es)?\b|\bmène|\bführ|\bjohta|\bporta(?:no)?\s+a\b",
+    re.IGNORECASE)
 
 DEICTIC_SIMILARITY = re.compile(
     r"\b(?:like this|like that|like these|similar to|same as this|spots?\s+like|symbols?\s+like|"
@@ -475,6 +488,11 @@ ADJACENT = re.compile(
 )
 
 
+WHICH_ARE_THERE = re.compile(
+    r"^\s*(?:which|what)\s+(?=\w+\s+(?:are\s+there|exist|are\s+(?:on|in)\s+(?:this|the)\s+(?:floor|plan|drawing))\b)",
+    re.IGNORECASE)
+
+
 def room_concept(text: str) -> tuple[str | None, list[str]]:
     """('bedroom', its printed label names) when the question names a room type."""
     for concept, rx, printed in LABEL_CONCEPTS:
@@ -562,12 +580,14 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
         if not room and ANAPHORA.search(s):
             return Routed("unknown", lang, signal, subject=box_subject,
                           matched=["anaphora", box_subject])
-    if SELECTOR.search(s) or (ROOMS_WITH.search(s) and not LABELLED.search(s)):
+    # "which rooms are there?" just asks for the list (no selection criterion).
+    s_sel = WHICH_ARE_THERE.sub("show all ", s)
+    if SELECTOR.search(s_sel) or (ROOMS_WITH.search(s) and not LABELLED.search(s)):
         return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["needs_model"])
 
     is_area = bool(AREA.search(s))
     is_count = bool(COUNT.search(s))
-    is_locate = bool(LOCATE.search(s))
+    is_locate = bool(LOCATE.search(s_sel) or ALL_OF.search(s))
     subject = None
     subject_rx: re.Pattern[str] | None = None
     scope_text = s
@@ -590,6 +610,13 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
 
     # Stairs and connectivity ("show all stairs and where they lead") escalate to deep_agent,
     # while preserving explicit room-id area queries ("room 1.01 ('Treppenhaus')") handled below.
+    # "where is the staircase" / "show the stairwell" on a plan with a printed stair room is the
+    # room with that label (exact); connectivity ("where do they lead") still needs the agent.
+    if (STAIR_ESCALATE.search(s) and not STAIR_LEADS.search(s) and (is_count or is_locate)
+            and scope and scope["kind"] == "label"
+            and room_concept(scope["label"])[0] == "stairs"):
+        return Routed("count", lang, signal, subject="room", scope=scope,
+                      matched=["count", "label", "stairs"])
     if STAIR_ESCALATE.search(s) and not (scope and scope["kind"] == "room"):
         return Routed("unknown", lang, signal, scope=scope, matched=["stair_escalate"])
 
@@ -638,7 +665,8 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     if scope and scope["kind"] == "label" and (is_count or is_locate or ROOM_WORD.search(s)):
         return Routed("count", lang, signal, subject="room", scope=scope,
                       matched=["count", "label", *extra_match])
-    if (is_count or (is_locate and has_color)) and ROOM_WORD.search(s):
+    bare_rooms = bool(re.fullmatch(rf"\s*(?:{ROOM_WORD.pattern}){_L}*\s*\??\s*", s, re.IGNORECASE))
+    if (is_count or is_locate or bare_rooms) and ROOM_WORD.search(s):
         return Routed("count", lang, signal, subject="room", scope=scope,
                       matched=["count", "room", *extra_match])
 

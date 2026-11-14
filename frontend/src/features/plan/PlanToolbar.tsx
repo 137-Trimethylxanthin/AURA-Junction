@@ -213,13 +213,26 @@ export function SourceBadge() {
   const failed = src.reason === 'health_failed' || src.reason === 'fell_back'
   return (
     <div className="flex items-center gap-1">
-      <Badge variant="secondary" className="h-7" role="status" title={tu('src_local_hint')}>
-        {tu('src_local')}
-      </Badge>
+      {failed ? (
+        <Badge
+          variant="outline"
+          className="h-7 gap-1.5 border-warning/40 bg-warning-surface text-warning"
+          role="status"
+          title={tu('src_offline_hint')}
+          data-source-offline
+        >
+          <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+          {tu('src_offline')}
+        </Badge>
+      ) : (
+        <Badge variant="secondary" className="h-7" role="status" title={tu('src_local_hint')}>
+          {tu('src_local')}
+        </Badge>
+      )}
       {failed ? (
         <Button variant="ghost" size="sm" className="h-10" onClick={() => void actions().retrySource()}>
           <RefreshCwIcon data-icon="inline-start" />
-          <span className="@max-[1040px]:sr-only">{tu('src_retry')}</span>
+          <span className="@max-[1040px]:sr-only">{tu('src_reconnect')}</span>
         </Button>
       ) : null}
     </div>
