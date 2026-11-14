@@ -1,7 +1,6 @@
 import { useUi } from "@/i18n/uiLang"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link } from "react-router"
-import { useReducedMotion } from "motion/react"
 import {
   LayersIcon,
   RotateCwIcon,
@@ -11,7 +10,12 @@ import {
 } from "lucide-react"
 import { ApiError, listDrawings } from "@/api/client"
 import type { DrawingKind, DrawingSummary, Lang } from "@/api/contract"
-import { apiBase, displayDrawingTitle, kindText } from "@/api/library"
+import {
+  apiBase,
+  displayDrawingTitle,
+  kindText,
+  myProjects,
+} from "@/api/library"
 import { SiteHeader } from "@/components/shell/SiteHeader"
 import {
   Alert,
@@ -33,8 +37,14 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { BUNDLED_SUMMARY } from "@/data/ids"
 import { useTitle } from "@/hooks/use-title"
 import { factById, fmtInt } from "@/pages/landing/facts"
+import { usePrefersReducedMotion } from "@/pages/landing/springs"
+import { actions } from "@/store"
 import { DrawingCard } from "./DrawingCard"
-import { ProjectBundlerBar, type SelectablePlan } from "./ProjectBundlerBar"
+import {
+  ProjectBundlerBar,
+  type SelectablePlan,
+  type SelectionFloorMeta,
+} from "./ProjectBundlerBar"
 import { UploadPanel, type ReadyUploadSummary } from "./UploadPanel"
 
 const GROUP_BTN_COPY: Record<Lang, { open: string; close: string }> = {
@@ -44,21 +54,22 @@ const GROUP_BTN_COPY: Record<Lang, { open: string; close: string }> = {
   de: { open: "Pläne gruppieren", close: "Fertig" },
 }
 
-type ExtendedSummary = DrawingSummary & {
-  project_id?: string
-  floor_label?: string
-  floor_order?: number
-}
-
 type ListState =
   | { state: "loading" }
   | {
       state: "ready"
       drawings: DrawingSummary[]
-      groupedUploads: ExtendedSummary[]
+      groupedUploads: DrawingSummary[]
       dropped?: number
     }
   | { state: "error"; message: string; unreadable?: boolean }
+
+function uploadKindFromName(name: string): DrawingKind {
+  const lower = name.toLowerCase()
+  if (lower.endsWith(".ifc")) return "ifc"
+  if (lower.endsWith(".dxf")) return "cad_dxf"
+  return "raster"
+}
 
 /** Library drawings come from GET /drawings; without an API only the bundled sample is listed (and says so). */
 function useLibrary(base: string | null) {
@@ -74,34 +85,49 @@ function useLibrary(base: string | null) {
     listDrawings({ baseUrl: base })
       .then((r) => {
         if (!live) return
-        const all = r.drawings as ExtendedSummary[]
         setList({
           state: "ready",
-          drawings: all.filter((d) => d.source !== "upload"),
-          groupedUploads: all.filter((d) => d.source === "upload" && Boolean(d.project_id)),
+          drawings: r.drawings.filter((d) => d.source !== "upload"),
+          groupedUploads: r.drawings.filter(
+            (d) =>
+              d.source === "upload" &&
+              (Boolean(d.project_id) || /^up-[a-z0-9]+-p\d+$/i.test(d.id))
+          ),
           dropped: r.dropped,
         })
       })
-      .catch(
-        (e: unknown) =>
-          live &&
-          setList({
-            state: "error",
-            message:
-              e instanceof Error ? e.message : "The list could not be loaded",
-            // The server answered, but with something this app cannot read.
-            unreadable: e instanceof ApiError && e.code === "invalid_response",
-          })
-      )
+      .catch((e: unknown) => {
+        if (!live) return
+        // Background refreshes keep already-loaded library cards intact on transient hiccups.
+        setList((prev) =>
+          prev.state === "ready"
+            ? prev
+            : {
+                state: "error",
+                message:
+                  e instanceof Error ? e.message : "The list could not be loaded",
+                // The server answered, but with something this app cannot read.
+                unreadable: e instanceof ApiError && e.code === "invalid_response",
+              }
+        )
+      })
     return () => {
       live = false
     }
   }, [base, attempt])
+
   const retry = useCallback(() => {
     setList({ state: "loading" })
     setAttempt((n) => n + 1)
   }, [])
-  return { list, retry }
+
+  /** Silent background re-fetch (used when a multi-page PDF upload finishes splitting on the server). */
+  const refresh = useCallback(() => {
+    if (!base) return
+    setAttempt((n) => n + 1)
+  }, [base])
+
+  return { list, retry, refresh }
 }
 
 /** The measured full-set context line, from the facts file (never computed here). */
@@ -127,16 +153,18 @@ function FullSetLine() {
 
 export default function LibraryPage() {
   const { lang, tu } = useUi()
-  const reducedMotion = useReducedMotion()
+  const reducedMotion = usePrefersReducedMotion()
   useTitle(tu("nav_drawings"))
   const base = apiBase()
-  const { list, retry } = useLibrary(base)
+  const { list, retry, refresh } = useLibrary(base)
   const [query, setQuery] = useState("")
   const [kind, setKind] = useState<"all" | DrawingKind>("all")
 
   const [grouping, setGrouping] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [selectionLabels, setSelectionLabels] = useState<Record<string, string>>({})
+  const [selectionMeta, setSelectionMeta] = useState<
+    Record<string, SelectionFloorMeta>
+  >({})
   const [readyUploads, setReadyUploads] = useState<ReadyUploadSummary[]>([])
 
   // A failed list still offers the bundled sample, which works without the server.
@@ -152,12 +180,13 @@ export default function LibraryPage() {
 
   const selectablePlans = useMemo<SelectablePlan[]>(() => {
     const map = new Map<string, SelectablePlan>()
-    for (const d of drawings as ExtendedSummary[]) {
+    for (const d of drawings) {
       if (d.status !== "ready") continue
       map.set(d.id, {
         id: d.id,
         title: d.title,
         subtitle: d.subtitle,
+        kind: d.kind,
         credit: d.credit,
         source: d.source ?? "library",
         project_id: d.project_id,
@@ -172,6 +201,7 @@ export default function LibraryPage() {
           id: u.id,
           title: u.title,
           subtitle: u.subtitle,
+          kind: u.kind,
           credit: u.credit,
           source: "upload",
           project_id: u.project_id,
@@ -185,12 +215,44 @@ export default function LibraryPage() {
         map.set(u.id, {
           id: u.id,
           title: u.name,
+          kind: uploadKindFromName(u.name),
           source: "upload",
         })
       }
     }
     return [...map.values()]
   }, [drawings, list, readyUploads])
+
+  const selectableSummaries = useMemo<DrawingSummary[]>(
+    () =>
+      selectablePlans.map((p) => ({
+        id: p.id,
+        title: p.title,
+        subtitle: p.subtitle,
+        kind: p.kind ?? uploadKindFromName(p.title),
+        status: "ready",
+        source: p.source ?? "library",
+        thumbnail: "",
+        credit: p.credit ?? { text: p.title, license: "" },
+        ...(p.project_id ? { project_id: p.project_id } : {}),
+        ...(p.floor_label ? { floor_label: p.floor_label } : {}),
+        ...(p.floor_order !== undefined ? { floor_order: p.floor_order } : {}),
+      })),
+    [selectablePlans]
+  )
+
+  const activateBundleForDrawing = useCallback(
+    (drawingId: string) => {
+      const bundle = myProjects.forDrawing(drawingId, selectableSummaries)
+      if (bundle && bundle.floors.length >= 2) {
+        myProjects.save(bundle)
+        actions().setActiveProject(bundle)
+      } else {
+        actions().setActiveProject(null)
+      }
+    },
+    [selectableSummaries]
+  )
 
   const kinds = useMemo(
     () => [...new Set(drawings.map((d) => d.kind))],
@@ -310,12 +372,11 @@ export default function LibraryPage() {
               <ProjectBundlerBar
                 base={base}
                 plans={selectablePlans}
-                librarySummaries={drawings}
                 grouping={grouping}
                 onGroupingChange={setGrouping}
                 selectedIds={selectedIds}
                 onSelectedIdsChange={setSelectedIds}
-                onSelectionLabelsChange={setSelectionLabels}
+                onSelectionMetaChange={setSelectionMeta}
               />
             ) : null}
 
@@ -372,7 +433,10 @@ export default function LibraryPage() {
                 aria-label={tu("nav_drawings")}
               >
                 {shown.map((d, i) => {
-                  const selIdx = selectedIds.indexOf(d.id)
+                  const meta = selectionMeta[d.id]
+                  const fallbackOrder = selectedIds.indexOf(d.id)
+                  const selectedOrder =
+                    meta?.order ?? (fallbackOrder >= 0 ? fallbackOrder + 1 : undefined)
                   return (
                     // Cards settle in reading order; the stagger is capped so a long library never waits.
                     <li
@@ -388,9 +452,10 @@ export default function LibraryPage() {
                         d={d}
                         offline={offline && d.id === BUNDLED_SUMMARY.id}
                         selectionMode={grouping}
-                        selectedOrder={selIdx >= 0 ? selIdx + 1 : undefined}
-                        floorLabel={selectionLabels[d.id]}
+                        selectedOrder={selectedOrder}
+                        floorLabel={meta?.label}
                         onToggleSelect={toggleSelectDrawing}
+                        onOpen={(item) => activateBundleForDrawing(item.id)}
                       />
                     </li>
                   )
@@ -430,6 +495,8 @@ export default function LibraryPage() {
               base={base}
               onReadyUploadsChange={setReadyUploads}
               onBundleUploads={handleBundleUploads}
+              onProjectsDiscovered={refresh}
+              onOpenUpload={activateBundleForDrawing}
             />
           </aside>
         </div>

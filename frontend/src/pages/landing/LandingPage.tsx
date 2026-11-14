@@ -3,7 +3,6 @@ import { Link } from "react-router"
 import {
   MotionConfig,
   motion,
-  useReducedMotion,
   useScroll,
   useSpring,
   useTransform,
@@ -38,6 +37,7 @@ import {
 } from "./facts"
 import { DEMO_ROUTE } from "./links"
 import { CountUp, Reveal, RevealItem } from "./motion"
+import { usePrefersReducedMotion } from "./springs"
 
 // The replay and the story pull in the drawing data and the local answer code: load them after the shell.
 const HeroDemo = lazy(() => import("./HeroDemo"))
@@ -92,7 +92,7 @@ export default function LandingPage() {
 function Hero() {
   const swiss = factById("swiss-full")
   const ref = useRef<HTMLElement>(null)
-  const reduce = useReducedMotion()
+  const reduce = usePrefersReducedMotion()
   // Scroll-linked: as the hero leaves, the live demo sinks back a little (transform only, springed).
   const { scrollYProgress } = useScroll({
     target: ref,
@@ -348,7 +348,7 @@ function FactCard({
   fact: Fact
   tone?: "success" | "warning"
 }) {
-  const reduce = useReducedMotion()
+  const reduce = usePrefersReducedMotion()
   const [t, setT] = useState(0)
   const progressT = reduce ? 1 : t
   const frac =
@@ -402,7 +402,7 @@ function Measured() {
     <Section
       id="measured"
       title="Accuracy and cost, measured with their n"
-      lead="Only numbers we measured appear here, with the sample size and the date. Results still being measured stay off this page until they have an n."
+      lead="These CAD and IFC accuracy figures were measured on AURA’s deterministic geometry engine (0 model calls), with sample size and date shown; scanned and open-ended model estimates are reported separately under Limits."
     >
       <Reveal
         as="ul"
