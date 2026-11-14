@@ -232,6 +232,27 @@ def coverage(rooms: list, mask: np.ndarray, s: float, mpp: float) -> float:
     return hit / n if n else 0.0
 
 
+def _across(b, ref, t: float):
+    """An elongated door box that the wall crosses instead of following: the opening on that wall, or None.  Taken
+    only on clear evidence: little wall along the box's long centre line, wall most of the way across it."""
+    from shapely.geometry import box
+    x0, y0, x1, y1 = b
+    w, h = x1 - x0, y1 - y0
+    if ref is None or min(w, h) <= 0 or t <= 0:
+        return None
+    hit = ref.intersection(box(x0, y0, x1, y1))
+    if hit.is_empty or hit.area <= 0:
+        return None
+    if w >= h:
+        along, c = box(x0, (y0 + y1) / 2 - t / 2, x1, (y0 + y1) / 2 + t / 2), hit.centroid.x
+        cross, axis = box(c - t / 2, y0, c + t / 2, y1), "v"
+    else:
+        along, c = box((x0 + x1) / 2 - t / 2, y0, (x0 + x1) / 2 + t / 2, y1), hit.centroid.y
+        cross, axis = box(x0, c - t / 2, x1, c + t / 2), "h"
+    f_along, f_cross = ref.intersection(along).area / along.area, ref.intersection(cross).area / cross.area
+    return (cross, axis) if f_along < 0.3 and f_cross >= 0.5 else None
+
+
 def opening(b, cls: str, ref, t: float):
     """The rectangle a door or window takes on the wall line.  b = its box in pixels, ref = wall geometry to look
     for the wall in (shapely), t = wall thickness in pixels.  -> (shapely box, 'h' | 'v')"""
@@ -239,6 +260,9 @@ def opening(b, cls: str, ref, t: float):
     x0, y0, x1, y1 = b
     w, h = x1 - x0, y1 - y0
     if max(w, h) >= 1.6 * min(w, h):                         # elongated: lies along the wall, on its centre line
+        across = _across(b, ref, t) if cls == "door" else None
+        if across is not None:                               # ... unless the wall crosses it: leaves drawn open to
+            return across                                    # both sides make the box long across the wall
         if w >= h:
             cy = (y0 + y1) / 2
             return box(x0, cy - t / 2, x1, cy + t / 2), "h"

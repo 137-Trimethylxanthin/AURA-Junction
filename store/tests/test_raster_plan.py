@@ -217,3 +217,19 @@ def test_the_plan_of_a_scan_is_a_vector_drawing_with_estimate_areas(scan):
     db.run("update jstore.entity set status = 'retired' where drawing_key = 'test_scan' and kind in ('room', 'wall')")
     bare = M.build(db, "test_scan")                    # no model of the plan: its picture only, nothing to compare
     assert not bare.vector_scan and "original" not in M.drawing_doc(bare)["images"]
+
+
+def test_a_long_door_box_across_a_wall_opens_on_that_wall():
+    """Leaves drawn open to both sides make a door's box long across its wall: the opening follows the wall, not
+    the box.  A long box with wall along its centre line (a sliding or double door) stays along the box."""
+    from shapely.geometry import box
+    from jstore.interpret.raster_plan import opening
+    wall = box(0, 95, 400, 105)                               # a horizontal wall, 10 px thick
+    g, axis = opening((100, 30, 170, 170), "door", wall, 10.0)   # 70 x 140, the wall through its middle
+    assert axis == "h" and g.bounds == (100.0, 95.0, 170.0, 105.0)
+    g, axis = opening((100, 92, 240, 108), "door", wall, 10.0)   # 140 x 16, lying in the wall
+    assert axis == "h" and g.bounds[0] == 100.0 and g.bounds[2] == 240.0
+    g, axis = opening((100, 130, 170, 270), "door", wall, 10.0)  # no wall in the box: the long axis, as before
+    assert axis == "v"
+    g, axis = opening((100, 30, 170, 170), "window", wall, 10.0)
+    assert axis == "v"
