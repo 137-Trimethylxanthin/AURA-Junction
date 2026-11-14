@@ -62,7 +62,7 @@ Direct dependencies (`agent-service/requirements.txt`):
 
 `npx license-checker --production --summary` reports: MIT 124, OFL-1.1 2, Apache-2.0 2, MPL-2.0 2, ISC 2, 0BSD 2, BlueOak-1.0.0 1, BSD-3-Clause 1, plus the frontend package itself (private, "UNLICENSED"). No GPL or AGPL.
 
-Direct dependencies: react, react-dom, react-router, radix-ui, shadcn/ui components (MIT, copied source), tailwindcss, lucide-react, motion, sonner, zustand, react-resizable-panels, class-variance-authority, tw-animate-css (all MIT or ISC).
+Direct dependencies: react, react-dom, react-router, radix-ui, shadcn/ui components (MIT, copied source), tailwindcss, lucide-react, motion, sonner, zustand, react-resizable-panels, class-variance-authority, tw-animate-css, three (3D view; loaded only when it is opened) (all MIT or ISC).
 
 Fonts (SIL OFL-1.1, via `@fontsource-variable`): Inter, JetBrains Mono.
 

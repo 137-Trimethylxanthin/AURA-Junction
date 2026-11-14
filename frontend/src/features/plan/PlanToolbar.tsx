@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
 import {
+  BoxIcon,
   CircleHelpIcon,
   Columns2Icon,
   Loader2Icon,
+  MapIcon,
   MinusIcon,
   MousePointer2Icon,
   PlusIcon,
@@ -19,7 +21,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { ZOOM_MAX, ZOOM_MIN, actions, selectZoom, useAppStore, useAppStoreShallow, useSource, type Tool } from '@/store'
+import { ZOOM_MAX, ZOOM_MIN, actions, selectZoom, useAppStore, useAppStoreShallow, useSource, type PlanView, type Tool } from '@/store'
 
 const TOOLS: { id: Tool; label: UiKey; hint: UiKey; Icon: typeof MousePointer2Icon }[] = [
   { id: 'select', label: 'tool_select', hint: 'tool_select_hint', Icon: MousePointer2Icon },
@@ -43,14 +45,26 @@ export function PlanToolbar() {
   const answererMode = useAppStore((s) => s.session.answererMode)
   const showWhatIf = canWhatIf && answererMode !== 'agent'
   const zoom = useAppStore(selectZoom)
+  const view = useAppStore((s) => s.ui.view)
   const { tu } = useUi()
 
   useEffect(() => {
     if (tool === 'whatif' && !showWhatIf) actions().cancelWhatIf()
   }, [tool, showWhatIf])
 
+  if (view === '3d')
+    return (
+      <div className="@container flex w-full min-w-0 flex-wrap items-center gap-2" role="toolbar" aria-label={tu('plan_tools')}>
+        <ViewToggle view={view} />
+        <div className="ml-auto flex items-center gap-2">
+          <SourceBadge />
+        </div>
+      </div>
+    )
+
   return (
     <div className="@container flex w-full min-w-0 flex-wrap items-center gap-2" role="toolbar" aria-label={tu('plan_tools')}>
+      <ViewToggle view={view} />
       <ToggleGroup
         type="single"
         variant="outline"
@@ -86,11 +100,13 @@ export function PlanToolbar() {
             pressed={compare.on}
             onPressedChange={(on) => actions().setCompare({ on })}
             aria-label={tu('compare')}
+            title={tu('compare')}
             className="gap-1.5"
           >
             <Columns2Icon data-icon="inline-start" />
             {/* Icon-only while on: the Swipe/Blend group next to it already says what's active. */}
-            <span className={cn(compare.on ? 'sr-only' : '@max-[520px]:sr-only')}>{tu('compare')}</span>
+            {/* Icon-only on narrow toolbars too, so the 2D/3D switch still fits on one row (portrait tablets). */}
+            <span className={cn(compare.on ? 'sr-only' : '@max-[860px]:sr-only')}>{tu('compare')}</span>
           </Toggle>
           {compare.on ? (
             <>
@@ -189,6 +205,34 @@ export function PlanToolbar() {
         </Tooltip>
       </div>
     </div>
+  )
+}
+
+/** Flat drawing or 3D model of it. */
+function ViewToggle({ view }: { view: PlanView }) {
+  const { tu } = useUi()
+  return (
+    <ToggleGroup
+      type="single"
+      variant="outline"
+      spacing={0}
+      value={view}
+      onValueChange={(v) => v && actions().setView(v as PlanView)}
+      aria-label={tu('view_toggle')}
+    >
+      <ToggleGroupItem value="2d" aria-label={tu('view_2d')} className="gap-1.5">
+        <MapIcon data-icon="inline-start" />
+        <span className="@max-[900px]:sr-only">{tu('view_2d')}</span>
+      </ToggleGroupItem>
+      <ToggleGroupItem
+        value="3d"
+        aria-label={tu('view_3d')}
+        className="gap-1.5 data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground hover:data-[state=on]:bg-primary/90 hover:data-[state=on]:text-primary-foreground"
+      >
+        <BoxIcon data-icon="inline-start" />
+        <span className="@max-[900px]:sr-only">{tu('view_3d')}</span>
+      </ToggleGroupItem>
+    </ToggleGroup>
   )
 }
 

@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { Suspense, lazy, useEffect } from "react"
 import { useUi } from "@/i18n/uiLang"
 import { Link, useParams } from "react-router"
 import { AlertTriangleIcon, CloudOffIcon, FileQuestionIcon } from "lucide-react"
@@ -47,11 +47,15 @@ import {
 /** Set once the stored projects were checked for expired floors on this page load. */
 let prunedThisPage = false
 
+// three.js is only fetched when someone opens the 3D view.
+const Viewer3D = lazy(() => import("@/features/viewer3d/Viewer3D"))
+
 /** /d/:drawingId: the plan + chat workspace for one drawing. */
 export default function Workspace() {
   const { drawingId = BUNDLED_DRAWING_ID } = useParams()
   const load = useAppStore((s) => s.session.load)
   const drawing = useAppStore(selectDrawing)
+  const view = useAppStore((s) => s.ui.view)
 
   useEffect(() => {
     void actions().initSource()
@@ -151,7 +155,21 @@ export default function Workspace() {
         title={<DrawingTitle />}
         headerActions={<HeaderActions />}
         toolbar={<PlanToolbar />}
-        stage={<PlanStage />}
+        stage={
+          view === "3d" ? (
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center">
+                  <Spinner />
+                </div>
+              }
+            >
+              <Viewer3D />
+            </Suspense>
+          ) : (
+            <PlanStage />
+          )
+        }
         credit={<Credit />}
         chat={<ChatPanel />}
         composer={

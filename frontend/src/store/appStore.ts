@@ -33,6 +33,8 @@ export const ZOOM_MAX = 450
 export const ZOOM_STEPS = [100, 140, 190, 260, 350, 450] as const
 
 export type Tool = 'select' | 'mark' | 'whatif'
+/** The plan as the flat drawing or as a 3D model built from it. */
+export type PlanView = '2d' | '3d'
 export type Feedback = 'up' | 'down' | null
 
 export interface UserTurn {
@@ -238,6 +240,8 @@ export interface AppState {
     shortcutsOpen: boolean
     commandOpen: boolean
     whatIf: { roomId: string | null; w: number; h: number }
+    /** Kept across conversations and drawings: a presenter who switched to 3D stays there. */
+    view: PlanView
   }
   undoStack: UndoEntry[]
 
@@ -286,6 +290,7 @@ export interface AppState {
   setTool(tool: Tool): void
   setZoom(zoom: number): void
   resetZoom(): void
+  setView(view: PlanView): void
   setZoomIndex(i: number): void
   zoomIn(): void
   zoomOut(): void
@@ -367,7 +372,8 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       }),
     )
 
-    const freshUi = (): AppState['ui'] => ({
+    const freshUi = (view: PlanView = get()?.ui?.view ?? '2d'): AppState['ui'] => ({
+        view,
         activeTurnId: null,
         selectedEvidenceId: null,
         hoveredEvidenceIds: [],
@@ -936,6 +942,11 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
       resetZoom() {
         ui({ zoom: ZOOM_MIN, zoomIndex: 0 })
+      },
+      setView(view) {
+        // What-if and the mark tool are 2D-only: leave them. An attached mark stays (the composer shows its chip).
+        if (view === '3d' && get().ui.tool === 'whatif') get().cancelWhatIf()
+        ui({ view, tool: view === '3d' ? 'select' : get().ui.tool })
       },
       setZoomIndex(i) {
         const idx = clampZoom(i)
