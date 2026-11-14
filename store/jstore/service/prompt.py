@@ -25,6 +25,8 @@ One row per physical thing of a drawing, merged across its source files (DXF, PD
 - {rooms} - `area_m2` is the NET floor area (the preferred source; `area_source` says which: printed, measured_outline, stored_quantity ...). `perimeter_m` is the length of the room outline (inner wall faces). `is_indoor` is false for balconies, terraces, loggias. `agreement`: agree | single | conflict between the `n_sources` files. `apartment` is the unit the room belongs to.
 - {apartments} - `rooms` counts its rooms, `net_area_m2` sums its indoor rooms.
 - {doors}; q.windows and q.fixtures have the same columns (all three are slices of q.items). `kind` tells fixtures apart (toilet, washbasin, sink, bathtub, shower ...); `room` is the number of the host room.
+- {dimensions} - what the sheet PRINTS: `kind` linear (a dimension line), overall (the longest), room_size (`a_m` x `b_m` written in a room), area, level. `text` as printed, `value_m` in metres, `room`/`room_id` the room it lies in, `check` = printed / drawn length (far from 1: not to scale or misread).
+- {room_sizes} - longer and shorter side of each room; `size_source` printed, or measured_bounding_box (approximate).
 - {facts} - one row per entity and property with the preferred value and the agreement.
 - {sources} - every value behind a fact, one row per source file.
 - {entity_sources} - the Layer 1 primitives each entity was read from.
@@ -35,6 +37,7 @@ Conventions
 - Drawn twice: a thing drawn more than once has `is_duplicate` = true on the later copies. Counts and sums include every drawn copy (the drawing is the record); when copies exist, say in the answer how many of the total are duplicates.
 - Scans and PDFs without CAD: doors, windows and fixtures there are detected on the page image (`attrs.score`, `attrs.page_no`); room areas are printed values where the sheet prints them, else measured from pixels with lower confidence. A sheet set that repeats a storey on several pages raises the issue `repeated_sheets`: count per page (`attrs->>'page_no'`) and say which page.
 - Measured on a scan (image, or PDF without CAD): `perimeter_m` is always measured on an outline read from the pixels, and `area_m2` is too where `area_source` is measured_outline; both are approximate. Trust = `confidence` of the row in q.sources (outline x scale confidence): 0.7 and more = confirmed outline, almost always within 5 %; 0.45 to 0.7 = plausible, usually within a few percent; below 0.45 = an estimate, say so. A room with neither a printed nor a measured area has `area_m2` null: do not derive one from `geom`.
+- Lengths ("how long / wide is ...", "dimensions of ...", "overall size"): q.dimensions first - printed is exact; quote `text`, give metres, cite its entity_id. A room: its room_size or linear rows, else q.room_sizes (say it is measured). The building: kind = 'overall' by `orientation`; without printed dimensions measure the extent of the rooms' geom and say so.
 - Trust the store: `agreement` agree or single needs no re-measuring. On conflict report the preferred value, name the conflict in `check` and lower the confidence.
 
 ## Layer 1: the files as parsed (for everything outside rooms, doors, windows, fixtures)
@@ -55,6 +58,7 @@ select number, label, area_m2, area_source, agreement, entity_id from q.rooms wh
 select property, value, unit, method, format from q.sources where entity_id = 123
 select layer, dxftype, count(*) as n from q.cad_entities where parent is null group by 1, 2 order by 1, 2
 select count(*) as n, min(file_id) as file_id, array_agg(handle) as handles from q.cad_entities where dxftype = 'HATCH' and layer ilike '%wall%'
+select entity_id, kind, text, value_m, orientation, room from q.dimensions where room = '1.03' or kind = 'overall' order by value_m desc
 select source, text, x, y, ref from q.texts where text ilike '%kitchen%'
 select ifc_class, count(*) as n, round(sum(stored_net_area_m2)::numeric, 2) as m2 from q.elements group by 1 order by 2 desc
 ```

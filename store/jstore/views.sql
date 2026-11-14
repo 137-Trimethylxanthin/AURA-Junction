@@ -109,6 +109,7 @@ select e.entity_id, e.drawing_key as drawing, e.attrs->>'dim_kind' as kind, e.at
        (e.attrs->>'a_m')::double precision as a_m, (e.attrs->>'b_m')::double precision as b_m,
        (e.attrs->>'area_m2')::double precision as area_m2,
        e.attrs->>'orientation' as orientation, e.attrs->>'room' as room,
+       (e.attrs->>'room_id')::bigint as room_id,
        coalesce((e.attrs->>'page_no')::int, 0) as page_no, (e.attrs->>'check')::double precision as "check",
        (select min(s.file_id) from jstore.entity_source s where s.entity_id = e.entity_id) as file_id,
        e.geom

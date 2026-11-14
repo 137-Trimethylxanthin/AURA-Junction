@@ -509,7 +509,8 @@ def cad_records(db: DB, f: dict, rooms: list[dict]) -> tuple[list[dict], dict]:
         room = _room_at(rooms, g.interpolate(0.5, normalized=True).coords[0]) if g is not None else None
         attrs = dict(text=text, value_m=None if value is None else round(value, 4),
                      unit=(printed or {}).get("unit") or "drawing units", orientation=ori, dim_kind="linear",
-                     measured_units=round(meas, 4), room=room and (room["number"] or room["label"]))
+                     measured_units=round(meas, 4), room=room and (room["number"] or room["label"]),
+                     room_id=room and room["entity_id"])
         recs.append(dict(kind="dimension", label=text, host=room and room["number"], geom=g, attrs=attrs,
                          sources=[("cad_entity", r["handle"], "dimension", None, def_id)],
                          claims=[] if value is None else [("length_m", round(value, 4), text, "m", "printed", 0, 0.95)]))
@@ -621,7 +622,8 @@ def image_records(db: DB, f: dict, rooms: list[dict], t0: float) -> tuple[list[d
                     sum(1 for j in items if j["parsed"] and j["parsed"]["kind"] == "linear") >= 4:
                 kind = "overall"
             attrs = dict(text=i["text"], value_m=p.get("value_m"), unit=p.get("unit"), orientation=ori, dim_kind=kind,
-                         room=(room and (room["number"] or room["label"])) or i["room"], page_no=page["page_no"],
+                         room=(room and (room["number"] or room["label"])) or i["room"],
+                         room_id=room and room["entity_id"], page_no=page["page_no"],
                          px=dict(line=i["line"] and [[round(v, 1) for v in q] for q in i["line"]],
                                  box=[round(v, 1) for v in b]), check=check)
             claims = []
