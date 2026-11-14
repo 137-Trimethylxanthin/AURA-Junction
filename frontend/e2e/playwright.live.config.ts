@@ -7,7 +7,7 @@ import { defineConfig, devices } from '@playwright/test'
  */
 export default defineConfig({
   testDir: '.',
-  testMatch: ['upload-merged.spec.ts'],
+  testMatch: ['upload-merged.spec.ts', 'live.project-floors.spec.ts'],
   fullyParallel: false,
   workers: 1,
   reporter: 'list',
