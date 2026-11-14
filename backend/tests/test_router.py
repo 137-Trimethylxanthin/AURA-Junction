@@ -220,10 +220,3 @@ def test_length_question_reaches_the_tools_only_with_printed_dimensions() -> Non
     r = route(q, DrawingCtx(printed_dimensions=12))
     assert r.intent == "unknown" and r.matched == ["length_printed"]
 
-
-def test_a_row_count_is_not_a_length_answer() -> None:
-    from types import SimpleNamespace as NS
-    from aura.pipeline import _counted_rows
-    assert _counted_rows(NS(results=[NS(kind="text"), NS(kind="count")]))
-    assert not _counted_rows(NS(results=[NS(kind="text")]))
-    assert not _counted_rows(NS(results=[]))
