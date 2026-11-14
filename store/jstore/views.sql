@@ -103,11 +103,20 @@ select e.entity_id, e.drawing_key as drawing, e.storey, e.kind, e.ifc_class, e.n
        e.duplicate_of is not null as is_duplicate, e.duplicate_of,
        e.attrs, e.geom
 from jstore.entity e
-where e.kind not in ('room', 'apartment') and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
+where e.kind not in ('room', 'apartment', 'wall') and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
 
 create view q.doors    as select * from q.items where kind = 'door';
 create view q.windows  as select * from q.items where kind = 'window';
 create view q.fixtures as select * from q.items where kind not in ('door', 'window');
+
+-- Walls of plans that exist only as an image (jstore.interpret.raster_plan): polygons in metres, same frame as the
+-- rooms.  attrs.method = pixel_walls (vectorised wall ink) | room_gaps (derived from the room polygons);
+-- attrs.scale = nominal when the frame is an estimate.
+create view q.walls as
+select e.entity_id, e.drawing_key as drawing, e.storey, e.attrs->>'method' as method, e.attrs->>'scale' as scale,
+       (e.attrs->>'thickness_m')::double precision as thickness_m, e.attrs, e.geom
+from jstore.entity e
+where e.kind = 'wall' and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
 
 -- Where each entity was read from: one row per source file and primitive.
 create view q.entity_sources as

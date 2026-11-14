@@ -326,7 +326,7 @@ def storey_index(db: DB, key: str | None = None) -> dict[str, list[Storey]]:
     plans = db.run(f"""select distinct f.drawing_key, f.storey from jstore.source_file f
                        where f.format <> 'ifc' and f.storey is not null and {cond} and exists (
                          select 1 from jstore.page p join jstore.frame fr using (file_id, page_no)
-                         where p.file_id = f.file_id and p.image is not null and fr.method not in ('scale_text', 'pixel_scale'))""", **kw)
+                         where p.file_id = f.file_id and p.image is not null and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale'))""", **kw)
     out: dict[str, list[Storey]] = {}
     by_guid: dict[tuple[str, str], Storey] = {}
     for r in rows:
@@ -413,17 +413,17 @@ def pick_base(db: DB, key: str, only: set[str] | None = None) -> Base | None:
     pages = [p for p in pages if len(p["to_image"] or []) == 6 and inv(p["to_image"])]
     if only is not None:
         pages = [p for p in pages if p["file_id"] in only and p["m"] and len(p["m"]) == 6 and inv(p["m"])
-                 and p["method"] not in ("scale_text", "pixel_scale")]
+                 and p["method"] not in ("scale_text", "pixel_scale", "nominal_scale")]
         if not pages:
             return None
     if not pages:
         return _unrendered_cad(db, key)
-    shared = any(p["m"] and p["method"] not in ("scale_text", "pixel_scale") for p in pages) or bool(db.one(
+    shared = any(p["m"] and p["method"] not in ("scale_text", "pixel_scale", "nominal_scale") for p in pages) or bool(db.one(
         """select 1 from jstore.frame fr join jstore.source_file f using (file_id)
-           where f.drawing_key = :k and fr.method not in ('scale_text', 'pixel_scale') limit 1""", k=key))
+           where f.drawing_key = :k and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale') limit 1""", k=key))
 
     def usable(p: dict) -> bool:  # a scale-only frame places nothing relative to a drawing that has a shared frame
-        return bool(p["m"]) and len(p["m"]) == 6 and inv(p["m"]) is not None and (p["method"] not in ("scale_text", "pixel_scale") or not shared)
+        return bool(p["m"]) and len(p["m"]) == 6 and inv(p["m"]) is not None and (p["method"] not in ("scale_text", "pixel_scale", "nominal_scale") or not shared)
 
     def score(p: dict) -> tuple:
         framed = usable(p)
@@ -434,7 +434,7 @@ def pick_base(db: DB, key: str, only: set[str] | None = None) -> Base | None:
     return Base(file_id=p["file_id"], page_no=p["page_no"], format=p["format"], name=p["name"], image=p["image"],
                 w=int(p["image_w"]), h=int(p["image_h"]), to_image=tuple(p["to_image"]),
                 frame=tuple(p["m"]) if usable(p) else None, frame_method=p["method"] if usable(p) else None,
-                registered=usable(p) and p["method"] not in ("scale_text", "pixel_scale"))
+                registered=usable(p) and p["method"] not in ("scale_text", "pixel_scale", "nominal_scale"))
 
 
 def _unrendered_cad(db: DB, key: str, width: int = 2000) -> Base | None:
@@ -444,7 +444,7 @@ def _unrendered_cad(db: DB, key: str, width: int = 2000) -> Base | None:
     p = db.one("""select fr.file_id, fr.page_no, fr.m, fr.method, pg.name, f.format
                   from jstore.frame fr join jstore.source_file f using (file_id)
                   join jstore.page pg on pg.file_id = fr.file_id and pg.page_no = fr.page_no
-                  where f.drawing_key = :k and f.format in ('dxf', 'dwg') and fr.method not in ('scale_text', 'pixel_scale')
+                  where f.drawing_key = :k and f.format in ('dxf', 'dwg') and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale')
                   order by fr.page_no, f.format, fr.file_id limit 1""", k=key)
     if p is None or len(p["m"]) != 6 or inv(p["m"]) is None:
         return None
@@ -549,7 +549,7 @@ def load(db: DB, key: str) -> dict | None:
                                                           rank=s["rank"], format=s["format"]))
     d.update(srcs=srcs, values=values, frames={})
     for fr in db.run("""select fr.file_id, fr.page_no, fr.m from jstore.frame fr join jstore.source_file f using (file_id)
-                        where f.drawing_key = :k and fr.method not in ('scale_text', 'pixel_scale')""", k=key):
+                        where f.drawing_key = :k and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale')""", k=key):
         if len(fr["m"]) == 6:
             d["frames"][(fr["file_id"], fr["page_no"])] = tuple(fr["m"])
     return d
@@ -750,7 +750,7 @@ def _linework(db: DB, m: Model) -> tuple[str, int | str, Affine] | None:
     if base.frame is not None and base.registered:  # a raster in the shared frame: draw its CAD twin
         twin = db.one("""select fr.file_id, fr.m, p.name from jstore.frame fr join jstore.source_file f using (file_id)
                          join jstore.page p on p.file_id = fr.file_id and p.page_no = fr.page_no
-                         where f.drawing_key = :k and f.format in ('dxf', 'dwg') and fr.method not in ('scale_text', 'pixel_scale') and fr.page_no = 0
+                         where f.drawing_key = :k and f.format in ('dxf', 'dwg') and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale') and fr.page_no = 0
                          order by f.format, fr.file_id limit 1""", k=m.key)
         if twin and len(twin["m"]) == 6:
             return (twin["file_id"], twin["name"] or "model", mul(mul(base.to_pct, inv(base.frame)), tuple(twin["m"])))
