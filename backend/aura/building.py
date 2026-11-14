@@ -17,19 +17,28 @@ Hook: `pipeline.ask()` / `pipeline.chat_events()` take an optional `run_fn`; `ma
 from __future__ import annotations
 
 import asyncio
+import copy
+import dataclasses
+import json
 import logging
 import re
+import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from aura.budget import BudgetError
 from aura.contract import CONTRACT_VERSION, AskRequest, ProjectBundle
+from aura.gemini.client import Meter
+from aura.pipeline import PipelineError, ensure_ready, with_unknown_areas
 
 log = logging.getLogger("aura.building")
 
 MAX_PARALLEL = 3
+MAX_SHEETS = 12  # cap on sheets answered in a single question
+MAX_CALLS = 24  # one shared model-call budget across all sheets of one question
 
 DECIDER_WORDS = "explicit words"
 DECIDER_SELECTION = "user selection"
@@ -155,6 +164,18 @@ def named_sheets(question: str, sheets: list[Sheet]) -> list[Sheet]:
     return [s for s in sheets if s.id in hit]
 
 
+def _dedup_floors(floors: list[Any]) -> list[Sheet]:
+    """Deduplicate project floors by `drawing_id` (first wins), then sort vertically."""
+    seen: set[str] = set()
+    unique: list[Sheet] = []
+    for f in floors:
+        if f.drawing_id in seen:
+            continue
+        seen.add(f.drawing_id)
+        unique.append(Sheet(f.drawing_id, f.label, float(f.order)))
+    return sorted(unique, key=lambda s: (s.order, s.label, s.id))
+
+
 def plan_for(
     bundles: list[ProjectBundle],
     drawing_id: str,
@@ -163,23 +184,35 @@ def plan_for(
     project_id: str | None = None,
     sheet_ids: list[str] | None = None,
     scope: dict | None = None,
+    saved_ids: set[str] | None = None,
 ) -> Plan | None:
-    """The plan for this question, or None when the drawing is not a floor of a multi-sheet project."""
+    """The plan for this question, or None when the drawing is not a floor of a multi-sheet project.
+
+    User-saved bundles (`saved_ids`) are applied ONLY when `project_id` explicitly names them (and
+    `bundles` already filtered to projects the caller owns); server-built bundles apply by default.
+    """
     if (scope or {}).get("kind") == "project":
         return None  # an explicit project scope keeps the deep-agent multi-plan path (pipeline.run)
+    saved = saved_ids or set()
     proj = None
     if project_id:
         proj = next((p for p in bundles if p.id == project_id), None)
-        if proj is not None and drawing_id not in {f.drawing_id for f in proj.floors}:
-            proj = None
+    else:
+        proj = next(
+            (
+                p for p in bundles
+                if p.id not in saved
+                and len({f.drawing_id for f in p.floors}) >= 2
+                and drawing_id in {f.drawing_id for f in p.floors}
+            ),
+            None,
+        )
     if proj is None:
-        proj = next((p for p in bundles if len(p.floors) >= 2
-                     and drawing_id in {f.drawing_id for f in p.floors}), None)
-    if proj is None or len(proj.floors) < 2:
         return None
-    all_sheets = [Sheet(f.drawing_id, f.label, float(f.order)) for f in
-                  sorted(proj.floors, key=lambda f: (float(f.order), f.label, f.drawing_id))]
+    all_sheets = _dedup_floors(proj.floors)
     by_id = {s.id: s for s in all_sheets}
+    if len(all_sheets) < 2 or drawing_id not in by_id:
+        return None
     active = by_id[drawing_id]
     kind = (scope or {}).get("kind")
 
@@ -198,6 +231,48 @@ def plan_for(
     if kind in ("room", "region"):
         return plan([active], DECIDER_SELECTION, f"{kind} drawn on this sheet")
     return plan(list(all_sheets), DECIDER_DEFAULT)
+
+
+def validate_plan(plan: Plan, *, max_sheets: int = MAX_SHEETS) -> None:
+    """Refuse a question whose resolved sheet set exceeds `max_sheets`."""
+    if max_sheets > 0 and len(plan.sheets) > max_sheets:
+        raise PipelineError(
+            "bad_request",
+            f"Too many sheets in one question ({len(plan.sheets)}; maximum {max_sheets}). "
+            f"Select up to {max_sheets} sheets or ask about a specific floor.",
+            400,
+        )
+
+
+class SheetUnavailable(Exception):
+    """A sheet in the building plan is missing (deleted/expired) or not ready."""
+
+    def __init__(self, reason: str, kind: str = "missing"):
+        super().__init__(reason)
+        self.reason = reason
+        self.kind = kind  # "missing" | "not_ready"
+
+
+def check_sheet(svc: Any, drawing_id: str) -> SheetUnavailable | None:
+    """Check existence and readiness of one sheet; return `SheetUnavailable` if unusable."""
+    store = getattr(svc, "store", None)
+    reg = getattr(svc, "registry", None)
+    if drawing_id.startswith("up-") and store is not None:
+        row = store.drawing_row(drawing_id)
+        if row is None:
+            if reg is not None:
+                reg.evict(drawing_id)
+            return SheetUnavailable("this sheet was deleted or is missing", "missing")
+        if row.get("status") != "ready":
+            return SheetUnavailable(f"this sheet is {row.get('status')} (not ready)", "not_ready")
+    if reg is not None:
+        d = reg.get(drawing_id)
+        if d is None:
+            return SheetUnavailable("this sheet is missing", "missing")
+        st = d.drawing.get("status", "ready")
+        if st != "ready":
+            return SheetUnavailable(f"this sheet is {st} (not ready)", "not_ready")
+    return None
 
 
 # ---- combining --------------------------------------------------------------------------
@@ -287,6 +362,7 @@ def _branch(i: int, sheet: Sheet, resp: dict | None, status: str, mapping: dict[
 
 def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseException]], elapsed_ms: int) -> dict:
     """One whole-building response from the per-sheet results (never calls a model)."""
+    results = [(sh, copy.deepcopy(r) if isinstance(r, dict) else r) for sh, r in results]
     oks: list[tuple[int, Sheet, dict]] = []
     others: list[tuple[int, Sheet, dict | BaseException]] = []
     for i, (sh, r) in enumerate(results):
@@ -296,9 +372,18 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
             oks.append((i, sh, r))
     responses = [r for _, r in results if isinstance(r, dict)]
     if not responses:
-        first = next(r for _, r in results if isinstance(r, BaseException))
-        raise first
-    template = (oks[0][2] if oks else next(r for _, _, r in others if isinstance(r, dict)))
+        non_sheet = next((r for _, r in results if isinstance(r, BaseException)
+                          and not isinstance(r, SheetUnavailable)), None)
+        if non_sheet is not None:
+            raise non_sheet
+        template = {
+            "answer": {"kind": "abstain", "reason": "not_answerable"},
+            "detected_lang": "en",
+            "canonical_en": question,
+            "route": "template",
+        }
+    else:
+        template = (oks[0][2] if oks else next(r for _, _, r in others if isinstance(r, dict)))
 
     seen_boxes: set[str] = set()
     seen_rooms: set[str] = set()
@@ -375,10 +460,13 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
     ):
         status = ("error" if isinstance(r, BaseException)
                   else "abstain" if (r.get("answer") or {}).get("kind") == "abstain" else "ok")
-        if isinstance(r, BaseException):  # the reason stays in the server log, never in the response
+        why = ""
+        if isinstance(r, SheetUnavailable):
+            why = r.reason
+        elif isinstance(r, BaseException):  # the reason stays in the server log, never in the response
             log.warning("building: sheet %s failed: %s: %s", getattr(sh, "id", "?"), type(r).__name__, r)
-        trace += _branch(i, sh, r if isinstance(r, dict) else None, status, maps.get(i, {}),
-                         "this sheet could not be answered" if isinstance(r, BaseException) else "")
+            why = "this sheet could not be answered"
+        trace += _branch(i, sh, r if isinstance(r, dict) else None, status, maps.get(i, {}), why)
     calls = sum(r.get("calls", 0) for r in responses)
     cost = round(sum(r.get("cost_usd", 0.0) for r in responses), 8)
     exact = method in ("cad_geometry", "pdf_vector", "store_sql")
@@ -404,12 +492,350 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
         "route": "agent" if "agent" in routes else (template.get("route") or "template"),
         "breakdown": breakdown,
     }
-    return body
+    return with_unknown_areas(body)
+
+
+# ---- shared call budget & per-sheet meters ----------------------------------------------
+
+
+class _TeeMeter(Meter):
+    """Per-sheet meter whose own counters stay isolated while forwarding every request to `outer`."""
+
+    def __init__(self, outer: Meter | None = None) -> None:
+        super().__init__()
+        self._outer = outer
+
+    def add(self, rec: Any) -> None:
+        super().add(rec)
+        if self._outer is not None:
+            self._outer.add(rec)
+
+
+class SharedCallBudget:
+    """One shared model-call cap across all sheets of one whole-building question."""
+
+    def __init__(self, cap: int = MAX_CALLS) -> None:
+        self.cap = cap
+        self._lock = threading.Lock()
+        self._used = 0
+
+    def acquire(self) -> None:
+        if self.cap <= 0:
+            return
+        with self._lock:
+            if self._used + 1 > self.cap:
+                raise BudgetError(
+                    "budget_exhausted",
+                    f"Whole-building question reached its {self.cap}-call budget.",
+                )
+            self._used += 1
+
+    def release(self) -> None:
+        if self.cap <= 0:
+            return
+        with self._lock:
+            self._used = max(0, self._used - 1)
+
+    @property
+    def used(self) -> int:
+        with self._lock:
+            return self._used
+
+
+class _CappedClient:
+    """Proxy around `GeminiClient` enforcing one shared `SharedCallBudget` across sheets."""
+
+    def __init__(self, inner: Any, gate: SharedCallBudget) -> None:
+        self._inner = inner
+        self._gate = gate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    async def _guarded(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        self._gate.acquire()
+        probe = _TeeMeter(kwargs.get("meter"))
+        kwargs["meter"] = probe
+        try:
+            return await fn(*args, **kwargs)
+        except BaseException:
+            if probe.calls == 0:
+                self._gate.release()
+            raise
+
+    async def decisions(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._guarded(self._inner.decisions, *args, **kwargs)
+
+    async def generate(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._guarded(self._inner.generate, *args, **kwargs)
+
+
+def _with_shared_budget(svc: Any, max_calls: int) -> tuple[Any, SharedCallBudget]:
+    gate = SharedCallBudget(max_calls)
+    if svc is None or getattr(svc, "client", None) is None or max_calls <= 0:
+        return svc, gate
+    capped_client = _CappedClient(svc.client, gate)
+    if dataclasses.is_dataclass(svc):
+        return dataclasses.replace(svc, client=capped_client), gate
+    return svc, gate
+
+
+# ---- sheet tracking & persistence -------------------------------------------------------
+
+
+def sheet_ids_of(resp: dict, plan: Plan | None = None, *, extra_ids: Iterable[str] = ()) -> list[str]:
+    """Ordered distinct drawing ids participating in `resp` (and `plan`, when provided)."""
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def add(did: Any) -> None:
+        if isinstance(did, str) and did and did not in seen:
+            seen.add(did)
+            out.append(did)
+
+    for did in extra_ids:
+        add(did)
+    if plan is not None:
+        for s in plan.sheets:
+            add(s.id)
+    add(resp.get("drawing_id"))
+    scope = resp.get("scope")
+    if isinstance(scope, dict):
+        add(scope.get("drawing_id"))
+        for did in scope.get("drawing_ids") or []:
+            add(did)
+    for b in resp.get("breakdown") or []:
+        if isinstance(b, dict):
+            add(b.get("drawing_id"))
+    ev = resp.get("evidence")
+    if isinstance(ev, dict):
+        for key in ("boxes", "rooms", "links"):
+            for it in ev.get(key) or []:
+                if isinstance(it, dict):
+                    add(it.get("drawing_id"))
+                    add(it.get("target_drawing_id"))
+        for grp in ev.get("groups") or []:
+            if isinstance(grp, dict):
+                add(grp.get("target_drawing_id"))
+    for n in resp.get("trace") or []:
+        if not isinstance(n, dict):
+            continue
+        if n.get("parent") == "scope":
+            add(n.get("tag"))
+        det = n.get("detail")
+        if isinstance(det, dict) and isinstance(det.get("sheets"), list):
+            for sh in det["sheets"]:
+                if isinstance(sh, dict):
+                    add(sh.get("id"))
+    return out
+
+
+def response_contains_sheet(
+    resp: Any, drawing_id: str, sheet_ids_raw: str | list[str] | None = None
+) -> bool:
+    """True when `resp` (dict or JSON string) or `sheet_ids_raw` includes `drawing_id` or its items."""
+    if not drawing_id:
+        return False
+    if isinstance(sheet_ids_raw, list) and drawing_id in sheet_ids_raw:
+        return True
+    if isinstance(sheet_ids_raw, str) and sheet_ids_raw:
+        try:
+            parsed_ids = json.loads(sheet_ids_raw)
+            if isinstance(parsed_ids, list) and drawing_id in parsed_ids:
+                return True
+        except ValueError:
+            pass
+    if isinstance(resp, str):
+        try:
+            resp = json.loads(resp)
+        except ValueError:
+            return False
+    if not isinstance(resp, dict):
+        return False
+    return drawing_id in sheet_ids_of(resp)
+
+
+def turn_contains_sheet(turn: Any, drawing_id: str) -> bool:
+    """True when a mirrored browser session turn references `drawing_id`."""
+    if not isinstance(turn, dict) or not drawing_id:
+        return False
+    if turn.get("drawing_id") == drawing_id:
+        return True
+    if isinstance(turn.get("response"), dict) and response_contains_sheet(turn["response"], drawing_id):
+        return True
+    return response_contains_sheet(turn, drawing_id)
+
+
+_ANSWERS_SHEET_COL_DBS: set[str] = set()
+
+
+def _answers_has_sheet_ids(svc: Any) -> bool:
+    st = getattr(svc, "store", None)
+    if st is None or not hasattr(st, "_q"):
+        return False
+    db_key = str(getattr(st, "path", ""))
+    if db_key and db_key in _ANSWERS_SHEET_COL_DBS:
+        return True
+    has_col = "sheet_ids" in {r["name"] for r in st._q("PRAGMA table_info(answers)")}
+    if has_col and db_key:
+        _ANSWERS_SHEET_COL_DBS.add(db_key)
+    return has_col
+
+
+def _sheet_was_deleted(svc: Any, drawing_id: str) -> bool:
+    """True when `drawing_id` is an upload whose row has already been deleted from SQLite."""
+    st = getattr(svc, "store", None)
+    return bool(drawing_id.startswith("up-") and st is not None and st.drawing_row(drawing_id) is None)
+
+
+def _purge_late_sheet(svc: Any, drawing_id: str) -> None:
+    """Purge any in-memory or queued DB artefacts written by an in-flight sub-run for a just-deleted upload."""
+    if svc is None:
+        return
+    if getattr(svc, "registry", None) is not None:
+        svc.registry.evict(drawing_id)
+    answers = getattr(svc, "answers", None)
+    if answers is not None:
+        answers.drop_drawing(drawing_id)
+        for k, v in list(answers._d.items()):
+            d_id, _q, k_scope, *_ = answers._parse_key(k)
+            in_scope = isinstance(k_scope, dict) and drawing_id in (k_scope.get("drawing_ids") or [])
+            if d_id == drawing_id or in_scope or response_contains_sheet(v, drawing_id):
+                answers._d.pop(k, None)
+                answers._t.pop(k, None)
+                answers._q.pop(k, None)
+    checks = getattr(svc, "checks", None)
+    if checks is not None:
+        checks.forget_drawing(drawing_id)
+        for ck in [k for k in list(checks._mem) if k.startswith(f"{drawing_id}:") or k == f"score:{drawing_id}"]:
+            checks._mem.pop(ck, None)
+    writer = getattr(svc, "writer", None)
+    if writer is not None:
+        writer.submit("DELETE FROM answers WHERE drawing_id=?", (drawing_id,))
+        writer.submit("DELETE FROM answer_cache WHERE drawing_id=?", (drawing_id,))
+        writer.submit("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))
+
+
+def _tag_sheet_evidence(resp: dict, sheet_id: str) -> None:
+    """Ensure every evidence item from a non-active sheet carries its `drawing_id`."""
+    ev = resp.get("evidence")
+    if not isinstance(ev, dict):
+        return
+    for key in ("boxes", "rooms", "links"):
+        for it in ev.get(key) or []:
+            if isinstance(it, dict) and not it.get("drawing_id"):
+                it["drawing_id"] = sheet_id
+
+
+def persist_answer(
+    svc: Any,
+    drawing_id: str,
+    question: str,
+    body: dict,
+    stats: dict,
+    *,
+    plan: Plan | None = None,
+) -> None:
+    """Persist a combined whole-building answer together with its participating `sheet_ids`."""
+    if svc is None or getattr(svc, "writer", None) is None:
+        return
+    if _sheet_was_deleted(svc, drawing_id):
+        return
+    sids = sheet_ids_of(body, plan, extra_ids=(drawing_id,))
+    errored = {
+        b.get("drawing_id")
+        for b in (body.get("breakdown") or [])
+        if isinstance(b, dict) and b.get("status") == "error"
+    }
+    if any(_sheet_was_deleted(svc, did) for did in sids if did not in errored):
+        return
+    now = time.time()
+    resp_json = json.dumps(body, ensure_ascii=False)
+    if _answers_has_sheet_ids(svc):
+        svc.writer.submit(
+            "INSERT INTO answers(id, t, day, drawing_id, question, route, method, calls, cost_usd, "
+            "check_calls, check_cost_usd, response, sheet_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                body["answer_id"],
+                now,
+                svc.budget.day(now),
+                drawing_id,
+                question,
+                body.get("route"),
+                body["method"],
+                body["calls"],
+                body["cost_usd"],
+                stats["check_calls"],
+                stats["check_cost_usd"],
+                resp_json,
+                json.dumps(sids, ensure_ascii=False),
+            ),
+        )
+        return
+    svc.writer.submit(
+        "INSERT INTO answers(id, t, day, drawing_id, question, route, method, calls, cost_usd, "
+        "check_calls, check_cost_usd, response) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            body["answer_id"],
+            now,
+            svc.budget.day(now),
+            drawing_id,
+            question,
+            body.get("route"),
+            body["method"],
+            body["calls"],
+            body["cost_usd"],
+            stats["check_calls"],
+            stats["check_cost_usd"],
+            resp_json,
+        ),
+    )
 
 
 # ---- running ----------------------------------------------------------------------------
 
 BaseRun = Callable[..., AsyncIterator[tuple[str, dict]]]
+
+
+def wrap_project_scope_run(
+    base_run: BaseRun, project_ids: list[str], *, max_calls: int = MAX_CALLS
+) -> BaseRun:
+    """Wrap explicit `scope.kind == 'project'` runs to share `max_calls`, record `answers.sheet_ids`,
+    and abort persistence if an upload sheet in scope was deleted mid-flight."""
+
+    async def _wrapped(
+        svc: Any,
+        req: AskRequest,
+        caller: Any,
+        context: dict | None = None,
+        history: list[dict] | None = None,
+        meters: dict | None = None,
+        deadline_s: float | None = None,
+        agent_deadline_s: float | None = None,
+    ) -> AsyncIterator[tuple[str, dict]]:
+        capped_svc, _gate = _with_shared_budget(svc, max_calls)
+        involved = list(dict.fromkeys([req.drawing_id, *project_ids]))
+        async for ev, data in base_run(
+            capped_svc, req, caller, context, history, meters, deadline_s, agent_deadline_s
+        ):
+            if ev == "answer":
+                resp = data["response"]
+                deleted_ids = [did for did in involved if _sheet_was_deleted(svc, did)]
+                if deleted_ids:
+                    if getattr(svc, "writer", None) is not None and resp.get("answer_id"):
+                        svc.writer.submit("DELETE FROM answers WHERE id=?", (resp["answer_id"],))
+                    for did in deleted_ids:
+                        _purge_late_sheet(svc, did)
+                    raise PipelineError("unknown_drawing", f"Unknown drawing '{deleted_ids[0]}'", 404)
+                if svc is not None and getattr(svc, "writer", None) is not None and _answers_has_sheet_ids(svc):
+                    sids = sheet_ids_of(resp, extra_ids=involved)
+                    svc.writer.submit(
+                        "UPDATE answers SET sheet_ids=? WHERE id=?",
+                        (json.dumps(sids, ensure_ascii=False), resp["answer_id"]),
+                    )
+            yield ev, data
+
+    return _wrapped
 
 
 def _sub_request(req: AskRequest, sheet: Sheet, plan: Plan) -> AskRequest:
@@ -423,43 +849,100 @@ async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = Non
               history: list[dict] | None = None, meters: dict | None = None,
               deadline_s: float | None = None, agent_deadline_s: float | None = None, *,
               plan: Plan, base_run: BaseRun,
-              persist: Callable[[Any, str, str, dict, dict], None] | None = None) -> AsyncIterator[tuple[str, dict]]:
+              persist: Callable[[Any, str, str, dict, dict], None] | None = None,
+              max_sheets: int = MAX_SHEETS,
+              max_calls: int = MAX_CALLS) -> AsyncIterator[tuple[str, dict]]:
     """Drop-in for `pipeline.run`: the same events, answered for the sheets of `plan`."""
+    validate_plan(plan, max_sheets=max_sheets)
+    if svc is not None and getattr(svc, "store", None) is not None:
+        ensure_ready(svc, req.drawing_id)
+    if (
+        svc is not None
+        and getattr(svc, "registry", None) is not None
+        and svc.registry.get(req.drawing_id) is None
+    ):
+        raise PipelineError("unknown_drawing", f"Unknown drawing '{req.drawing_id}'", 404)
+
     t0 = time.perf_counter()
     scope_node = _scope_node(plan)
+    meters = meters if meters is not None else {"answer": Meter(), "check": Meter()}
+    capped_svc, _gate = _with_shared_budget(svc, max_calls)
+    emitted_understood = False
 
     if len(plan.sheets) == 1:
-        # One sheet: the normal answer, with the scope node added to its trace.
         only = plan.sheets[0]
-        sub = _sub_request(req, only, plan) if only.id != req.drawing_id else req
-        async for ev, data in base_run(svc, sub, caller, context, history, meters, deadline_s, agent_deadline_s):
-            if ev == "answer":
-                resp = dict(data["response"])
-                trace = list(resp.get("trace") or [])
-                resp["trace"] = [*trace[:1], scope_node | {"parent": (trace[0]["id"] if trace else "q")}, *trace[1:]]
-                data = {"response": resp}
-            yield ev, data
-        return
-
-    sem = asyncio.Semaphore(MAX_PARALLEL)
-
-    async def one(sheet: Sheet) -> dict:
-        sub = _sub_request(req, sheet, plan)
-        async with sem:
-            async for ev, data in base_run(svc, sub, caller, context, history, meters, deadline_s, agent_deadline_s):
+        prob = check_sheet(capped_svc, only.id)
+        if prob is None:
+            # One ready sheet: the normal answer, with the scope node added to its trace.
+            sub = _sub_request(req, only, plan) if only.id != req.drawing_id else req
+            results = []
+            async for ev, data in base_run(
+                capped_svc, sub, caller, context, history, meters, deadline_s, agent_deadline_s
+            ):
+                if ev == "understood":
+                    emitted_understood = True
                 if ev == "answer":
-                    return dict(data["response"])
-        raise RuntimeError("the pipeline ended without an answer")
+                    if _sheet_was_deleted(svc, only.id):
+                        _purge_late_sheet(svc, only.id)
+                        results = [(only, SheetUnavailable("this sheet was deleted or is missing", "missing"))]
+                        break
+                    resp = copy.deepcopy(data["response"])
+                    if only.id != req.drawing_id:
+                        _tag_sheet_evidence(resp, only.id)
+                    trace = list(resp.get("trace") or [])
+                    resp["trace"] = [*trace[:1], scope_node | {"parent": (trace[0]["id"] if trace else "q")}, *trace[1:]]
+                    if svc is not None and getattr(svc, "writer", None) is not None and _answers_has_sheet_ids(svc):
+                        sids = sheet_ids_of(resp, plan, extra_ids=(only.id,))
+                        svc.writer.submit(
+                            "UPDATE answers SET sheet_ids=?, response=? WHERE id=?",
+                            (
+                                json.dumps(sids, ensure_ascii=False),
+                                json.dumps(resp, ensure_ascii=False),
+                                resp["answer_id"],
+                            ),
+                        )
+                    data = {"response": resp}
+                yield ev, data
+            if not results:
+                return
+        else:
+            results = [(only, prob)]
+    else:
+        sem = asyncio.Semaphore(MAX_PARALLEL)
 
-    raw = await asyncio.gather(*(one(s) for s in plan.sheets), return_exceptions=True)
-    results: list[tuple[Sheet, dict | BaseException]] = []
-    for s, r in zip(plan.sheets, raw):
-        if isinstance(r, asyncio.CancelledError):
-            raise r
-        results.append((s, r))
+        async def one(sheet: Sheet) -> dict | BaseException:
+            prob = check_sheet(capped_svc, sheet.id)
+            if prob is not None:
+                return prob
+            sub = _sub_request(req, sheet, plan)
+            sheet_meters = {
+                "answer": _TeeMeter(meters.get("answer")),
+                "check": _TeeMeter(meters.get("check")),
+            }
+            async with sem:
+                async for ev, data in base_run(capped_svc, sub, caller, context, history,
+                                               sheet_meters, deadline_s, agent_deadline_s):
+                    if ev == "answer":
+                        return dict(data["response"])
+            raise RuntimeError("the pipeline ended without an answer")
+
+        raw = await asyncio.gather(*(one(s) for s in plan.sheets), return_exceptions=True)
+        results = []
+        for s, r in zip(plan.sheets, raw):
+            if isinstance(r, asyncio.CancelledError):
+                raise r
+            if _sheet_was_deleted(svc, s.id):
+                _purge_late_sheet(svc, s.id)
+                r = SheetUnavailable("this sheet was deleted or is missing", "missing")
+            results.append((s, r))
+
     body = combine(plan, req.question, results, int((time.perf_counter() - t0) * 1000))
-    yield "understood", {"detected_lang": body["detected_lang"], "canonical_en": body["canonical_en"],
-                         "route": body["route"] if body["route"] in ("template", "agent", "cache", "choice") else "template"}
+    if not emitted_understood:
+        yield "understood", {
+            "detected_lang": body["detected_lang"],
+            "canonical_en": body["canonical_en"],
+            "route": body["route"] if body["route"] in ("template", "agent", "cache", "choice") else "template",
+        }
     if persist is not None:
         persist(svc, req.drawing_id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
     yield "answer", {"response": body}

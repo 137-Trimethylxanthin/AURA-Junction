@@ -118,6 +118,20 @@ def _volume():
     return modal.Volume.from_name("aura-data")
 
 
+def _dedup_raw_floors(raw_floors: list) -> list:
+    """Keep the first floor entry per `drawing_id`; malformed entries pass through to validation."""
+    seen: set[str] = set()
+    out = []
+    for item in raw_floors:
+        if isinstance(item, dict) and isinstance(item.get("drawing_id"), str) and item["drawing_id"]:
+            did = item["drawing_id"]
+            if did in seen:
+                continue
+            seen.add(did)
+        out.append(item)
+    return out
+
+
 def _synthesize_projects(s: Services) -> list[ProjectBundle]:
     """Merge persisted SQLite `projects` with auto-detected multi-floor groups (`project_id` / IFC stems)."""
     persisted_rows = s.store.project_rows() if s.store else []
@@ -127,8 +141,11 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
 
     for row in persisted_rows:
         try:
+            deduped = _dedup_raw_floors(row["floors"] if isinstance(row.get("floors"), list) else [])
+            if len(deduped) < 2:
+                continue
             floors = sorted(
-                row["floors"],
+                deduped,
                 key=lambda f: (float(f.get("order", 0)), str(f.get("label", "")), str(f.get("drawing_id", ""))),
             )
             pb = ProjectBundle.model_validate({
@@ -142,8 +159,9 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
             continue
         bundles.append(pb)
         seen_ids.add(pb.id)
-        for fl in pb.floors:
-            claimed_drawings.add(fl.drawing_id)
+        if not _is_saved_project_row(row):
+            for fl in pb.floors:
+                claimed_drawings.add(fl.drawing_id)
 
     # Auto-synthesize bundles from library + ready upload drawings sharing explicit `project_id` or IFC stem
     candidate_ids = list(s.registry.library_ids())
@@ -263,50 +281,92 @@ def _ownerless(row: dict) -> bool:
         str(f.get("drawing_id", "")).startswith("up-") for f in row.get("floors") or [])
 
 
+def _is_saved_project_row(row: dict) -> bool:
+    """True for user-saved rows in `projects` (never server-built multi-page PDF upload bundles)."""
+    return bool(row.get("token_hash")) or _ownerless(row)
+
+
+def _bundle_visible(s: Services, request: Request, p: ProjectBundle, rows_by_id: dict[str, dict]) -> bool:
+    """True when `request` may see or answer across `p`: public server-built (and legacy ownerless
+    library-only) bundles for everyone, token-owned or upload-backed bundles only with their token."""
+    row = rows_by_id.get(p.id)
+    if (row is not None and row.get("token_hash")) or any(
+        f.drawing_id.startswith("up-") for f in p.floors
+    ):
+        return _project_access(
+            s, request, [f.drawing_id for f in p.floors], row.get("token_hash") if row else None
+        )
+    return True
+
+
 def _project_of(s: Services, project_id: str) -> ProjectBundle | None:
     return next((p for p in _synthesize_projects(s) if p.id == project_id), None)
 
 
 def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -> JSONResponse | None:
     """A project scope is used only as the server stored it: every drawing it names (and the
-    drawing asked about) must be a floor of that stored bundle, and a bundle with an upload floor
-    is private exactly as in GET /projects (unknown to anyone without its token)."""
+    drawing asked about) must be a floor of that stored bundle, and a saved or upload-backed
+    bundle is private exactly as in GET /projects (unknown to anyone without its token)."""
     if scope is None or getattr(scope, "kind", None) != "project":
         return None
+    from aura import building
+
     proj = _project_of(s, scope.project_id)
-    if proj is not None and any(f.drawing_id.startswith("up-") for f in proj.floors):
-        row = s.store.project_row(proj.id) if s.store else None
-        if not _project_access(s, request, [f.drawing_id for f in proj.floors],
-                               row.get("token_hash") if row else None):
+    if proj is not None:
+        rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
+        if not _bundle_visible(s, request, proj, rows_by_id):
             proj = None  # same answer as an unknown id: do not confirm it exists
     if proj is None:
         return _err("not_found", f"Unknown project '{scope.project_id}'.", 404)
+    unique_ids = list(dict.fromkeys(scope.drawing_ids))
+    scope.drawing_ids = unique_ids
     members = {f.drawing_id for f in proj.floors}
-    outside = [d for d in [drawing_id, *scope.drawing_ids] if d not in members]
+    involved = list(dict.fromkeys([drawing_id, *unique_ids]))
+    outside = [d for d in involved if d not in members]
     if outside:
         return _err("bad_request", f"Not floors of project '{proj.id}': {', '.join(outside[:5])}.", 400)
+    if building.MAX_SHEETS > 0 and len(involved) > building.MAX_SHEETS:
+        return _err(
+            "bad_request",
+            f"Too many sheets in one question ({len(involved)}; maximum {building.MAX_SHEETS}). "
+            f"Select up to {building.MAX_SHEETS} sheets or ask about a specific floor.",
+            400,
+        )
+    if s.store is not None:
+        for did in unique_ids:
+            if did.startswith("up-"):
+                urow = s.store.drawing_row(did)
+                if urow is None:
+                    s.registry.evict(did)
+                elif urow["status"] != "ready":
+                    return _err("processing", f"Drawing '{did}' is {urow['status']}.", 409)
     return None
 
 
 def _visible_projects(s: Services, request: Request) -> list[ProjectBundle]:
     """The bundles this caller may see (same rule as GET /projects)."""
-    hashes = {r["id"]: r.get("token_hash") for r in (s.store.project_rows() if s.store else [])}
-    return [p for p in _synthesize_projects(s)
-            if not any(f.drawing_id.startswith("up-") for f in p.floors)
-            or _project_access(s, request, [f.drawing_id for f in p.floors], hashes.get(p.id))]
+    rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
+    return [p for p in _synthesize_projects(s) if _bundle_visible(s, request, p, rows_by_id)]
 
 
 def _building_run(s: Services, request: Request, drawing_id: str, question: str, body: Any):
     """A whole-building `run` for a drawing that is a sheet of a multi-plan project, else None."""
-    from aura import building
+    from aura import building, pipeline
 
+    if body.scope is not None and getattr(body.scope, "kind", None) == "project":
+        return building.wrap_project_scope_run(pipeline.run, list(body.scope.drawing_ids))
+    rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
+    visible = [p for p in _synthesize_projects(s) if _bundle_visible(s, request, p, rows_by_id)]
+    saved_ids = {pid for pid, r in rows_by_id.items() if _is_saved_project_row(r)}
     scope = body.scope.model_dump(exclude_none=True) if body.scope else None
-    plan = building.plan_for(_visible_projects(s, request), drawing_id, question,
-                             project_id=body.project_id, sheet_ids=body.sheet_ids, scope=scope)
+    plan = building.plan_for(visible, drawing_id, question,
+                             project_id=body.project_id, sheet_ids=body.sheet_ids,
+                             scope=scope, saved_ids=saved_ids)
     if plan is None:
         return None
-    from aura import pipeline
-    return functools.partial(building.run, plan=plan, base_run=pipeline.run, persist=pipeline._persist)
+    building.validate_plan(plan)
+    persist = functools.partial(building.persist_answer, plan=plan)
+    return functools.partial(building.run, plan=plan, base_run=pipeline.run, persist=persist)
 
 
 def _same_project(s: Services, did_a: str, did_b: str) -> bool:
@@ -359,6 +419,8 @@ def create_app(
         writer = Writer(settings.db_path, volume_commit=volume.commit if volume else None,
                         commit_every_s=settings.volume_commit_every_s)
         await writer.start()
+        if "sheet_ids" not in {r["name"] for r in store._q("PRAGMA table_info(answers)")}:
+            await writer.execute("ALTER TABLE answers ADD COLUMN sheet_ids TEXT")
         reqlog = RequestLogFile(settings.logs_dir)
 
         def sink(rec: RequestRecord) -> None:
@@ -389,6 +451,8 @@ def create_app(
         registry = tools.Registry(settings.drawing_dirs(),
                                   {d.id: d for d in extra_drawings or []},
                                   uploads_dir=settings.uploads_dir)
+        for ed in extra_drawings or ():
+            ed.registry = registry
         agent = (
             AgentClient(settings, budget, client, registry, transport=sidecar_transport)
             if (settings.sidecar_url or sidecar_transport is not None)
@@ -440,8 +504,7 @@ def create_app(
 
         def materialised(did: str) -> None:  # the drawing file changed: nothing cached may outlive it
             registry.evict(did)
-            app.state.svc.answers.drop_drawing(did)
-            app.state.svc.checks.forget_drawing(did)
+            _forget_drawing_mem(app.state.svc, did)
 
         drawing_store.on_materialised = materialised
         # Before the first request: the pool's pending set is in memory, so unsettled pages are
@@ -571,14 +634,8 @@ def create_app(
 
     @app.get("/projects")
     async def list_projects(request: Request) -> dict:
-        s = svc(request)
-        await warm(request)
-        hashes = {r["id"]: r.get("token_hash") for r in (s.store.project_rows() if s.store else [])}
-        # Bundles with an upload floor are private to whoever holds that upload's delete token or
-        # the project's owner token; library-only bundles are public.
-        projects = [p for p in _synthesize_projects(s)
-                    if not any(f.drawing_id.startswith("up-") for f in p.floors)
-                    or _project_access(s, request, [f.drawing_id for f in p.floors], hashes.get(p.id))]
+        await warm(request)  # store-library storeys are built off the event loop
+        projects = _visible_projects(svc(request), request)
         return ProjectList(projects=projects).model_dump(exclude_none=True)
 
     @app.post("/projects")
@@ -617,8 +674,8 @@ def create_app(
             await warm(request, did)
         if raw_floors is None and isinstance(raw.get("drawing_ids"), list):
             raw_floors = []
-            for idx, did in enumerate(raw["drawing_ids"], 1):
-                did_s = str(did)
+            unique_dids = list(dict.fromkeys(str(did) for did in raw["drawing_ids"]))
+            for idx, did_s in enumerate(unique_dids, 1):
                 d_obj = s.registry.get(did_s)
                 if d_obj is None:
                     return _err("unknown_drawing", f"Unknown drawing '{did_s}'.", 404)
@@ -632,6 +689,8 @@ def create_app(
                     lbl = lbl or inf_l
                     ord_v = inf_o if ord_v is None else ord_v
                 raw_floors.append({"drawing_id": did_s, "label": str(lbl), "order": ord_v})
+        elif isinstance(raw_floors, list):
+            raw_floors = _dedup_raw_floors(raw_floors)
         if not isinstance(raw_floors, list) or len(raw_floors) < 2:
             return _err("bad_request", "A project bundle requires at least 2 floors.", 400)
         try:
@@ -1182,29 +1241,144 @@ async def _sse(gen) -> AsyncIterator[bytes]:
             yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
+def _drop_cached_sheet(answers: AnswerCache, drawing_id: str) -> None:
+    """Remove every in-memory cached answer whose own drawing, scope or body includes `drawing_id`."""
+    from aura import building
+
+    answers.drop_drawing(drawing_id)
+    for k, v in list(answers._d.items()):
+        d_id, _q, k_scope, *_ = answers._parse_key(k)
+        in_scope = isinstance(k_scope, dict) and drawing_id in (k_scope.get("drawing_ids") or [])
+        if d_id == drawing_id or in_scope or building.response_contains_sheet(v, drawing_id):
+            answers._d.pop(k, None)
+            answers._t.pop(k, None)
+            answers._q.pop(k, None)
+
+
+def _forget_drawing_mem(s: Services, drawing_id: str) -> None:
+    """Drop every in-memory cache entry (answers, checks, door-leaf crops) referencing `drawing_id`."""
+    from aura import door_leaves
+
+    _drop_cached_sheet(s.answers, drawing_id)
+    s.checks.forget_drawing(drawing_id)
+    for ck in [k for k in list(s.checks._mem) if k.startswith(f"{drawing_id}:") or k == f"score:{drawing_id}"]:
+        s.checks._mem.pop(ck, None)
+    for dk in [k for k in list(door_leaves._MEM) if k.startswith(f"{drawing_id}:")]:
+        door_leaves._MEM.pop(dk, None)
+    for fk in [k for k in list(door_leaves._FAILED) if k.startswith(f"{drawing_id}:")]:
+        door_leaves._FAILED.pop(fk, None)
+    door_leaves._LOCKS.pop(drawing_id, None)
+
+
 async def _remove_single_upload(s: Services, drawing_id: str) -> None:
+    from aura import building
+
     s.registry.evict(drawing_id)
     if s.agent is not None:
         await s.agent.evict_drawing(drawing_id)
     d = s.settings.uploads_dir / drawing_id
     if d.is_dir() and d.parent == s.settings.uploads_dir:
         await asyncio.to_thread(shutil.rmtree, d, True)
+    _forget_drawing_mem(s, drawing_id)
+
     w = s.writer
-    await w.execute("DELETE FROM drawings WHERE id=?", (drawing_id,))  # type: ignore[union-attr]
+    if w is None:
+        return
+    # Drain queued fire-and-forget writes (answers, answer_cache, check_cache) before scanning/deleting.
+    await w.flush()
+    await w.execute("DELETE FROM drawings WHERE id=?", (drawing_id,))
     # Everything derived from the upload goes with it: answers, conversations, turns, caches.
-    await w.execute("DELETE FROM answers WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    await w.execute(  # type: ignore[union-attr]
+    await w.execute("DELETE FROM answers WHERE drawing_id=?", (drawing_id,))
+    await w.execute(
         "DELETE FROM turns WHERE conversation_id IN "
         "(SELECT id FROM conversations WHERE drawing_id=?)", (drawing_id,))
-    await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    await w.execute("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    await w.execute("DELETE FROM answer_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    # Saved chat sessions on the upload (aura/sessions.py) go too; the table exists once sessions ran.
-    if s.store is not None and s.store._q(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_sessions'"):
-        await w.execute("DELETE FROM chat_sessions WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    s.answers.drop_drawing(drawing_id)
-    s.checks.forget_drawing(drawing_id)
+    await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))
+    await w.execute("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))
+    await w.execute("DELETE FROM answer_cache WHERE drawing_id=?", (drawing_id,))
+
+    if s.store is not None:
+        pat = f"%{drawing_id}%"
+        has_sheet_col = "sheet_ids" in {r["name"] for r in s.store._q("PRAGMA table_info(answers)")}
+        ans_rows = (
+            s.store._q(
+                "SELECT id, response, sheet_ids FROM answers WHERE sheet_ids LIKE ? OR response LIKE ?",
+                (pat, pat),
+            )
+            if has_sheet_col
+            else s.store._q(
+                "SELECT id, response, NULL AS sheet_ids FROM answers WHERE response LIKE ?",
+                (pat,),
+            )
+        )
+        for row in ans_rows:
+            if building.response_contains_sheet(row["response"], drawing_id, row["sheet_ids"]):
+                await w.execute("DELETE FROM answers WHERE id=?", (row["id"],))
+
+        cache_rows = s.store._q(
+            "SELECT key, response FROM answer_cache WHERE key LIKE ? OR response LIKE ?",
+            (pat, pat),
+        )
+        for crow in cache_rows:
+            d_id, _q, k_scope, *_ = s.answers._parse_key(crow["key"])
+            in_key = d_id == drawing_id or (
+                isinstance(k_scope, dict) and drawing_id in (k_scope.get("drawing_ids") or [])
+            )
+            if in_key or building.response_contains_sheet(crow["response"], drawing_id):
+                await w.execute("DELETE FROM answer_cache WHERE key=?", (crow["key"],))
+
+        turn_rows = s.store._q(
+            "SELECT id, conversation_id, response FROM turns WHERE response IS NOT NULL AND response LIKE ?",
+            (pat,),
+        )
+        touched_convs: set[str] = set()
+        for trow in turn_rows:
+            if building.response_contains_sheet(trow["response"], drawing_id):
+                await w.execute("DELETE FROM turns WHERE id=?", (trow["id"],))
+                touched_convs.add(trow["conversation_id"])
+        for cid in touched_convs:
+            await w.execute(
+                "DELETE FROM conversations WHERE id=? AND NOT EXISTS "
+                "(SELECT 1 FROM turns WHERE conversation_id=?)",
+                (cid, cid),
+            )
+
+        # Saved chat sessions on the upload (aura/sessions.py) or containing combined turns with it.
+        if s.store._q("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_sessions'"):
+            await w.execute("DELETE FROM chat_sessions WHERE drawing_id=?", (drawing_id,))
+            sess_rows = s.store._q(
+                "SELECT client_id, id, body FROM chat_sessions WHERE body LIKE ?",
+                (pat,),
+            )
+            for srow in sess_rows:
+                try:
+                    sbody = json.loads(srow["body"])
+                except ValueError:
+                    continue
+                if isinstance(sbody, dict) and isinstance(sbody.get("turns"), list):
+                    kept = [
+                        t
+                        for t in sbody["turns"]
+                        if not building.turn_contains_sheet(t, drawing_id)
+                    ]
+                    if len(kept) != len(sbody["turns"]):
+                        if not kept:
+                            await w.execute(
+                                "DELETE FROM chat_sessions WHERE client_id=? AND id=?",
+                                (srow["client_id"], srow["id"]),
+                            )
+                        else:
+                            sbody["turns"] = kept
+                            await w.execute(
+                                "UPDATE chat_sessions SET body=? WHERE client_id=? AND id=?",
+                                (
+                                    json.dumps(sbody, separators=(",", ":")),
+                                    srow["client_id"],
+                                    srow["id"],
+                                ),
+                            )
+
+    await w.flush()
+    _forget_drawing_mem(s, drawing_id)
 
 
 _STAGE_RANK = {"queued": 0, "parsing": 1, "reading": 2, "interpreting": 3, "materialising": 4}
