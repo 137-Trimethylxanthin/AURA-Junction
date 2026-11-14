@@ -56,6 +56,12 @@ Colour meanings (one colour = one meaning):
 | User corrections (rejected, changed) | `--warning` / `--warning-surface` | `#965422` / `#f9f3d4` |
 | Errors | `--destructive` / `--destructive-surface` | `#b3391e` / `#f9e5e2` |
 | User input (marked areas, scope, what-if sizes) | `--user` / `--user-surface` (ours) | `#0f766e` / `#ccfbf1` |
+| Categorical evidence group `c1` (Cobalt) | `--group-1` / `--group-1-surface` | `#1260b8` / `#ddeaf7` |
+| Categorical evidence group `c2` (Royal Violet) | `--group-2` / `--group-2-surface` | `#6d3ab7` / `#efe7fb` |
+| Categorical evidence group `c3` (Magenta Plum) | `--group-3` / `--group-3-surface` | `#a82465` / `#fbe5f0` |
+| Categorical evidence group `c4` (Cerulean) | `--group-4` / `--group-4-surface` | `#0b6b8a` / `#dff3f9` |
+| Categorical evidence group `c5` (Architectural Slate) | `--group-5` / `--group-5-surface` | `#475569` / `#e8edf3` |
+| Categorical evidence group `c6` (Raw Umber) | `--group-6` / `--group-6-surface` | `#7c4a15` / `#f6eadc` |
 
 ```css
 :root {
@@ -89,6 +95,19 @@ Colour meanings (one colour = one meaning):
   /* ours: user input */
   --user: #0f766e;
   --user-surface: #ccfbf1;
+  /* categorical evidence groups (apartments, stairs, circulation routes; WCAG AA >= 5.9:1) */
+  --group-1: #1260b8;
+  --group-1-surface: #ddeaf7;
+  --group-2: #6d3ab7;
+  --group-2-surface: #efe7fb;
+  --group-3: #a82465;
+  --group-3-surface: #fbe5f0;
+  --group-4: #0b6b8a;
+  --group-4-surface: #dff3f9;
+  --group-5: #475569;
+  --group-5-surface: #e8edf3;
+  --group-6: #7c4a15;
+  --group-6-surface: #f6eadc;
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
 }

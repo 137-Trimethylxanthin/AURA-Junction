@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 CONTRACT_VERSION = "1.2"
 
 Lang = Literal["en", "fr", "fi", "de"]
 LANGS: tuple[str, ...] = ("en", "fr", "fi", "de")
+GroupColor = Literal["c1", "c2", "c3", "c4", "c5", "c6"]
+GROUP_COLORS: tuple[GroupColor, ...] = ("c1", "c2", "c3", "c4", "c5", "c6")
 Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "room", "apartment",
                   # 1.1: image-only plans, Decisions score estimates (no boxes)
                   "bedroom", "kitchen", "bathroom", "wc_room", "sauna", "sink",
@@ -65,6 +67,11 @@ class _Open(BaseModel):
 
 # ---- shared -----------------------------------------------------------------------------
 
+Pct = Annotated[float, Field(allow_inf_nan=False, ge=0.0, le=100.0)]
+PctPoint = tuple[Pct, Pct]
+NonEmptyId = Annotated[str, Field(min_length=1, max_length=200)]
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
 
 class PctRect(_M):
     x: float
@@ -84,6 +91,8 @@ class Box(_M):
     unit: str | None = None
     note: str | None = None
     duplicate_of: str | None = None  # second copy of an object drawn twice (Swiss CAD only)
+    group_id: str | None = None
+    drawing_id: str | None = None
 
 
 class ScopeFloor(_M):
@@ -117,8 +126,16 @@ class ScopeRegion(_M):
     label: str
 
 
+class ScopeProject(_M):
+    """1.2: multi-plan house/project bundle scope across multiple floor drawings."""
+
+    kind: Literal["project"] = "project"
+    project_id: NonEmptyId
+    drawing_ids: list[NonEmptyId] = Field(min_length=1, max_length=50)
+
+
 Scope = Annotated[
-    ScopeFloor | ScopeModel | ScopeUnit | ScopeRoom | ScopeLabel | ScopeRegion,
+    ScopeFloor | ScopeModel | ScopeUnit | ScopeRoom | ScopeLabel | ScopeRegion | ScopeProject,
     Field(discriminator="kind"),
 ]
 
@@ -206,6 +223,8 @@ class EvidenceRoom(_M):
     included: bool
     area_m2: float | None = None  # None: no printed area and no outline (never 0)
     edited: bool | None = None
+    group_id: str | None = None
+    drawing_id: str | None = None
 
 
 class EvidenceRow(_M):
@@ -216,10 +235,34 @@ class EvidenceRow(_M):
     value: float | None = None
 
 
+class EvidenceGroup(_M):
+    """1.2: categorical color-coded evidence group (e.g. Apartment A, Stair S1 -> 1. OG)."""
+
+    id: NonEmptyId
+    label: Annotated[str, Field(min_length=1, max_length=200)]
+    color: GroupColor
+    target_drawing_id: str | None = None
+
+
+class EvidenceLink(_M):
+    """1.2: directional vector on a plan (e.g. stair/ramp/circulation lead-to route)."""
+
+    id: NonEmptyId
+    from_pos: PctPoint
+    to_pos: PctPoint
+    waypoints: list[PctPoint] | None = None
+    group_id: str | None = None
+    label: str | None = None
+    drawing_id: str | None = None
+    target_drawing_id: str | None = None
+
+
 class Evidence(_M):
     boxes: list[Box] = Field(default_factory=list)
     rooms: list[EvidenceRoom] = Field(default_factory=list)
     rows: list[EvidenceRow] | None = None  # counted elements that have no 2D box (IFC)
+    groups: list[EvidenceGroup] | None = None
+    links: list[EvidenceLink] | None = None
 
 
 class Recall(_M):
@@ -392,6 +435,9 @@ class Drawing(_Open):
     facts: Facts | None = None
     # 1.2
     source_ext: str | None = None
+    project_id: str | None = None
+    floor_label: str | None = None
+    floor_order: int | FiniteFloat | None = None
 
 
 class DrawingSummary(_M):
@@ -409,6 +455,28 @@ class DrawingSummary(_M):
     created_at: str | None = None
     expires_at: str | None = None
     source_ext: str | None = None
+    project_id: str | None = None
+    floor_label: str | None = None
+    floor_order: int | FiniteFloat | None = None
+
+
+class ProjectFloor(_M):
+    drawing_id: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=100)
+    order: int | FiniteFloat
+
+
+class ProjectBundle(_M):
+    id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+    floors: list[ProjectFloor] = Field(default_factory=list, max_length=50)
+    auto_matched: bool | None = None
+    created_at: str | None = None
+
+
+class ProjectList(_M):
+    contract_version: str = CONTRACT_VERSION
+    projects: list[ProjectBundle] = Field(default_factory=list)
 
 
 class Health(_M):
@@ -441,6 +509,8 @@ class ToolResult(BaseModel):
     numbers: list[float] = Field(default_factory=list)
     boxes: list[Box] = Field(default_factory=list)
     rooms: list[EvidenceRoom] = Field(default_factory=list)
+    groups: list[EvidenceGroup] = Field(default_factory=list)
+    links: list[EvidenceLink] = Field(default_factory=list)
     summary: str = ""
     method: Method = "cad_geometry"
     supported: bool = True  # False: the drawing has no layer for this subject
@@ -448,3 +518,8 @@ class ToolResult(BaseModel):
     calls: int = 0
     cost_usd: float = 0.0
     meta: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("groups", "links", mode="before")
+    @classmethod
+    def _none_to_list(cls, v: Any) -> Any:
+        return [] if v is None else v

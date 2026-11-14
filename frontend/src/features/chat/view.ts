@@ -23,6 +23,10 @@ export function whereText(scope: Scope, lang: Lang): string {
       return t(lang, 'where_label', { label: scope.label })
     case 'region':
       return t(lang, 'where_region', { label: scope.label })
+    case 'project':
+      return scope.drawing_ids.length > 0
+        ? t(lang, 'where_project', { n: scope.drawing_ids.length })
+        : t(lang, 'where_project_any')
   }
 }
 

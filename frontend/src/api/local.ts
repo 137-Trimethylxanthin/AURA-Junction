@@ -5,12 +5,14 @@
  */
 import {
   CONTRACT_VERSION,
+  GROUP_COLORS,
   type AbstainReason,
   type AskRequest,
   type AskResponse,
   type Box,
   type BoxSubject,
   type DrawingFile,
+  type EvidenceGroup,
   type EvidenceRoom,
   type Gold,
   type Lang,
@@ -48,6 +50,8 @@ function whereEn(scope: Scope): string {
       return `in rooms labelled ${scope.label}`
     case 'region':
       return `inside ${scope.label}`
+    case 'project':
+      return `across ${scope.drawing_ids.length} floors`
   }
 }
 
@@ -65,6 +69,8 @@ function scopeText(scope: Scope): string {
       return `rooms labelled ${scope.label}`
     case 'region':
       return scope.label
+    case 'project':
+      return `all ${scope.drawing_ids.length} floors`
   }
 }
 
@@ -82,6 +88,12 @@ function sameScope(a: Scope, b: Scope): boolean {
       return a.label === (b as typeof a).label
     case 'region':
       return false
+    case 'project':
+      return (
+        a.project_id === (b as typeof a).project_id &&
+        a.drawing_ids.length === (b as typeof a).drawing_ids.length &&
+        a.drawing_ids.every((id, i) => id === (b as typeof a).drawing_ids[i])
+      )
   }
 }
 
@@ -89,6 +101,7 @@ function roomsInScope(d: DrawingFile, scope: Scope): RoomPoly[] {
   switch (scope.kind) {
     case 'floor':
     case 'model':
+    case 'project':
       return d.rooms
     case 'unit':
       return d.rooms.filter((r) => r.unit === scope.unit)
@@ -105,6 +118,7 @@ function boxesInScope(d: DrawingFile, all: Box[], scope: Scope): Box[] {
   switch (scope.kind) {
     case 'floor':
     case 'model':
+    case 'project':
       return all
     case 'unit':
       return all.filter((b) => b.unit === scope.unit)
@@ -328,15 +342,22 @@ export function ask(req: AskRequest, drawing: DrawingFile = bundledDrawing): Ask
       room_id: rm.room_id,
       included: subject === 'apartment' || explicit || !rm.outdoor,
       area_m2: rm.area_m2,
+      ...(subject === 'apartment' && rm.unit ? { group_id: `unit-${rm.unit}` } : {}),
     }))
     const ids = rooms.map((x) => roomEvidenceId(x.room_id))
     const includedIds = rooms.filter((x) => x.included).map((x) => roomEvidenceId(x.room_id))
     let value: number
     let canonical: string
     let collectBody: string
+    let groups: EvidenceGroup[] | undefined
     if (subject === 'apartment') {
-      const units = [...new Set(inScope.map((rm) => rm.unit).filter(Boolean))]
+      const units = [...new Set(inScope.map((rm) => rm.unit).filter((u): u is string => Boolean(u)))]
       value = units.length
+      groups = units.map((u, i) => ({
+        id: `unit-${u}`,
+        label: `Apartment ${u}`,
+        color: GROUP_COLORS[i % GROUP_COLORS.length],
+      }))
       canonical = `How many apartments are ${scope.kind === 'floor' ? 'on this floor plan' : whereEn(scope)}`
       collectBody = `${inScope.length} numbered rooms; each carries an apartment letter: ${units.join(', ')}.`
     } else {
@@ -354,7 +375,7 @@ export function ask(req: AskRequest, drawing: DrawingFile = bundledDrawing): Ask
     }
     return finish({
       answer: { kind: 'count', value, subject },
-      evidence: { boxes: [], rooms },
+      evidence: { boxes: [], rooms, ...(groups && groups.length > 0 ? { groups } : {}) },
       canonical_en: canonical,
       method: 'cad_geometry',
       check: { method: 'decisions_api', status: 'sample' },

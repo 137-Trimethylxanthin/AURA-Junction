@@ -3,12 +3,15 @@ import { tu } from '@/i18n/uiLang'
 import {
   fastApiMessage,
   isErrorBody,
+  isProjectBundle,
   isUploadResult,
   licenceLabel,
   safeUrl,
   type Credit,
   type DrawingKind,
   type DrawingSummary,
+  type ProjectBundle,
+  type ProjectFloor,
   type UploadResult,
 } from './contract'
 
@@ -100,6 +103,515 @@ export const myUploads = {
   },
   remove(id: string) {
     write(UPLOADS_KEY, JSON.stringify(myUploads.list().filter((x) => x.id !== id)))
+  },
+}
+
+// ---- multi-plan house / project bundles & floor auto-matching (1.2) ---------------------------------------
+
+const PROJECTS_KEY = 'aura.projects'
+const UNGROUPED_PROJECTS_KEY = 'aura.projects.ungrouped'
+
+const projectListeners = new Set<() => void>()
+const notifyProjects = () => projectListeners.forEach((fn) => fn())
+
+function sortProjectFloors(floors: readonly ProjectFloor[]): ProjectFloor[] {
+  const seen = new Set<string>()
+  const unique: ProjectFloor[] = []
+  for (const f of floors) {
+    if (!f.drawing_id || seen.has(f.drawing_id)) continue
+    seen.add(f.drawing_id)
+    unique.push({ drawing_id: f.drawing_id, label: f.label.trim() || 'GF', order: f.order })
+  }
+  return unique.sort((a, b) => a.order - b.order || a.drawing_id.localeCompare(b.drawing_id))
+}
+
+function readUngroupedIds(): Set<string> {
+  try {
+    const v: unknown = JSON.parse(read(UNGROUPED_PROJECTS_KEY) ?? '[]')
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function writeUngroupedIds(ids: Iterable<string>) {
+  const arr = [...new Set(ids)]
+  write(UNGROUPED_PROJECTS_KEY, arr.length ? JSON.stringify(arr) : null)
+}
+
+/**
+ * Infer a numeric floor elevation order and short badge label from a drawing title, storey name, or filename.
+ * Order convention: basements `< 0` (`B2=-2`, `KG/UG/B1=-1`), ground `0` (`EG/GF/RDC`), upper storeys `1..98`,
+ * attic/roof `99` (`DG/Attic/Roof`), or `Page N -> N` when only a sheet/page number is present.
+ */
+export function inferFloorOrderAndLabel(titleOrFilename: string): { order: number; label: string } {
+  const raw = titleOrFilename.trim()
+  if (!raw) return { order: 0, label: 'GF' }
+
+  // Strip file extension and random `up-<id>` tokens anywhere in the text (converting `-pN` suffixes to `Page N`).
+  const withoutExt = raw.replace(/\.(?:dxf|ifc|pdf|png|jpe?g|webp)$/i, '')
+  const strippedUpload = withoutExt
+    .replace(/\bup-[a-z0-9]+-p([1-9]\d?)\b/gi, 'Page $1')
+    .replace(/\bup-[a-z0-9]+\b/gi, '')
+  const norm = strippedUpload.replace(/--|_/g, ' ').trim()
+
+  // 1. Numbered basements: `2. UG`, `2UG`, `B2`, `Basement 2`, `2e sous-sol`
+  const numUg = /\b([1-9])\s*\.?\s*(?:ug|untergeschoss|kg|keller|kellergeschoss)\b/i.exec(norm)
+  if (numUg) {
+    const n = Number(numUg[1])
+    const tag = /kg|keller/i.test(numUg[0]) ? 'KG' : 'UG'
+    return { order: -n, label: n === 1 ? tag : `${n}. ${tag}` }
+  }
+  const numB = /\bb([1-9])\b|\bbasement\s*([1-9])?\b/i.exec(norm)
+  if (numB) {
+    const n = Number(numB[1] ?? numB[2] ?? '1')
+    return { order: -n, label: `B${n}` }
+  }
+  const numSs = /\b([1-9])(?:er|e|ème|eme)?\s*sous[- ]sol\b/i.exec(norm)
+  if (numSs) {
+    const n = Number(numSs[1])
+    return { order: -n, label: `SS${n}` }
+  }
+  if (/\b(?:kg|keller|kellergeschoss)\b/i.test(norm)) return { order: -1, label: 'KG' }
+  if (/\b(?:ug|untergeschoss)\b/i.test(norm)) return { order: -1, label: 'UG' }
+  if (/\bsous[- ]sol\b/i.test(norm)) return { order: -1, label: 'SS' }
+  if (/\bkellari\b/i.test(norm)) return { order: -1, label: 'Kellari' }
+  if (/\b(?:seminterrato|interrato)\b/i.test(norm)) return { order: -1, label: 'S1' }
+
+  // 2. Attic / Roof (`99`)
+  if (/\battika\b/i.test(norm)) return { order: 99, label: 'Attika' }
+  if (/\b(?:dg|dachgeschoss)\b/i.test(norm)) return { order: 99, label: 'DG' }
+  if (/\b(?:attic|penthouse|loft)\b/i.test(norm)) return { order: 99, label: 'Attic' }
+  if (/\b(?:roof(?:\s+(?:plan|floor|level))?|rooftop)\b/i.test(norm)) return { order: 99, label: 'Roof' }
+  if (/\b(?:combles|toiture)\b/i.test(norm)) return { order: 99, label: 'Combles' }
+  if (/\bullakko\b/i.test(norm)) return { order: 99, label: 'Ullakko' }
+
+  // 3. Mezzanine (`0.5`)
+  if (/\b(?:mezzanine|zwischengeschoss)\b/i.test(norm)) return { order: 0.5, label: 'MZ' }
+
+  // 4. Ground floor (`0`)
+  if (/\b(?:eg|erdgeschoss|parterre)\b/i.test(norm)) return { order: 0, label: 'EG' }
+  if (/\b(?:rdc|rez[- ]de[- ]chauss[eé]e|rez)\b/i.test(norm)) return { order: 0, label: 'RDC' }
+  if (/\bpohjakerros\b/i.test(norm)) return { order: 0, label: 'PK' }
+  if (/\bpiano\s+terra\b/i.test(norm)) return { order: 0, label: 'PT' }
+  if (/\b(?:gf|ground(?:\s+(?:floor|level|storey))?)\b/i.test(norm)) return { order: 0, label: 'GF' }
+  if (/\b(?:level|floor|storey)\s*0\b|\b0\s*\.?\s*level\b|\b0f\b/i.test(norm)) return { order: 0, label: 'GF' }
+
+  // 5. Upper storeys (`1..98`)
+  const deOg = /\b([1-9]\d?)\s*\.?\s*(?:og|obergeschoss)\b/i.exec(norm)
+  if (deOg) {
+    const n = Number(deOg[1])
+    return { order: n, label: `${n}. OG` }
+  }
+  if (/\b(?:og|obergeschoss)\b/i.test(norm)) return { order: 1, label: '1. OG' }
+
+  const frEt = /\b([1-9]\d?)\s*(?:er|ère|ere|e|ème|eme)?\s*[eé]tage\b/i.exec(norm)
+  if (frEt) {
+    const n = Number(frEt[1])
+    return { order: n, label: n === 1 ? '1er' : `${n}e` }
+  }
+
+  const itPi = /\b([1-9]\d?)\s*[°º.]?\s*piano\b/i.exec(norm)
+  if (itPi) {
+    const n = Number(itPi[1])
+    return { order: n, label: `${n}°` }
+  }
+
+  const fiKr = /\b([1-9]\d?)\s*\.?\s*(?:kerros|krs)\b/i.exec(norm)
+  if (fiKr) {
+    const n = Number(fiKr[1])
+    return { order: n, label: `${n}. krs` }
+  }
+
+  const lvl = /\b(?:level|lvl)\s*([1-9]\d?)\b|\b([1-9]\d?)\s*\.?\s*level\b/i.exec(norm)
+  if (lvl) {
+    const n = Number(lvl[1] ?? lvl[2])
+    return { order: n, label: `Level ${n}` }
+  }
+
+  const enFl =
+    /\b([1-9]\d?)\s*(?:st|nd|rd|th)?\s*(?:floor|storey|story)\b|\b(?:floor|storey|story)\s*([1-9]\d?)\b|\b([1-9]\d?)f\b/i.exec(
+      norm,
+    )
+  if (enFl) {
+    const n = Number(enFl[1] ?? enFl[2] ?? enFl[3])
+    return { order: n, label: `${n}F` }
+  }
+
+  // 6. Multi-page / sheet numbers (`Page N`, `Sheet N`, `-pN`)
+  const pageMatch = /\b(?:page|sheet|seite|sivu|feuille)\s*([1-9]\d?)\b|(?:^|[-_\s])p([1-9]\d?)$/i.exec(norm)
+  if (pageMatch) {
+    const n = Number(pageMatch[1] ?? pageMatch[2])
+    return { order: n, label: `Page ${n}` }
+  }
+
+  return { order: 0, label: 'GF' }
+}
+
+const GENERIC_STEM_STOPWORDS = new Set([
+  'plan',
+  'grundriss',
+  'pianta',
+  'pohjapiirros',
+  'floor',
+  'floor plan',
+  'floorplan',
+  'storey',
+  'story',
+  'level',
+  'etage',
+  'étage',
+  'kerros',
+  'piano',
+  'sheet',
+  'page',
+  'seite',
+  'sivu',
+  'drawing',
+  'house',
+  'building',
+  'project',
+  'project name',
+  'untitled',
+])
+
+function cleanBuildingStem(text: string): { slug: string; title: string } | null {
+  let s = text
+    .trim()
+    .replace(/\.(?:dxf|ifc|pdf|png|jpe?g|webp)$/i, '')
+    .replace(/\bup-[a-z0-9]+(?:-p\d+)?\b/gi, ' ')
+    .replace(/\b(?:grundriss|floor\s*plan|floorplan|pohjapiirros|plan|pianta)\b/gi, ' ')
+    .replace(/\b[1-9]\d?\s*\.?\s*(?:ug|untergeschoss|kg|keller|kellergeschoss|og|obergeschoss|kerros|krs|level)\b/gi, ' ')
+    .replace(/\b[1-9]\d?\s*(?:er|ère|ere|e|ème|eme)?\s*[eé]tage\b/gi, ' ')
+    .replace(/\b[1-9]\d?\s*[°º.]?\s*piano\b/gi, ' ')
+    .replace(/\b(?:[1-9]\d?\s*(?:st|nd|rd|th)?\s*(?:floor|storey|story)|(?:floor|storey|story|level|lvl)\s*\d+|[0-9]\d?f|b[1-9])\b/gi, ' ')
+    .replace(
+      /\b(?:eg|erdgeschoss|parterre|ug|untergeschoss|kg|keller|kellergeschoss|dg|dachgeschoss|attika|attic|penthouse|loft|roof|rooftop|combles|toiture|ullakko|pohjakerros|kellari|seminterrato|interrato|piano\s+terra|rdc|rez[- ]de[- ]chauss[eé]e|rez|sous[- ]sol|gf|ground(?:\s+floor)?|basement\s*\d*|mezzanine|zwischengeschoss)\b/gi,
+      ' ',
+    )
+    .replace(/\b(?:page|sheet|seite|sivu|feuille)\s*\d+\b|(?:^|[-_\s])p\d+$/gi, ' ')
+    .replace(/[·—–\-_:()/[\]]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!s || s.length < 3 || /^\d+$/.test(s)) return null
+  const lower = s.toLowerCase()
+  if (GENERIC_STEM_STOPWORDS.has(lower)) return null
+  const slug = lower
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (slug.length < 3) return null
+  // Title-case all-lowercase filename stems while preserving already mixed-case titles
+  if (s === lower) {
+    s = s.replace(/\b\w/g, (c) => c.toUpperCase())
+  }
+  return { slug, title: s }
+}
+
+function siteTagOf(d: Pick<DrawingSummary, 'subtitle'>): string | null {
+  const m = d.subtitle ? /\bSite\s+(\d+)\b/i.exec(d.subtitle) : null
+  return m ? m[1] : null
+}
+
+function buildAutoProjectFloors(
+  members: readonly DrawingSummary[],
+  uploadNames: Record<string, string>,
+  isUploadPageGroup: boolean,
+): ProjectFloor[] {
+  const rawFloors = members.map((d) => {
+    if (d.floor_order !== undefined && d.floor_label) {
+      return { drawing_id: d.id, label: d.floor_label, order: d.floor_order, explicit: true }
+    }
+    const sourceText = [uploadNames[d.id], displayDrawingTitle(d), d.subtitle, d.id].filter(Boolean).join(' · ')
+    const inf = inferFloorOrderAndLabel(sourceText)
+    // First page (`up-<tok>`) of a multi-page PDF often has no `-p1` suffix while siblings are `Page 2`, `Page 3`.
+    if (isUploadPageGroup && !/-p\d+$/i.test(d.id) && inf.order === 0 && inf.label === 'GF') {
+      return {
+        drawing_id: d.id,
+        label: d.floor_label ?? 'Page 1',
+        order: d.floor_order ?? 1,
+        explicit: false,
+      }
+    }
+    return {
+      drawing_id: d.id,
+      label: d.floor_label ?? inf.label,
+      order: d.floor_order ?? inf.order,
+      explicit: d.floor_order !== undefined || Boolean(d.floor_label),
+    }
+  })
+
+  // Disambiguate duplicate fallback labels if every member fell back to the same default
+  const allSameDefault =
+    rawFloors.length > 1 && rawFloors.every((f) => !f.explicit && f.order === 0 && f.label === 'GF')
+  if (allSameDefault) {
+    return rawFloors.map((f, i) => ({ drawing_id: f.drawing_id, label: `Page ${i + 1}`, order: i + 1 }))
+  }
+  return sortProjectFloors(rawFloors)
+}
+
+/**
+ * Auto-group 2+ related plans into `ProjectBundle`s when they share:
+ * 1. An explicit `project_id` from the backend
+ * 2. A multi-page upload token (`up-<tok>` + `up-<tok>-p2`...)
+ * 3. A multi-storey IFC model stem (`ifc-<stem>--<storey>`)
+ * 4. A shared Swiss Dwellings `Site <N>` building identifier
+ * 5. A shared non-generic building filename or title stem (e.g. `Villa_Mueller_EG.dxf` + `Villa_Mueller_1OG.dxf`)
+ */
+export function autoGroupDrawings(
+  drawings: readonly DrawingSummary[],
+  opts: { uploadNames?: Record<string, string> } = {},
+): ProjectBundle[] {
+  if (drawings.length < 2) return []
+
+  const uploadNames: Record<string, string> = { ...opts.uploadNames }
+  if (!opts.uploadNames) {
+    for (const u of myUploads.list()) {
+      uploadNames[u.id] = u.name
+    }
+  }
+
+  const claimed = new Set<string>()
+  const bundles: ProjectBundle[] = []
+
+  const emitGroup = (id: string, title: string, members: DrawingSummary[], isUploadPageGroup = false) => {
+    const unclaimed = members.filter((m) => !claimed.has(m.id))
+    if (unclaimed.length < 2) return
+    for (const m of unclaimed) claimed.add(m.id)
+    bundles.push({
+      id,
+      title,
+      floors: buildAutoProjectFloors(unclaimed, uploadNames, isUploadPageGroup),
+      auto_matched: true,
+    })
+  }
+
+  // 1. Explicit `project_id`
+  const byProjectId = new Map<string, DrawingSummary[]>()
+  for (const d of drawings) {
+    if (!d.project_id) continue
+    const list = byProjectId.get(d.project_id) ?? []
+    list.push(d)
+    byProjectId.set(d.project_id, list)
+  }
+  for (const [pid, members] of byProjectId) {
+    if (members.length < 2) continue
+    const stem = cleanBuildingStem(uploadNames[members[0].id] ?? displayDrawingTitle(members[0]))
+    const isUp = members.some((m) => /^up-[a-z0-9]+-p\d+$/i.test(m.id))
+    emitGroup(pid, stem?.title ?? displayDrawingTitle(members[0]), members, isUp)
+  }
+
+  // 2. Multi-page upload stems (`up-<tok>` + `up-<tok>-p2`...)
+  const byUploadStem = new Map<string, DrawingSummary[]>()
+  for (const d of drawings) {
+    if (claimed.has(d.id)) continue
+    const m = /^up-([a-z0-9]+)(?:-p\d+)?$/i.exec(d.id)
+    if (!m) continue
+    const tok = m[1].toLowerCase()
+    const list = byUploadStem.get(tok) ?? []
+    list.push(d)
+    byUploadStem.set(tok, list)
+  }
+  for (const [tok, members] of byUploadStem) {
+    if (members.length < 2) continue
+    const primary = members.find((m) => !/-p\d+$/i.test(m.id)) ?? members[0]
+    const stem = cleanBuildingStem(uploadNames[primary.id] ?? displayDrawingTitle(primary))
+    emitGroup(`proj-${tok}`, stem?.title ?? displayDrawingTitle(primary), members, true)
+  }
+
+  // 3. Multi-storey IFC model stems (`ifc-<stem>--<storey>`)
+  const byIfcStem = new Map<string, DrawingSummary[]>()
+  for (const d of drawings) {
+    if (claimed.has(d.id)) continue
+    const m = /^(ifc-[a-z0-9_-]+?)--(.+)$/i.exec(d.id)
+    if (!m) continue
+    const stemKey = m[1].toLowerCase()
+    const list = byIfcStem.get(stemKey) ?? []
+    list.push(d)
+    byIfcStem.set(stemKey, list)
+  }
+  for (const [stemKey, members] of byIfcStem) {
+    if (members.length < 2) continue
+    const disp = displayDrawingTitle(members[0]).split(/\s*·\s*/)[0]?.trim()
+    emitGroup(`auto-${stemKey}`, disp || stemKey, members)
+  }
+
+  // 4. Shared Swiss Dwellings `Site <N>` building identifier
+  const bySite = new Map<string, DrawingSummary[]>()
+  for (const d of drawings) {
+    if (claimed.has(d.id)) continue
+    const site = siteTagOf(d)
+    if (!site) continue
+    const list = bySite.get(site) ?? []
+    list.push(d)
+    bySite.set(site, list)
+  }
+  for (const [site, members] of bySite) {
+    if (members.length < 2) continue
+    emitGroup(`auto-site-${site}`, `Site ${site}`, members)
+  }
+
+  // 5. Shared non-generic house/building filename or title stem (never merging distinct `Site <N>` buildings)
+  const byTitleStem = new Map<string, { title: string; members: DrawingSummary[] }>()
+  for (const d of drawings) {
+    if (claimed.has(d.id) || siteTagOf(d)) continue
+    const source = uploadNames[d.id] ?? displayDrawingTitle(d)
+    const stem = cleanBuildingStem(source)
+    if (!stem) continue
+    const cur = byTitleStem.get(stem.slug) ?? { title: stem.title, members: [] }
+    cur.members.push(d)
+    byTitleStem.set(stem.slug, cur)
+  }
+  for (const [slug, { title, members }] of byTitleStem) {
+    if (members.length < 2) continue
+    emitGroup(`auto-stem-${slug}`, title, members)
+  }
+
+  return bundles
+}
+
+/** Local persistence (`aura.projects`) and auto-match resolution for multi-plan House / Project bundles. */
+export const myProjects = {
+  list(): ProjectBundle[] {
+    try {
+      const v: unknown = JSON.parse(read(PROJECTS_KEY) ?? '[]')
+      if (!Array.isArray(v)) return []
+      return v
+        .filter(isProjectBundle)
+        .map((p) => ({ ...p, floors: sortProjectFloors(p.floors) }))
+        .filter((p) => p.floors.length > 0)
+    } catch {
+      return []
+    }
+  },
+
+  get(id: string): ProjectBundle | null {
+    return myProjects.list().find((p) => p.id === id) ?? null
+  },
+
+  /** Find the saved or auto-matched project bundle containing `drawingId`. */
+  forDrawing(
+    drawingId: string,
+    drawings: readonly DrawingSummary[] = [],
+    serverProjects: readonly ProjectBundle[] = [],
+  ): ProjectBundle | null {
+    const saved = myProjects.list().find((p) => p.floors.some((f) => f.drawing_id === drawingId))
+    if (saved) return saved
+    if (drawings.length === 0 && serverProjects.length === 0) return null
+    return (
+      myProjects
+        .resolveAll(drawings, serverProjects)
+        .find((p) => p.floors.some((f) => f.drawing_id === drawingId)) ?? null
+    )
+  },
+
+  save(bundle: ProjectBundle): ProjectBundle {
+    const normalized: ProjectBundle = {
+      ...bundle,
+      title: bundle.title.trim() || 'House Project',
+      floors: sortProjectFloors(bundle.floors),
+      created_at: bundle.created_at ?? new Date().toISOString(),
+    }
+    const ungrouped = readUngroupedIds()
+    if (ungrouped.delete(normalized.id)) writeUngroupedIds(ungrouped)
+    const rest = myProjects.list().filter((p) => p.id !== normalized.id)
+    write(PROJECTS_KEY, JSON.stringify([normalized, ...rest]))
+    notifyProjects()
+    return normalized
+  },
+
+  /** Convenience builder for grouping 2+ plans into a named user project bundle. */
+  create(
+    title: string,
+    drawings: readonly (Pick<DrawingSummary, 'id' | 'title'> & Partial<Pick<DrawingSummary, 'floor_label' | 'floor_order'>>)[],
+    id = `proj-local-${Date.now().toString(36)}`,
+  ): ProjectBundle {
+    const floors: ProjectFloor[] = drawings.map((d) => {
+      const inf = inferFloorOrderAndLabel(d.title)
+      return {
+        drawing_id: d.id,
+        label: d.floor_label ?? inf.label,
+        order: d.floor_order ?? inf.order,
+      }
+    })
+    return myProjects.save({ id, title, floors, auto_matched: false })
+  },
+
+  remove(id: string) {
+    const ungrouped = readUngroupedIds()
+    ungrouped.add(id)
+    writeUngroupedIds(ungrouped)
+    write(PROJECTS_KEY, JSON.stringify(myProjects.list().filter((p) => p.id !== id)))
+    notifyProjects()
+  },
+
+  clear() {
+    write(PROJECTS_KEY, null)
+    write(UNGROUPED_PROJECTS_KEY, null)
+    notifyProjects()
+  },
+
+  /** Merge server `/projects` into local storage without clobbering local manual edits or ungrouped tombstones. */
+  syncFromServer(serverProjects: readonly ProjectBundle[]): ProjectBundle[] {
+    const ungrouped = readUngroupedIds()
+    const localById = new Map(myProjects.list().map((p) => [p.id, p]))
+    let changed = false
+    for (const sp of serverProjects) {
+      if (!isProjectBundle(sp)) continue
+      if (sp.auto_matched && ungrouped.has(sp.id)) continue
+      const existing = localById.get(sp.id)
+      if (existing && !existing.auto_matched) continue
+      const normalized: ProjectBundle = { ...sp, floors: sortProjectFloors(sp.floors) }
+      if (!existing || JSON.stringify(existing) !== JSON.stringify(normalized)) {
+        localById.set(sp.id, normalized)
+        changed = true
+      }
+    }
+    const merged = [...localById.values()]
+    if (changed) {
+      write(PROJECTS_KEY, JSON.stringify(merged))
+      notifyProjects()
+    }
+    return merged
+  },
+
+  /**
+   * Unified list of active multi-floor (`>= 2` floors) project bundles across local user bundles,
+   * server `/projects`, and client `autoGroupDrawings(drawings)`, preventing duplicate floor membership.
+   */
+  resolveAll(
+    drawings: readonly DrawingSummary[],
+    serverProjects: readonly ProjectBundle[] = [],
+  ): ProjectBundle[] {
+    const ungrouped = readUngroupedIds()
+    const claimedDrawings = new Set<string>()
+    const seenIds = new Set<string>()
+    const result: ProjectBundle[] = []
+
+    const consider = (p: ProjectBundle, respectTombstone: boolean) => {
+      if (seenIds.has(p.id)) return
+      if (respectTombstone && ungrouped.has(p.id)) return
+      const availableFloors = sortProjectFloors(p.floors).filter((f) => !claimedDrawings.has(f.drawing_id))
+      if (availableFloors.length < 2) return
+      seenIds.add(p.id)
+      for (const f of availableFloors) claimedDrawings.add(f.drawing_id)
+      result.push({ ...p, floors: availableFloors })
+    }
+
+    for (const p of myProjects.list()) consider(p, Boolean(p.auto_matched))
+    for (const p of serverProjects) if (isProjectBundle(p)) consider(p, Boolean(p.auto_matched))
+    for (const p of autoGroupDrawings(drawings)) consider(p, true)
+
+    return result
+  },
+
+  subscribe(fn: () => void) {
+    projectListeners.add(fn)
+    return () => {
+      projectListeners.delete(fn)
+    }
   },
 }
 
