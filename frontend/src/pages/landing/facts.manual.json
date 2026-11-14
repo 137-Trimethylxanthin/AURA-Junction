@@ -1,18 +1,4 @@
 {
-  "note": "Measured facts not yet written by backend/eval/export_facts.py. Source of check-cost-library: backend/build/checks_requests.jsonl (36 rows) and backend/build/drawings/*/checks.json. Move to the exporter when it emits them.",
-  "facts": [
-    {
-      "id": "check-cost-library",
-      "label": "One request checks every box of one kind on a drawing",
-      "value": "$0.0012",
-      "cost_usd": 0.0012461,
-      "n": 36,
-      "n_unit": "requests",
-      "model_calls": 36,
-      "scope": "The 12 library drawings, one request each for windows, doors and washbasins: 710 evidence boxes, 708 agreed with the model",
-      "method": "Gemini Decisions API, 448,607 input tokens and $0.04486 in total; $0.0002 to $0.0040 per request",
-      "measured": "2026-11-14",
-      "caveat": "Average per request, truncated. “Agreed” means the model agreed with the solver’s boxes; it is not a measured accuracy of the check."
-    }
-  ]
+  "note": "Measured facts not written by backend/eval/export_facts.py. An entry with the same id as an exported fact replaces it (use only while an export is being corrected).",
+  "facts": []
 }

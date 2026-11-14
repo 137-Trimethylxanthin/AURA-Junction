@@ -249,3 +249,19 @@ describe('limits and drawing switches', () => {
     expect(store.getState().turns).toHaveLength(0)
   })
 })
+
+describe('requests sent before a failure', () => {
+  it('a timed-out turn adds the calls and cost it already spent to the session total', async () => {
+    const base = createSource({ baseUrl: null })
+    const src: Source = {
+      ...base,
+      status: () => ({ kind: 'api', state: 'ready' }),
+      chat: async () => {
+        throw new ApiError('No answer within 60 s', 200, 'timeout', { error: 'x', code: 'timeout', calls: 3, cost_usd: 0.0021 })
+      },
+    }
+    const store = createAppStore({ source: src })
+    await store.getState().ask('How many places to sleep?')
+    expect(store.getState().session.spend).toEqual({ calls: 3, cost_usd: 0.0021 })
+  })
+})

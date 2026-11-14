@@ -43,9 +43,10 @@ function AgentTitle() {
 }
 
 function Header({ title, headerActions }: Pick<AppShellSlots, "title" | "headerActions">) {
+  const { tu } = useUi()
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4 pt-[env(safe-area-inset-top)]">
-      <Link to="/app" aria-label="AURA: all drawings" className="-mx-1 flex h-10 shrink-0 items-center rounded-md px-1">
+      <Link to="/app" aria-label={tu("shell_home")} className="-mx-1 flex h-10 shrink-0 items-center rounded-md px-1">
         <Wordmark compact />
       </Link>
       <div className="h-5 w-px shrink-0 bg-border" aria-hidden />
@@ -61,8 +62,9 @@ function Header({ title, headerActions }: Pick<AppShellSlots, "title" | "headerA
 }
 
 function PlanRegion({ toolbar, stage, credit }: Pick<AppShellSlots, "toolbar" | "stage" | "credit">) {
+  const { tu } = useUi()
   return (
-    <section aria-label="Drawing" className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-muted/40">
+    <section aria-label={tu("shell_region")} className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-muted/40">
       <div className="flex shrink-0 items-center gap-2 border-b bg-background px-3 py-2" data-slot="toolbar">
         {toolbar}
       </div>
@@ -86,8 +88,9 @@ function Sidebar({
   className?: string
   expand?: { expanded: boolean; onToggle: () => void }
 }) {
+  const { tu } = useUi()
   return (
-    <aside aria-label="Drawing agent" className={cn("flex h-full min-h-0 min-w-0 flex-col bg-background", className)}>
+    <aside aria-label={tu("agent_title")} className={cn("flex h-full min-h-0 min-w-0 flex-col bg-background", className)}>
       <div className="flex h-11 shrink-0 items-center justify-between border-b pr-1 pl-4">
         <h2 className="text-sm font-semibold">
           <AgentTitle />
@@ -97,7 +100,7 @@ function Sidebar({
             variant="ghost"
             size="icon"
             aria-expanded={expand.expanded}
-            aria-label={expand.expanded ? "Collapse chat" : "Expand chat"}
+            aria-label={expand.expanded ? tu("shell_chat_collapse") : tu("shell_chat_expand")}
             onClick={expand.onToggle}
           >
             {expand.expanded ? <ChevronsDownIcon /> : <ChevronsUpIcon />}
@@ -109,7 +112,7 @@ function Sidebar({
           className="absolute inset-0 overflow-y-auto overscroll-contain focus-visible:outline-offset-[-2px]"
           data-slot="chat"
           role="region"
-          aria-label="Conversation"
+          aria-label={tu("shell_conversation")}
           tabIndex={0}
         >
           {chat}

@@ -11,12 +11,14 @@ import {
 } from "@/components/ui/empty"
 import { SiteHeader } from "@/components/shell/SiteHeader"
 import { useTitle } from "@/hooks/use-title"
+import { useUi } from "@/i18n/uiLang"
 import NotFound from "./NotFound"
 
 /** Root error boundary: a failed page load (e.g. a chunk that did not download) or a render error. */
 export function RouteError() {
   const error = useRouteError()
-  useTitle("Something went wrong")
+  const { tu } = useUi()
+  useTitle(tu("err_title"))
   if (isRouteErrorResponse(error) && error.status === 404) return <NotFound />
   const chunk =
     error instanceof Error &&
@@ -34,25 +36,21 @@ export function RouteError() {
             </EmptyMedia>
             <EmptyTitle>
               <h1>
-                {chunk
-                  ? "This page did not finish loading"
-                  : "Something went wrong"}
+                {chunk ? tu("err_chunk_title") : tu("err_title")}
               </h1>
             </EmptyTitle>
             <EmptyDescription>
-              {chunk
-                ? "Part of the app could not be downloaded. Check the connection and reload."
-                : "The page hit an error. Reloading usually fixes it; your uploads are kept."}
+              {chunk ? tu("err_chunk_desc") : tu("err_desc")}
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent className="flex-row justify-center gap-2">
             <Button onClick={() => window.location.reload()}>
               <RotateCwIcon data-icon="inline-start" />
-              Reload
+              {tu("reload")}
             </Button>
             <Button variant="outline" asChild>
               <Link to="/app" reloadDocument>
-                All drawings
+                {tu("all_drawings")}
               </Link>
             </Button>
           </EmptyContent>

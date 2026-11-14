@@ -114,6 +114,8 @@ export function checkFile(file: { name: string; size: number }, hasPresenter: bo
   const name = file.name.toLowerCase()
   const type = (Object.keys(UPLOAD_CAPS) as UploadType[]).find((k) => UPLOAD_CAPS[k].exts.some((e) => name.endsWith(e)))
   if (!type) return { ok: false, code: 'unsupported_type', message: 'Only DXF files can be uploaded. DWG and zip files are not accepted.' }
+  if (type === 'pdf')
+    return { ok: false, code: 'unsupported_type', message: 'PDFs are not supported yet. Upload the DXF, or a PNG or JPG with presenter access.' }
   const cap = UPLOAD_CAPS[type]
   if (file.size === 0) return { ok: false, code: 'empty', message: 'This file is empty.' }
   if (file.size > cap.bytes)
@@ -138,7 +140,8 @@ export function uploadErrorText(e: unknown): string {
       case 'presenter_required':
         return 'This file type needs presenter access.'
       case 'rate_limited':
-        return 'Too many uploads from here. Try again in a while.'
+        // The server says which limit (hourly uploads, a full queue, storage): show its words.
+        return e.message || 'Too many uploads from here. Try again in a while.'
       case 'budget_exhausted':
         return 'Today’s model budget is used up. DXF uploads still work.'
       default:

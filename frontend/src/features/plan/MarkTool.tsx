@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Poin
 import { rectFromPoints } from '@/lib/geometry'
 import { cn } from '@/lib/utils'
 import { actions, useAppStore } from '@/store'
+import { tu as tuNow, useUi } from '@/i18n/uiLang'
 import { overlayOpen, pctPoint, type StageRef } from './shared'
 
 const MIN_PCT = 1.5
@@ -12,8 +13,15 @@ export function nextLabel(kind: 'Area' | 'Spot'): string {
   return `${kind} ${n}`
 }
 
+/** "Area 2" / "Spot 1" are stored in English (they are keys and go to the agent); shown in the interface language. */
+export function markLabel(label: string, tu: typeof tuNow = tuNow): string {
+  const m = /^(Area|Spot) (\d+)$/.exec(label)
+  return m ? tu(m[1] === 'Area' ? 'mark_area' : 'mark_spot', { n: m[2] }) : label
+}
+
 /** Marked areas, in the user colour. The attached one (sent with the next question) is emphasised. */
 export function MarksLayer() {
+  const { tu } = useUi()
   const marks = useAppStore((s) => s.ui.marks)
   const attached = useAppStore((s) => s.ui.attachedMarkId)
   const tool = useAppStore((s) => s.ui.tool)
@@ -40,8 +48,8 @@ export function MarksLayer() {
                 on ? 'bg-user text-primary-foreground' : 'border border-user bg-background text-user',
               )}
             >
-              {m.label}
-              {on ? <span className="font-normal opacity-85">· attached</span> : null}
+              {markLabel(m.label, tu)}
+              {on ? <span className="font-normal opacity-85">{tu('mark_attached')}</span> : null}
             </span>
           </div>
         )
@@ -62,6 +70,7 @@ const fmtPct = (v: number) => `${Math.round(v)} %`
  * arrows size the rectangle, Enter confirms, Escape steps back.
  */
 export function MarkCapture({ stageRef }: { stageRef: StageRef }) {
+  const { tu } = useUi()
   const layerRef = useRef<HTMLDivElement>(null)
   const draftEl = useRef<HTMLDivElement>(null)
   const drag = useRef<{ id: number; a: [number, number]; b: [number, number]; raf: number } | null>(null)
@@ -188,12 +197,12 @@ export function MarkCapture({ stageRef }: { stageRef: StageRef }) {
       e.preventDefault()
       if (!kb) {
         setKb(cur)
-        setSay('Crosshair at the centre. Arrow keys move it, Enter sets the first corner.')
+        setSay(tu('mark_kb_start'))
       } else if (!cur.anchor) {
         setKb({ ...cur, anchor: cur.cursor })
-        setSay(`First corner set at ${fmtPct(cur.cursor[0])}, ${fmtPct(cur.cursor[1])}. Arrow keys size the area, Enter confirms.`)
+        setSay(tu('mark_kb_corner', { x: fmtPct(cur.cursor[0]), y: fmtPct(cur.cursor[1]) }))
       } else if (!finish(cur.anchor, cur.cursor)) {
-        setSay('The area is too small. Make it bigger with the arrow keys.')
+        setSay(tu('mark_kb_small'))
       }
       return
     }
@@ -202,7 +211,7 @@ export function MarkCapture({ stageRef }: { stageRef: StageRef }) {
       if (drag.current) cancel()
       else if (kb?.anchor) {
         setKb({ ...kb, anchor: null })
-        setSay('First corner cleared.')
+        setSay(tu('mark_kb_cleared'))
       } else leave()
     }
   }
@@ -214,7 +223,7 @@ export function MarkCapture({ stageRef }: { stageRef: StageRef }) {
       ref={layerRef}
       role="application"
       tabIndex={0}
-      aria-label="Mark an area: drag a rectangle on the plan. Escape cancels."
+      aria-label={tu('mark_capture')}
       aria-describedby="plan-mark-help"
       className="group/mark absolute inset-0 z-20 cursor-crosshair touch-none bg-user/5 outline-none focus-visible:ring-3 focus-visible:ring-user/50 focus-visible:ring-inset"
       onPointerDown={onDown}
@@ -225,8 +234,7 @@ export function MarkCapture({ stageRef }: { stageRef: StageRef }) {
       onContextMenu={(e) => e.preventDefault()}
     >
       <span id="plan-mark-help" className="sr-only">
-        Keyboard: Enter shows a crosshair, arrow keys move it (Shift for bigger steps), Enter sets the first corner,
-        arrow keys size the area, Enter confirms.
+        {tu('mark_help')}
       </span>
       <span className="sr-only" aria-live="polite">
         {say}

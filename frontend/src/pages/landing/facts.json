@@ -3,8 +3,8 @@
   {
    "id": "swiss-full",
    "label": "Swiss floor plans answered exactly from the CAD file",
-   "value": "99.0 %",
-   "numerator": 18606,
+   "value": "99.2 %",
+   "numerator": 18660,
    "denominator": 18792,
    "n": 18792,
    "n_unit": "questions",
@@ -13,7 +13,7 @@
    "scope": "Every English counting and area question on the 1040 Swiss Dwellings floor plans in the dataset",
    "method": "DXF layers read with ezdxf and shapely; counts and areas computed in code, no model",
    "measured": "2026-11-14",
-   "caveat": "Measured on the challenge dataset the solver was developed against, not a held-out result. Each question also has a German, French or Italian twin asking the same fact; only the English lines were scored. Areas count as correct within 2 %, as in the dataset."
+   "caveat": "Measured on the challenge dataset the solver was developed against, not a held-out result. Each question also has a German, French or Italian twin asking the same fact; only the English lines were scored. Areas count as correct within 2 %, as in the dataset. 4 rules were added after reading the misses on this same set, so this is not a held-out measure; with the original rules: 18,606/18,792 = 99.0 % (net +54, 1 answer lost)."
   },
   {
    "id": "swiss-library",
@@ -41,7 +41,7 @@
    "scope": "Precomputed checks of the 12 library drawings: windows, doors and washbasins, 710 boxes in total, one Decisions request per drawing and subject",
    "method": "Gemini Decisions API, 384 px tiles with 3 anchor tiles per request; cost from the logged token counts",
    "measured": "2026-11-14",
-   "caveat": "Mean of 36 requests, $0.0002–$0.0041 each, $0.0449 in total (448,607 input tokens). 708 of 710 boxes agreed (score above the highest anchor + 0.05); the check covers drawn boxes only."
+   "caveat": "Mean of 36 requests, $0.0002–$0.0040 each, $0.0448 in total (448,607 input tokens; dollar figures truncated). 708 of 710 boxes agreed (score above the highest anchor + 0.05). \"Agreed\" means the model agreed with the solver's boxes; it is not a measured accuracy of the check. The check covers drawn boxes only."
   },
   {
    "id": "ifc-full",
@@ -56,7 +56,7 @@
    "scope": "Every English question on the 29 IFC models in the dataset (counts, room and storey areas, wall lengths and volumes)",
    "method": "IfcOpenShell quantities and geometry, computed in code, no model",
    "measured": "2026-11-14",
-   "caveat": "Two rules were added after reading the 8 misses on this same set, so this is not a held-out measure; with the original rules: 1,691/1,699 = 99.5 %. The live app serves 1,343 of these 1,699 questions today (door, window and room counts per storey, room and storey areas); whole-model counts, walls, columns, stairs and wall/slab quantities are solved in this evaluation but not yet answered in the app."
+   "caveat": "Two rules were added after reading the 8 misses on this same set, so this is not a held-out measure; with the original rules: 1,691/1,699 = 99.5 %. The live app serves the families of 1,476 of these 1,699 questions on its library storeys (door, window and room counts per storey, room and storey areas, wall length, wall side area, wall and slab volume); whole-model counts and wall, column and stair counts are solved in this evaluation but not reliably answered in the app."
   },
   {
    "id": "cubicasa-door-exact",

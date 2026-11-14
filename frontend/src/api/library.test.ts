@@ -11,11 +11,11 @@ describe('upload checks mirror the server caps', () => {
     expect(checkFile({ name: 'a.dxf', size: 20 * MB + 1 }, false)).toMatchObject({ ok: false, code: 'too_large' })
     expect(checkFile({ name: 'a.dxf', size: 0 }, false)).toMatchObject({ ok: false, code: 'empty' })
   })
-  it('PNG/JPG (15 MB) and PDF (20 MB) need presenter access', () => {
+  it('PNG/JPG (15 MB) need presenter access; PDFs are refused (the server rejects them all)', () => {
     expect(checkFile({ name: 'a.png', size: 10 }, false)).toMatchObject({ ok: false, code: 'presenter_required' })
     expect(checkFile({ name: 'a.jpeg', size: 15 * MB }, true)).toEqual({ ok: true, type: 'image' })
     expect(checkFile({ name: 'a.jpg', size: 15 * MB + 1 }, true)).toMatchObject({ ok: false, code: 'too_large' })
-    expect(checkFile({ name: 'a.pdf', size: 20 * MB }, true)).toEqual({ ok: true, type: 'pdf' })
+    expect(checkFile({ name: 'a.pdf', size: 20 * MB }, true)).toMatchObject({ ok: false, code: 'unsupported_type' })
   })
   it('refuses DWG, zip and unknown types', () => {
     for (const name of ['a.dwg', 'a.zip', 'a', 'a.dxf.exe'])

@@ -45,9 +45,28 @@ if (typeof document !== 'undefined') document.documentElement.lang = current
 /** Text in the current interface language. */
 export const tu = (key: UiKey, vars?: Record<string, string | number>) => ui(uiLang.get(), key, vars)
 
+/** Keys that come in `_one` / `_other` pairs (plural forms by Intl.PluralRules of the interface language). */
+export type PluralKey = UiKey extends infer K ? (K extends `${infer B}_one` ? B : never) : never
+
+const rules = new Map<Lang, Intl.PluralRules>()
+/** Text for a count: picks `<key>_<category>` and fills `{n}` (plus any other vars). */
+export function plural(lang: Lang, key: PluralKey, n: number, vars?: Record<string, string | number>): string {
+  let r = rules.get(lang)
+  if (!r) rules.set(lang, (r = new Intl.PluralRules(lang)))
+  const k = `${key}_${r.select(n) === 'one' ? 'one' : 'other'}` as UiKey
+  return ui(lang, k, { n: new Intl.NumberFormat(lang).format(n), ...vars })
+}
+
 /** Hook: re-renders when the interface language changes; returns the translator. */
 export function useUi() {
   const lang = useSyncExternalStore(uiLang.subscribe, uiLang.get, () => 'en' as Lang)
   const tr = useCallback((key: UiKey, vars?: Record<string, string | number>) => ui(lang, key, vars), [lang])
-  return { lang, tu: tr }
+  const tn = useCallback(
+    (key: PluralKey, n: number, vars?: Record<string, string | number>) => plural(lang, key, n, vars),
+    [lang],
+  )
+  return { lang, tu: tr, tn }
 }
+
+/** Hook: just the translator, bound to the interface language: `const t = useT(); t('send')`. */
+export const useT = () => useUi().tu

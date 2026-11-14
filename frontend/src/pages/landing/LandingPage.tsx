@@ -425,7 +425,7 @@ const LIMITS: { title: string; body: string }[] = [
   },
   {
     title: "Box positions are not scored yet",
-    body: "The 99.0 % figure scores the numbers in the answers. Where each evidence box sits on the plan has no measurement of its own yet.",
+    body: `The ${factById("swiss-full")?.value ?? "Swiss"} figure scores the numbers in the answers. Where each evidence box sits on the plan has no measurement of its own yet.`,
   },
 ]
 

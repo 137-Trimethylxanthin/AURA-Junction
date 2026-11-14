@@ -30,7 +30,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { BUNDLED_SUMMARY } from "@/data/ids"
 import { useTitle } from "@/hooks/use-title"
 import { factById, fmtInt } from "@/pages/landing/facts"
-import { DrawingCard, KIND_LABEL } from "./DrawingCard"
+import { DrawingCard, kindText } from "./DrawingCard"
 import { UploadPanel } from "./UploadPanel"
 
 type ListState =
@@ -83,18 +83,21 @@ function useLibrary(base: string | null) {
 
 /** The measured full-set context line, from the facts file (never computed here). */
 function FullSetLine() {
+  const { tu } = useUi()
   const f = factById("swiss-full") ?? factById("swiss-dxf-accuracy")
   if (!f || f.numerator === undefined || f.denominator === undefined)
     return null
   return (
     <p className="text-xs text-muted-foreground" data-full-set>
-      For context, on the full Swiss set:{" "}
-      <span className="num text-foreground">{f.value}</span> of{" "}
-      <span className="num">{fmtInt(f.denominator)}</span> {f.n_unit} correct (
       <span className="num">
-        {fmtInt(f.numerator)}/{fmtInt(f.denominator)}
+        {tu("lib_full_set", {
+          value: f.value,
+          total: fmtInt(f.denominator),
+          unit: f.n_unit,
+          num: fmtInt(f.numerator),
+          measured: f.measured,
+        })}
       </span>
-      , measured <span className="num">{f.measured}</span>).
     </p>
   )
 }
@@ -140,11 +143,8 @@ export default function LibraryPage() {
       <SiteHeader />
       <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-1">
-          <h1 className="text-xl font-semibold tracking-tight">Drawings</h1>
-          <p className="max-w-prose text-sm text-muted-foreground">
-            Open a drawing to ask about it. Every count and area is computed
-            from the drawing and shown with its evidence on the plan.
-          </p>
+          <h1 className="text-xl font-semibold tracking-tight">{tu("nav_drawings")}</h1>
+          <p className="max-w-prose text-sm text-muted-foreground">{tu("lib_intro")}</p>
         </div>
 
         <div className="grid grid-cols-1 items-start gap-6 min-[1100px]:grid-cols-[minmax(0,1fr)_22rem]">
@@ -186,10 +186,10 @@ export default function LibraryPage() {
                   onValueChange={(v) => setKind((v || "all") as typeof kind)}
                   aria-label={tu("drawing_kind")}
                 >
-                  <ToggleGroupItem value="all">All</ToggleGroupItem>
+                  <ToggleGroupItem value="all">{tu("lib_all")}</ToggleGroupItem>
                   {kinds.map((k) => (
                     <ToggleGroupItem key={k} value={k}>
-                      {KIND_LABEL[k]}
+                      {kindText(k, tu)}
                     </ToggleGroupItem>
                   ))}
                 </ToggleGroup>
@@ -219,8 +219,7 @@ export default function LibraryPage() {
             ) : null}
             {!base ? (
               <p className="text-xs text-muted-foreground" data-offline-note>
-                No server is connected to this build, so the library shows the
-                bundled sample drawing only.
+                {tu("lib_offline")}
               </p>
             ) : null}
             {anyFacts ? <FullSetLine /> : null}
@@ -229,7 +228,7 @@ export default function LibraryPage() {
               <ul
                 className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4"
                 aria-busy="true"
-                aria-label="Loading drawings"
+                aria-label={tu("lib_loading")}
               >
                 {Array.from({ length: 6 }, (_, i) => (
                   <li
@@ -247,7 +246,7 @@ export default function LibraryPage() {
             ) : shown.length ? (
               <ul
                 className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4"
-                aria-label="Drawings"
+                aria-label={tu("nav_drawings")}
               >
                 {shown.map((d, i) => (
                   // Cards settle in reading order; the stagger is capped so a long library never waits.

@@ -1,4 +1,5 @@
 import type { Lang } from '@/api/contract'
+import { chromeDe, chromeEn, chromeFi, chromeFr } from './chrome'
 
 /**
  * Answer-card and abstain copy (follows the question's language), and below it the interface chrome (follows the
@@ -141,7 +142,7 @@ type Dict = Record<StringKey, string>
 const fr: Dict = {
   whatif_question_unit: 'Quelle est la surface nette de l’appartement {unit} ?',
   whatif_question_room: 'Quelle est la surface nette de la pièce {room} ?',
-  counted_where: 'Compté {where}.',
+  counted_where: 'Décompte {where}.',
   net_floor_area: 'Surface nette',
   area_where: 'Surface nette {where}.',
   rooms_included: 'Pièces incluses : {n}.',
@@ -194,7 +195,7 @@ const fr: Dict = {
   leaf_1: 'dessinée deux fois dans le fichier CAO ; le jeu de données compte les deux',
   leaf_2: 'deuxième copie dans le fichier CAO ; le jeu de données compte les deux',
   pending: 'Lecture du plan…',
-  show_on_plan: 'Afficher sur le plan',
+  show_on_plan: 'Voir sur le plan',
   scoped_to: 'Limité à {label}',
   summary_boxes: '{n} sur le plan',
   dataset_differs: 'Diffère du jeu de données : vérifiez les preuves.',
@@ -234,9 +235,9 @@ const fr: Dict = {
   measured_where: 'Mesuré {where}, tel que donné par le fichier du modèle.',
   rows_n: '{n} éléments comptés sans zone sur le plan',
   area_not_printed: 'surface non indiquée',
-  show_all: 'Tout afficher',
+  show_all: 'Tout voir',
   dropped_n: '{n} éléments de preuve illisibles ne sont pas affichés.',
-  show_less: 'Afficher moins',
+  show_less: 'Voir moins',
   no_box: 'pas de zone sur le plan',
   no_area_n: '{n} pièces n’ont pas de surface indiquée et ne sont pas dans le total.',
   no_area_1: '1 pièce n’a pas de surface indiquée et n’est pas dans le total.',
@@ -269,15 +270,15 @@ const fi: Dict = {
   rooms_included: 'Huoneita mukana: {n}.',
   outdoor_left_out: 'Ulkotilat jätetty pois.',
   whatif_used: 'Huoneelle {room} käytetty kokeilemaasi kokoa.',
-  you_rejected: 'Hylkäsit {n}. Piirustuksessa on {total}.',
+  you_rejected: 'Hylkäsit {n} kpl. Piirustuksessa on {total}.',
   you_changed_rooms: 'Muutit mukaan laskettuja huoneita.',
   where_floor: 'tässä pohjassa',
   where_unit: 'asunnossa {unit}',
   where_room: 'huoneessa {room}',
-  where_label: 'tiloissa {label}',
+  where_label: 'huoneissa ”{label}”',
   where_region: 'alueella {label}',
   not_on_drawing: 'Ei tässä piirustuksessa',
-  not_supported_yet: 'Tämänlaisia kalusteita ei vielä tunnisteta',
+  not_supported_yet: 'Tällaisia kalusteita ei vielä tunnisteta',
   unclear_question: 'En osannut yhdistää kysymystä tähän piirustukseen',
   unclear_hint: 'Kysy huoneista, pinta-aloista, ovista, ikkunoista tai pesualtaista.',
   nothing_guessed: 'Mitään ei arvattu.',
@@ -350,7 +351,7 @@ const fi: Dict = {
   rw_not_here: 'Ei tässä piirustuksessa',
   rw_offer: 'Siisti tämä',
   rw_asked: 'Kysytty',
-  text_fire_rating: 'palonkestoluokka',
+  text_fire_rating: 'paloluokka',
   text_label: 'painettu teksti',
   text_found: 'Painettu piirustukseen; sen kohta näkyy piirustuksessa.',
   measured_where: 'Mitattu {where}, mallitiedoston mukaan.',
@@ -410,7 +411,7 @@ const de: Dict = {
   chip_vision_sample: 'Bildprüfung · kein Ergebnis',
   chip_dataset: 'Datensatz',
   chip_ours: 'unser Wert',
-  chip_within: 'innerhalb 2 %',
+  chip_within: 'Toleranz 2 %',
   chip_you: 'Sie: {n}',
   chip_mismatch: 'weicht von unserem ab',
   undo: 'Rückgängig',
@@ -438,7 +439,7 @@ const de: Dict = {
   leaf_1: 'in der CAD-Datei doppelt gezeichnet; der Datensatz zählt beide',
   leaf_2: 'zweite Kopie in der CAD-Datei; der Datensatz zählt beide',
   pending: 'Zeichnung wird gelesen…',
-  show_on_plan: 'Auf dem Plan zeigen',
+  show_on_plan: 'Im Plan zeigen',
   scoped_to: 'Beschränkt auf {label}',
   summary_boxes: '{n} auf dem Plan',
   dataset_differs: 'Weicht vom Datensatz ab: Belege prüfen.',
@@ -453,7 +454,7 @@ const de: Dict = {
   call_other: '{n} Modellaufrufe',
   source_local: 'lokale Daten',
   source_api: 'API',
-  more_n: '{n} weitere',
+  more_n: 'noch {n}',
   rw_unit: 'Wohnung {unit}',
   rw_room: 'Raum {room}',
   rw_title: 'Ihre Fragen, aufgeräumt',
@@ -612,6 +613,7 @@ const uiEn = {
   plugins_title: 'Use it where you already work',
   plugins_desc: 'Same answers and evidence, wherever the question comes from.',
   close_plugins: 'Close plugins',
+  ...chromeEn,
 }
 export type UiKey = keyof typeof uiEn
 type UiDict = Record<UiKey, string>
@@ -698,6 +700,7 @@ const uiFr: UiDict = {
   plugins_title: 'Utilisez-le là où vous travaillez déjà',
   plugins_desc: 'Les mêmes réponses et preuves, d’où que vienne la question.',
   close_plugins: 'Fermer les extensions',
+  ...chromeFr,
 }
 
 const uiFi: UiDict = {
@@ -782,6 +785,7 @@ const uiFi: UiDict = {
   plugins_title: 'Käytä sitä siellä, missä jo työskentelet',
   plugins_desc: 'Samat vastaukset ja todisteet, tuli kysymys mistä tahansa.',
   close_plugins: 'Sulje laajennukset',
+  ...chromeFi,
 }
 
 const uiDe: UiDict = {
@@ -866,6 +870,7 @@ const uiDe: UiDict = {
   plugins_title: 'Dort nutzen, wo Sie schon arbeiten',
   plugins_desc: 'Dieselben Antworten und Belege, woher die Frage auch kommt.',
   close_plugins: 'Plugins schliessen',
+  ...chromeDe,
 }
 
 export const UI: Record<Lang, UiDict> = { en: uiEn, fr: uiFr, fi: uiFi, de: uiDe }

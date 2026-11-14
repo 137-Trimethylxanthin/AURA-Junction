@@ -14,12 +14,16 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
+import { useUi } from "@/i18n/uiLang"
 
 export const KIND_LABEL: Record<DrawingKind, string> = {
   cad_dxf: "CAD · DXF",
   raster: "Image",
   ifc: "IFC",
 }
+
+/** The kind in the interface language ("Image" is the only word in it). */
+export const kindText = (k: DrawingKind, tu: (key: "kind_image") => string) => (k === "raster" ? tu("kind_image") : KIND_LABEL[k])
 
 const nf = new Intl.NumberFormat("en-US")
 
@@ -31,6 +35,8 @@ export function factsRatio(d: Pick<DrawingSummary, "facts">): string | null {
 }
 
 function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
+  const { tu } = useUi()
+  const kindLabel = kindText(d.kind, tu)
   const ready = d.status === "ready"
   const facts = factsRatio(d)
   const [broken, setBroken] = useState(false)
@@ -55,7 +61,7 @@ function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
           // No preview (missing or failed to load): a quiet placeholder with the kind, never a broken image.
           <div className="flex size-full flex-col items-center justify-center gap-1.5 text-muted-foreground" data-no-thumbnail>
             <FileIcon className="size-6" aria-hidden />
-            <span className="text-xs">{KIND_LABEL[d.kind]} · no preview</span>
+            <span className="text-xs">{tu("card_no_preview", { kind: kindLabel })}</span>
           </div>
         )}
       </div>
@@ -71,18 +77,16 @@ function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
           </CardDescription>
         ) : null}
         <CardAction>
-          <Badge variant="outline">{KIND_LABEL[d.kind]}</Badge>
+          <Badge variant="outline">{kindLabel}</Badge>
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-1.5 text-xs">
         {offline ? (
-          <p className="text-muted-foreground">
-            Bundled sample · answers computed in your browser
-          </p>
+          <p className="text-muted-foreground">{tu("card_bundled")}</p>
         ) : null}
         {facts ? (
           <p className="text-foreground" data-facts>
-            <span className="num">{facts}</span> dataset answers correct
+            <span className="num">{facts}</span> {tu("card_facts")}
           </p>
         ) : null}
         {!ready ? (
@@ -91,15 +95,16 @@ function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
               className="line-clamp-2 text-destructive [overflow-wrap:anywhere]"
               title={d.error}
             >
-              Could not be read{d.error ? `: ${d.error}` : ""}
+              {tu("phase_failed")}
+              {d.error ? `: ${d.error}` : ""}
             </p>
           ) : (
             <div className="flex items-center gap-2 text-muted-foreground">
-              <span>{d.status === "queued" ? "Queued" : "Processing"}</span>
+              <span>{d.status === "queued" ? tu("phase_queued") : tu("phase_processing")}</span>
               {pct !== null ? (
                 <Progress
                   value={pct}
-                  aria-label={`${d.title}: processing`}
+                  aria-label={tu("card_processing_aria", { title: d.title })}
                   className="flex-1"
                 />
               ) : null}
@@ -129,6 +134,7 @@ export function DrawingCard({
   d: DrawingSummary
   offline?: boolean
 }) {
+  const { tu } = useUi()
   if (d.status !== "ready")
     return (
       <article className="h-full" data-drawing-card={d.id}>
@@ -140,7 +146,7 @@ export function DrawingCard({
       {/* Press feedback on pointer-down (scale), a gentle lift for fine pointers only. */}
       <Link
         to={`/d/${encodeURIComponent(d.id)}`}
-        aria-label={`Open ${d.title}${d.subtitle ? `, ${d.subtitle}` : ""}`}
+        aria-label={d.subtitle ? tu("card_open_sub", { title: d.title, subtitle: d.subtitle }) : tu("card_open", { title: d.title })}
         className="group/drawing block h-full rounded-xl transition-transform duration-200 ease-out active:scale-[0.985] active:duration-75 motion-reduce:transition-none [@media(hover:hover)]:hover:-translate-y-0.5"
       >
         <CardBody d={d} offline={offline} />

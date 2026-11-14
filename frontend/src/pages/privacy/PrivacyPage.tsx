@@ -43,8 +43,8 @@ export default function PrivacyPage() {
               numbers, apartment letters, room areas and printed text.
             </li>
             <li>
-              Image and PDF uploads are open only with a presenter link. Those
-              images are sent to the Google Gemini API to detect and check
+              Image uploads (PNG, JPG) are open only with a presenter link; PDFs
+              are not accepted. Those images are sent to the Google Gemini API to detect and check
               items, and again with any question our routing cannot match.
             </li>
           </ul>
@@ -71,8 +71,9 @@ export default function PrivacyPage() {
               drawing’s room labels to Gemini, as one call shown with its cost.
             </li>
             <li>
-              Answers and conversations, including the question text, are
-              deleted after 24 hours by the same clean-up.
+              Stored answers and conversations, including the question text,
+              are deleted after 24 hours by the same clean-up, and so are the
+              copies the server keeps in memory.
             </li>
           </ul>
         </ProseSection>
@@ -95,17 +96,22 @@ export default function PrivacyPage() {
 
         <ProseSection title="Request logs">
           <p>
-            Our server uses your IP address in memory to apply rate limits. Our
-            own logs keep a salted hash of it instead, with the time, the path
-            or model called, the status, the latency, and for model calls the
-            token count and cost. They hold no question text and no browser
-            details.
+            Our server uses your IP address to apply rate limits and does not
+            store it. Where it is needed, a hash of it made with a secret salt is
+            used instead: in the server’s log output (time, path or model,
+            status, latency), and in the record of model requests that the
+            hourly rate limits count, where the hash is removed after 24
+            hours. Upload counts per address are kept in memory only. The record
+            of model requests itself (time, model, purpose, tokens, cost) is
+            kept as our budget counter. None of this holds question text or
+            browser details.
           </p>
           <p>
             Our hosting providers (Modal for the server, Cloudflare for this
             site) keep their own request logs under their own retention rules,
-            and those can include IP addresses. We delete our log files when the
-            server is taken down after the hackathon.
+            and those can include IP addresses. Our own records stay on the
+            server’s storage until we delete them by hand after the hackathon;
+            stopping the server does not delete them.
           </p>
         </ProseSection>
 

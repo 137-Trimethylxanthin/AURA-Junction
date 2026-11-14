@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { fmtArea } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { actions, useAppStore, useAppStoreShallow } from '@/store'
+import { useUi } from '@/i18n/uiLang'
 import { fmtMetres, parseMetres, roomTitle } from './shared'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -39,6 +40,7 @@ function useWhatIfRoom(): RoomPoly | undefined {
 
 /** While the What-if tool is on: every room is a target; rooms with `rect` can be picked. */
 export function WhatIfPicker() {
+  const { tu } = useUi()
   const rooms = useAppStore((s) => s.session.drawing.rooms)
   const current = useAppStore((s) => s.ui.whatIf.roomId)
   return (
@@ -58,7 +60,7 @@ export function WhatIfPicker() {
             vectorEffect="non-scaling-stroke"
             role={ok ? 'button' : undefined}
             tabIndex={ok ? 0 : undefined}
-            aria-label={ok ? `Change sizes of ${roomTitle(r)}` : undefined}
+            aria-label={ok ? tu('change_sizes', { room: roomTitle(r) }) : undefined}
             aria-pressed={ok ? on : undefined}
             aria-hidden={ok ? undefined : true}
             onClick={(e) => {
@@ -87,6 +89,7 @@ export function WhatIfPicker() {
 
 /** The edited room drawn at its draft size, with width/depth labels and a bottom-edge drag handle. */
 export function WhatIfBox({ stageRef }: { stageRef: React.RefObject<HTMLDivElement | null> }) {
+  const { tu } = useUi()
   const room = useWhatIfRoom()
   const { w, h } = useAppStoreShallow((s) => ({ w: s.ui.whatIf.w, h: s.ui.whatIf.h }))
   const mPerPctY = useAppStore((s) => s.session.drawing.m_per_pct_y)
@@ -147,12 +150,12 @@ export function WhatIfBox({ stageRef }: { stageRef: React.RefObject<HTMLDivEleme
       <div
         role="slider"
         tabIndex={0}
-        aria-label={`Depth of ${roomTitle(room)}: drag the bottom edge`}
+        aria-label={tu('wi_depth_slider', { room: roomTitle(room) })}
         aria-orientation="vertical"
         aria-valuemin={MIN_M}
         aria-valuemax={maxH}
         aria-valuenow={h}
-        aria-valuetext={`${fmtMetres(h)} metres`}
+        aria-valuetext={tu('wi_metres', { n: fmtMetres(h) })}
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
@@ -242,6 +245,7 @@ export function WhatIfEditor({
   scrollRef: React.RefObject<HTMLDivElement | null>
   stageRef: React.RefObject<HTMLDivElement | null>
 }) {
+  const { tu } = useUi()
   const tool = useAppStore((s) => s.ui.tool)
   const room = useWhatIfRoom()
   const reduce = useReducedMotion()
@@ -263,7 +267,7 @@ export function WhatIfEditor({
           style={{ transformOrigin: `${corner.v} ${corner.h}`, [corner.v]: GAP, [corner.h]: GAP }}
           className="absolute z-40 w-80 max-w-[calc(100%-1.5rem)] rounded-xl border bg-card p-3 text-card-foreground shadow-[0_12px_32px_-8px_color-mix(in_oklch,var(--foreground)_22%,transparent)]"
           role="region"
-          aria-label="What-if sizes"
+          aria-label={tu('wi_title')}
         >
           {room?.rect ? <EditorBody key={room.room_id} room={room} /> : <EditorEmpty />}
         </motion.div>
@@ -273,21 +277,21 @@ export function WhatIfEditor({
 }
 
 function CloseButton() {
+  const { tu } = useUi()
   return (
-    <Button variant="ghost" size="icon" aria-label="Close what-if sizes" onClick={() => actions().cancelWhatIf()}>
+    <Button variant="ghost" size="icon" aria-label={tu('wi_close')} onClick={() => actions().cancelWhatIf()}>
       <XIcon />
     </Button>
   )
 }
 
 function EditorEmpty() {
+  const { tu } = useUi()
   return (
     <div className="flex items-start justify-between gap-2">
       <div className="flex min-w-0 flex-col gap-0.5 pt-1">
-        <span className="text-sm font-semibold">What-if sizes</span>
-        <span className="text-xs text-muted-foreground">
-          Pick a highlighted room on the plan. Rooms that aren’t rectangles can’t be resized.
-        </span>
+        <span className="text-sm font-semibold">{tu('wi_title')}</span>
+        <span className="text-xs text-muted-foreground">{tu('wi_empty')}</span>
       </div>
       <CloseButton />
     </div>
@@ -352,7 +356,7 @@ function MetreField({
 
 function EditorBody({ room }: { room: RoomPoly }) {
   const { w, h } = useAppStoreShallow((s) => ({ w: s.ui.whatIf.w, h: s.ui.whatIf.h }))
-  const lang = useAppStore((s) => s.session.lang)
+  const { lang, tu } = useUi()
   const next = round2(w * h)
   const changed = room.area_m2 === null || next !== round2(room.area_m2)
   const { maxW, maxH } = limitsOf(room)
@@ -362,20 +366,20 @@ function EditorBody({ room }: { room: RoomPoly }) {
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-0.5 pt-1">
           <span className="truncate text-sm font-semibold">{roomTitle(room)}</span>
-          <span className="text-xs text-muted-foreground">Asks a new question; the drawing stays unchanged.</span>
+          <span className="text-xs text-muted-foreground">{tu('wi_note')}</span>
         </div>
         <CloseButton />
       </div>
       <div className="grid grid-cols-2 gap-2">
         <MetreField
-          label="Wall length (m)"
+          label={tu('wi_wall')}
           value={w}
           max={maxW}
           onValue={(v) => actions().setWhatIfDraft(v, h)}
           onValid={(ok) => setBad((b) => ({ ...b, w: !ok }))}
         />
         <MetreField
-          label="Room depth (m)"
+          label={tu('wi_depth')}
           value={h}
           max={maxH}
           onValue={(v) => actions().setWhatIfDraft(w, v)}
@@ -383,17 +387,17 @@ function EditorBody({ room }: { room: RoomPoly }) {
         />
       </div>
       <div className="flex items-baseline justify-between gap-2 rounded-lg bg-muted px-3 py-2">
-        <span className="text-xs text-muted-foreground">Area</span>
+        <span className="text-xs text-muted-foreground">{tu('wi_area')}</span>
         <span className="num text-sm" aria-live="polite">
           <span className={cn('text-muted-foreground', changed && room.area_m2 !== null && 'line-through')}>
-            {room.area_m2 === null ? 'not printed' : fmtArea(room.area_m2, lang)}
+            {room.area_m2 === null ? tu('wi_not_printed') : fmtArea(room.area_m2, lang)}
           </span>
           <ArrowRightIcon aria-hidden className="mx-1 inline size-3.5 text-muted-foreground" />
           <strong className={cn('font-semibold', changed && 'text-user')}>{fmtArea(next, lang)} m²</strong>
         </span>
       </div>
       <Button size="lg" disabled={!(w > 0 && h > 0) || bad.w || bad.h} onClick={() => void actions().applyWhatIf()}>
-        Ask the agent with these sizes
+        {tu('wi_apply')}
       </Button>
     </div>
   )

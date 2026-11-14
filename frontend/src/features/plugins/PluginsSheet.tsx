@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useUi } from '@/i18n/uiLang'
+import type { UiKey } from '@/i18n/strings'
 import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -11,7 +12,7 @@ import { downloadText, evidenceCsv } from './csv'
 
 type State = 'ready' | 'backend' | 'planned'
 
-const STATE_LABEL: Record<State, string> = { ready: 'Ready', backend: 'Backend', planned: 'Planned' }
+const STATE_LABEL: Record<State, UiKey> = { ready: 'pl_ready', backend: 'pl_backend', planned: 'pl_planned' }
 const STATE_STYLE: Record<State, string> = {
   ready: 'bg-success-surface text-success',
   backend: 'border border-border text-muted-foreground',
@@ -30,6 +31,7 @@ const REST_SNIPPET = `curl -X POST https://<your-backend>/ask \\
         "question": "Montako ikkunaa?" }'`
 
 function CopyButton({ text, label }: { text: string; label: string }) {
+  const { tu } = useUi()
   const [done, setDone] = useState(false)
   return (
     <Button
@@ -40,22 +42,23 @@ function CopyButton({ text, label }: { text: string; label: string }) {
           setDone(true)
           setTimeout(() => setDone(false), 1500)
         } catch {
-          toast('Copy failed. Select the text and copy it by hand.')
+          toast(tu('pl_copy_failed'))
         }
       }}
     >
       {done ? <CheckIcon data-icon="inline-start" /> : <CopyIcon data-icon="inline-start" />}
-      {done ? 'Copied' : label}
+      {done ? tu('pl_copied') : label}
     </Button>
   )
 }
 
 function Card({ name, state, desc, children }: { name: string; state: State; desc: string; children?: React.ReactNode }) {
+  const { tu } = useUi()
   return (
     <section className="flex min-w-0 flex-col gap-2.5 rounded-xl border bg-card p-4" aria-label={name}>
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">{name}</h3>
-        <span className={cn('rounded-full px-2 py-0.5 text-xs font-semibold', STATE_STYLE[state])}>{STATE_LABEL[state]}</span>
+        <span className={cn('rounded-full px-2 py-0.5 text-xs font-semibold', STATE_STYLE[state])}>{tu(STATE_LABEL[state])}</span>
       </div>
       <p className="text-sm text-muted-foreground">{desc}</p>
       {children}
@@ -72,7 +75,7 @@ function Code({ children }: { children: string }) {
 }
 
 export function PluginsSheet() {
-  const { tu } = useUi()
+  const { tu, tn } = useUi()
   const open = useAppStore((s) => s.ui.pluginsOpen)
   const turn = useAppStore(selectActiveTurn)
   const drawing = useAppStore(selectDrawing)
@@ -102,44 +105,42 @@ export function PluginsSheet() {
           <Card
             name="Excel / CSV"
             state="ready"
-            desc="Every piece of evidence for the answer on the plan, with its room and position, for take-off sheets. Built in your browser."
+            desc={tu('pl_csv_desc')}
           >
             <div className="flex flex-wrap items-center gap-2">
               <Button onClick={download} disabled={!evidenceCount}>
                 <DownloadIcon data-icon="inline-start" />
-                Download evidence CSV
+                {tu('pl_csv_download')}
               </Button>
               <span className="text-xs text-muted-foreground">
-                {evidenceCount ? `${evidenceCount} rows · your rejects included` : 'Ask a question first'}
+                {evidenceCount ? tn('pl_csv_rows', evidenceCount) : tu('pl_csv_empty')}
               </span>
             </div>
           </Card>
           <Card
-            name="MCP server"
+            name={tu('pl_mcp_name')}
             state="backend"
-            desc="Ask from Claude or any MCP client; answers come back with the evidence boxes. Runs on the AURA backend, not in this page."
+            desc={tu('pl_mcp_desc')}
           >
             <Code>{MCP_SNIPPET}</Code>
             <div>
-              <CopyButton text={MCP_SNIPPET} label="Copy config" />
+              <CopyButton text={MCP_SNIPPET} label={tu('pl_mcp_copy')} />
             </div>
           </Card>
           <Card
-            name="REST API"
+            name={tu('pl_rest_name')}
             state="backend"
-            desc="One call: drawing and question in, answer and evidence JSON out (contract 1.0). Runs on the AURA backend."
+            desc={tu('pl_rest_desc')}
           >
             <Code>{REST_SNIPPET}</Code>
             <div>
-              <CopyButton text={REST_SNIPPET} label="Copy request" />
+              <CopyButton text={REST_SNIPPET} label={tu('pl_rest_copy')} />
             </div>
           </Card>
-          <Card name="Chat bots" state="planned" desc="Ask from the site team’s chat: a photo of a sheet in, a marked-up answer back." />
-          <section aria-label="Prompt blocks" className="flex flex-col gap-2 rounded-xl border border-dashed p-4">
-            <h3 className="text-sm font-semibold">Prompt blocks</h3>
-            <p className="text-sm text-muted-foreground">
-              Ready-made questions this drawing can answer. Pick one to put it in the composer and edit the highlighted part.
-            </p>
+          <Card name={tu('pl_bots_name')} state="planned" desc={tu('pl_bots_desc')} />
+          <section aria-label={tu('pl_prompts_title')} className="flex flex-col gap-2 rounded-xl border border-dashed p-4">
+            <h3 className="text-sm font-semibold">{tu('pl_prompts_title')}</h3>
+            <p className="text-sm text-muted-foreground">{tu('pl_prompts_desc')}</p>
             <ul className="flex flex-wrap gap-1.5">
               {PROMPT_BLOCKS.map((b) => (
                 <li key={b.label}>

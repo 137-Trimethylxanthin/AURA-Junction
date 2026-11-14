@@ -92,7 +92,7 @@ export function PlanToolbar() {
               {compare.mode === 'blend' ? (
                 <div className="flex h-10 items-center gap-2 rounded-lg border px-2.5">
                   <span className="text-xs text-muted-foreground @max-[1040px]:sr-only" id="plan-blend-label">
-                    Original
+                    {tu('tb_original')}
                   </span>
                   <Slider
                     className="w-20"
@@ -113,7 +113,7 @@ export function PlanToolbar() {
 
       <div className="ml-auto flex items-center gap-2">
         <SourceBadge />
-        <div className="flex items-center rounded-lg border" role="group" aria-label="Zoom">
+        <div className="flex items-center rounded-lg border" role="group" aria-label={tu('tb_zoom')}>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -129,7 +129,7 @@ export function PlanToolbar() {
             </TooltipTrigger>
             <TooltipContent>{tu('zoom_out')}</TooltipContent>
           </Tooltip>
-          <span className="num w-12 text-center text-xs tabular-nums" aria-live="polite" aria-label={`Zoom ${zoom} percent`}>
+          <span className="num w-12 text-center text-xs tabular-nums" aria-live="polite" aria-label={tu('tb_zoom_level', { n: zoom })}>
             {zoom}%
           </span>
           <Tooltip>
@@ -156,30 +156,31 @@ export function PlanToolbar() {
 /** Where answers come from: bundled data, the live API, or a backend that is still waking. */
 export function SourceBadge() {
   const src = useSource()
+  const { tu } = useUi()
   if (src.state === 'waking')
     return (
       <Badge variant="outline" className="h-7 gap-1.5 text-muted-foreground" role="status">
         <Loader2Icon className="animate-spin" />
-        Waking backend…
+        {tu('src_waking')}
       </Badge>
     )
   if (src.kind === 'api')
     return (
       <Badge variant="outline" className="h-7 gap-1.5" role="status">
         <span aria-hidden className="size-1.5 rounded-full bg-foreground" />
-        Live API
+        {tu('src_live')}
       </Badge>
     )
   const failed = src.reason === 'health_failed' || src.reason === 'fell_back'
   return (
     <div className="flex items-center gap-1">
-      <Badge variant="secondary" className="h-7" role="status" title="Answers are computed in the browser from the bundled drawing data">
-        Local data
+      <Badge variant="secondary" className="h-7" role="status" title={tu('src_local_hint')}>
+        {tu('src_local')}
       </Badge>
       {failed ? (
         <Button variant="ghost" size="sm" className="h-10" onClick={() => void actions().retrySource()}>
           <RefreshCwIcon data-icon="inline-start" />
-          Retry API
+          {tu('src_retry')}
         </Button>
       ) : null}
     </div>

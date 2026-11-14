@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { tu } from '@/i18n/uiLang'
 
 /** Minimal Web Speech API typing (not in lib.dom for all TS targets). */
 interface SpeechAlt {
@@ -69,7 +70,7 @@ export function useSpeech(locale: string) {
       setText((finalText + interim).trim())
     }
     r.onerror = (e) => {
-      setError(e.error === 'not-allowed' ? 'Microphone access was blocked.' : `Speech recognition stopped (${e.error}).`)
+      setError(e.error === 'not-allowed' ? tu('vc_err_blocked') : tu('vc_err_stopped', { error: e.error }))
       setState('error')
     }
     r.onend = () => setState((s) => (s === 'listening' ? 'done' : s))
@@ -81,7 +82,7 @@ export function useSpeech(locale: string) {
       r.start()
     } catch {
       setState('error')
-      setError('Speech recognition could not start.')
+      setError(tu('vc_err_start'))
     }
   }, [locale])
 

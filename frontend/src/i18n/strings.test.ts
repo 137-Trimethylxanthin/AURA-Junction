@@ -23,3 +23,27 @@ describe('translations', () => {
     expect(ui('de', 'chars', { n: 12, max: 2000 })).toBe('12 / 2000 Zeichen')
   })
 })
+
+describe('interface language', () => {
+  it('plural forms follow the language and count', async () => {
+    const { plural } = await import('./uiLang')
+    expect(plural('en', 'pl_csv_rows', 1)).toBe('1 row · your rejects included')
+    expect(plural('en', 'pl_csv_rows', 5)).toBe('5 rows · your rejects included')
+    expect(plural('de', 'up_rejected', 3)).toBe('3 Dateien nicht hochgeladen')
+    expect(plural('fr', 'up_rejected', 1)).toBe('Non téléversé')
+  })
+
+  it('switching it changes a toolbar label but never the answer language', async () => {
+    const { uiLang } = await import('./uiLang')
+    const { t } = await import('./strings')
+    const before = t('en', 'net_floor_area')
+    uiLang.set('de')
+    expect(uiLang.get()).toBe('de')
+    expect(ui(uiLang.get(), 'tool_select')).toBe('Auswählen')
+    expect(ui(uiLang.get(), 'ctx_actions')).toBe('Planaktionen')
+    expect(t('en', 'net_floor_area')).toBe(before)
+    expect(t('fr', 'net_floor_area')).not.toBe(before)
+    uiLang.set('en')
+    expect(ui(uiLang.get(), 'tool_select')).toBe('Select')
+  })
+})

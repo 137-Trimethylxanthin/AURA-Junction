@@ -1,4 +1,4 @@
-import { useUi } from "@/i18n/uiLang"
+import { tu as tuNow, useUi } from "@/i18n/uiLang"
 import type { UiKey } from "@/i18n/strings"
 import {
   useCallback,
@@ -85,11 +85,8 @@ type Row = StoredUpload & {
 
 let uploadSeq = 0
 
-/** "Not uploaded" / "6 files not uploaded" (a batch overflow line names several files). */
-const all = (r: { n?: number }[]) => {
-  const n = r.reduce((k, x) => k + (x.n ?? 1), 0)
-  return n === 1 ? "Not uploaded" : `${n} files not uploaded`
-}
+/** Files named by the rejection lines (a batch overflow line names several files). */
+const rejectedCount = (r: { n?: number }[]) => r.reduce((k, x) => k + (x.n ?? 1), 0)
 
 /** The user's own uploads: stored ids + delete tokens, with live status from the API. */
 function useUploads(base: string) {
@@ -207,7 +204,7 @@ function useUploads(base: string) {
         poll(res.drawing_id, stored.created_at)
       } catch (e) {
         setRows((rs) => rs.filter((r) => r.id !== temp))
-        toast.error(`${file.name} was not uploaded`, {
+        toast.error(tuNow("up_toast_failed", { name: file.name }), {
           description: uploadErrorText(e),
         })
       }
@@ -225,7 +222,7 @@ function useUploads(base: string) {
           e instanceof ApiError &&
           (e.code === "unknown_drawing" || e.status === 404)
         )) {
-          toast.error(`${r.name} was not deleted`, {
+          toast.error(tuNow("up_toast_delete_failed", { name: r.name }), {
             description: uploadErrorText(e),
           })
           return
@@ -237,7 +234,7 @@ function useUploads(base: string) {
       // Fade the row out (same path it came in), then drop it.
       setRows((rs) => rs.map((x) => (x.id === r.id ? { ...x, leaving: true } : x)))
       window.setTimeout(() => setRows((rs) => rs.filter((x) => x.id !== r.id)), 160)
-      toast.success(`${r.name} deleted from the server`)
+      toast.success(tuNow("up_toast_deleted", { name: r.name }))
     },
     [base]
   )
@@ -301,7 +298,7 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
             ? `: ${r.error.replace(/^(DXF |The file |This file )?could not be read:?\s*/i, "")}`
             : ""}
           {r.phase === "too_slow"
-            ? `: the server did not finish within ${UPLOAD_DEADLINE_MS / 60_000} minutes. Delete it and upload again.`
+            ? `: ${tu("up_too_slow", { min: UPLOAD_DEADLINE_MS / 60_000 })}`
             : ""}
           {busy && pct !== null ? (
             <span className="num"> · {pct} %</span>
@@ -326,28 +323,25 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
             <Tooltip>
               <TooltipTrigger asChild>
                 <AlertDialogTrigger asChild>
-                  <AttachmentAction size="icon" aria-label={`Delete ${r.name}`}>
+                  <AttachmentAction size="icon" aria-label={tu("up_delete_aria", { name: r.name })}>
                     <Trash2Icon />
                   </AttachmentAction>
                 </AlertDialogTrigger>
               </TooltipTrigger>
-              <TooltipContent>Delete from the server</TooltipContent>
+              <TooltipContent>{tu("up_delete_tip")}</TooltipContent>
             </Tooltip>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete {r.name}?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  The file and everything computed from it are removed from the
-                  server now, instead of after 24 hours.
-                </AlertDialogDescription>
+                <AlertDialogTitle>{tu("up_delete_title", { name: r.name })}</AlertDialogTitle>
+                <AlertDialogDescription>{tu("up_delete_desc")}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>Keep</AlertDialogCancel>
+                <AlertDialogCancel>{tu("up_keep")}</AlertDialogCancel>
                 <AlertDialogAction
                   variant="destructive"
                   onClick={() => onDelete(r)}
                 >
-                  Delete
+                  {tu("up_delete")}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -361,17 +355,15 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
 const MB = 1024 * 1024
 
 function UsageNote() {
+  const { tu } = useUi()
   return (
     <p className="text-xs text-muted-foreground">
-      Upload only drawings you may share. Uploads are processed on our server
-      and deleted after 24 hours. Drawings without CAD data are sent to Google
-      Gemini for detection and checks; a question our routing cannot match is
-      sent to Gemini with the drawing’s room labels and areas.{" "}
+      {tu("up_usage")}{" "}
       <Link
         to="/privacy"
         className="font-medium text-foreground underline underline-offset-2"
       >
-        Privacy
+        {tu("nav_privacy")}
       </Link>
     </p>
   )
@@ -379,6 +371,7 @@ function UsageNote() {
 
 /** Upload card. `base` is the API base; without one the panel explains why uploads are off. */
 export function UploadPanel({ base }: { base: string | null }) {
+  const { tu } = useUi()
   return (
     <Card size="sm" role="region" aria-labelledby="upload-title">
       <CardHeader>
@@ -397,11 +390,8 @@ export function UploadPanel({ base }: { base: string | null }) {
           <>
             <Alert data-uploads-off>
               <CloudOffIcon />
-              <AlertTitle>Uploads need the AURA server</AlertTitle>
-              <AlertDescription>
-                This build runs without a server, so only the bundled sample
-                drawing is available. Its answers are computed in your browser.
-              </AlertDescription>
+              <AlertTitle>{tu("up_off_title")}</AlertTitle>
+              <AlertDescription>{tu("up_off_desc")}</AlertDescription>
             </Alert>
             <UsageNote />
           </>
@@ -412,7 +402,7 @@ export function UploadPanel({ base }: { base: string | null }) {
 }
 
 function Uploader({ base }: { base: string }) {
-  const { tu } = useUi()
+  const { tu, tn } = useUi()
   const { rows, start, remove } = useUploads(base)
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
@@ -438,7 +428,7 @@ function Uploader({ base }: { base: string }) {
       out.push({
         name: extra.map((f) => f.name).join(", "),
         n: extra.length,
-        reason: `Only ${UPLOAD_BATCH} files are uploaded at a time; drop ${extra.length === 1 ? "this one" : "these"} again afterwards:`,
+        reason: tn("up_batch", extra.length, { max: UPLOAD_BATCH }),
       })
     setRejection(out)
     // One after another, so the server's per-IP limits see a steady trickle, not a burst.
@@ -472,7 +462,7 @@ function Uploader({ base }: { base: string }) {
         <div className="flex flex-col gap-1">
           <p className="text-sm text-foreground">{tu("drop_here")}</p>
           <p className="text-xs text-muted-foreground">
-            <span className="num">DXF ≤ {UPLOAD_CAPS.dxf.bytes / MB} MB</span>{" "}
+            <span className="num">{tu("up_dxf_cap", { mb: UPLOAD_CAPS.dxf.bytes / MB })}</span>{" "}
             {tu("for_everyone", { n: UPLOAD_BATCH })}
           </p>
         </div>
@@ -486,7 +476,7 @@ function Uploader({ base }: { base: string }) {
           accept={ACCEPT}
           className="sr-only"
           tabIndex={-1}
-          aria-label="Drawing file"
+          aria-label={tu("up_file_aria")}
           data-upload-input
           onChange={(e) => {
             take(e.currentTarget.files)
@@ -502,36 +492,25 @@ function Uploader({ base }: { base: string }) {
         <KeyRoundIcon className="size-3.5 shrink-0" aria-hidden />
         {hasPresenter ? (
           <>
-            <p className="flex-1">
-              Presenter access is on: model-estimate uploads of PNG and JPG{" "}
-              <span className="num">≤ {UPLOAD_CAPS.image.bytes / MB} MB</span>{" "}
-              and PDF{" "}
-              <span className="num">≤ {UPLOAD_CAPS.pdf.bytes / MB} MB</span> can
-              be uploaded.
-            </p>
+            <p className="flex-1">{tu("up_presenter_on", { image: UPLOAD_CAPS.image.bytes / MB })}</p>
             <Button
               variant="ghost"
               onClick={() => {
                 presenter.clear()
               }}
             >
-              Turn off
+              {tu("up_turn_off")}
             </Button>
           </>
         ) : (
-          <p className="flex-1">
-            PNG, JPG and PDF: needs CAD data. Image-only drawings are a model
-            estimate and are not open yet.
-          </p>
+          <p className="flex-1">{tu("up_raster")}</p>
         )}
       </div>
 
       {rejection.length ? (
         <Alert variant="destructive" data-upload-rejected>
           <TriangleAlertIcon />
-          <AlertTitle>
-            {all(rejection)}
-          </AlertTitle>
+          <AlertTitle>{tn("up_rejected", rejectedCount(rejection))}</AlertTitle>
           <AlertDescription className="min-w-0 [overflow-wrap:anywhere]">
             <ul className="flex flex-col gap-1">
               {rejection.map((r, i) => (

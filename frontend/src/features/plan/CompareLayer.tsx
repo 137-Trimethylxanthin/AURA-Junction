@@ -2,6 +2,7 @@ import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
 import { ChevronsLeftRightIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore, useAppStoreShallow } from '@/store'
+import { useUi } from '@/i18n/uiLang'
 import { pctPoint, swipeSplit, type StageRef } from './shared'
 
 const clampSplit = (v: number) => Math.min(98, Math.max(2, v))
@@ -10,6 +11,7 @@ const clampSplit = (v: number) => Math.min(98, Math.max(2, v))
 
 /** Original drawing over the rebuilt one: a swipe divider (default) or a multiply blend. */
 export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
+  const { tu } = useUi()
   const src = useAppStore((s) => s.session.drawing.images.original)
   const { on, mode, opacity } = useAppStoreShallow((s) => s.ui.compare)
   const imgRef = useRef<HTMLImageElement>(null)
@@ -67,7 +69,7 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
       <img
         ref={imgRef}
         src={src}
-        alt="Original drawing from the dataset, overlaid on the rebuilt plan"
+        alt={tu('cmp_alt')}
         draggable={false}
         className={cn(
           'pointer-events-none absolute inset-0 size-full bg-card object-fill select-none',
@@ -84,12 +86,12 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
           ref={divRef}
           role="slider"
           tabIndex={0}
-          aria-label="Compare: drag to move the divider between the original and the rebuilt drawing"
+          aria-label={tu('cmp_divider')}
           aria-orientation="horizontal"
           aria-valuemin={2}
           aria-valuemax={98}
           aria-valuenow={Math.round(swipeSplit.current)}
-          aria-valuetext={`${Math.round(swipeSplit.current)} % original`}
+          aria-valuetext={tu('cmp_pct', { n: Math.round(swipeSplit.current) })}
           onPointerDown={onDown}
           onPointerMove={onMove}
           onPointerUp={onUp}
@@ -120,10 +122,10 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
         // Side labels in the stage's bottom corners: the drawing's margin, clear of evidence and marks.
         <>
           <span className="pointer-events-none absolute bottom-2 left-2 z-30 rounded-sm bg-foreground px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-background">
-            ← Original
+            {tu('cmp_original')}
           </span>
           <span className="pointer-events-none absolute right-2 bottom-2 z-30 rounded-sm border border-foreground bg-background px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-foreground">
-            Rebuilt from CAD →
+            {tu('cmp_rebuilt')}
           </span>
         </>
       ) : null}

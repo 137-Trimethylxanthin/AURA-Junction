@@ -206,7 +206,8 @@ test('a server refusal is reported and nothing is stored', async ({ page }) => {
   })
   await page.goto('/app')
   await uploadInput(page).setInputFiles(dxf())
-  await expect(page.getByText('Too many uploads from here')).toBeVisible()
+  // The server says which limit was hit; its words are shown.
+  await expect(page.getByText('Slow down')).toBeVisible()
   await expect(page.locator('li[data-upload]')).toHaveCount(0)
   expect(await page.evaluate(() => localStorage.getItem('aura.uploads'))).toBeNull()
 })

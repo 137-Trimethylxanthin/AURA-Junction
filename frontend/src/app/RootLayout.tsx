@@ -10,6 +10,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Toaster } from "@/components/ui/sonner"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { presenter } from "@/api/library"
+import { tu } from "@/i18n/uiLang"
 
 /**
  * A `#presenter=<token>` link (or the older `?presenter=`) stores the presenter token in this browser (never in
@@ -29,7 +30,7 @@ function usePresenterLink() {
     params.delete("presenter")
     if (token.trim()) {
       presenter.set(token.trim().slice(0, 512))
-      toast.success("Presenter access is on in this browser.")
+      toast.success(tu("presenter_on"))
     }
     const rest = params.toString()
     void navigate(

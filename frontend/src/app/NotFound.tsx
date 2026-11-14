@@ -12,9 +12,11 @@ import {
 import { SiteHeader } from "@/components/shell/SiteHeader"
 import { useTitle } from "@/hooks/use-title"
 import { BUNDLED_DRAWING_ID } from "@/data/ids"
+import { useUi } from "@/i18n/uiLang"
 
 export default function NotFound() {
-  useTitle("Page not found")
+  const { tu } = useUi()
+  useTitle(tu("nf_title"))
   return (
     <div className="flex min-h-dvh flex-col bg-background">
       <SiteHeader />
@@ -25,20 +27,19 @@ export default function NotFound() {
               <MapPinOffIcon />
             </EmptyMedia>
             <EmptyTitle>
-              <h1>Page not found</h1>
+              <h1>{tu("nf_title")}</h1>
             </EmptyTitle>
             <EmptyDescription>
-              There is nothing at this address. The drawing list and the sample
-              drawing are one click away.
+              {tu("nf_desc")}
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent className="flex-row justify-center gap-2">
             <Button asChild>
-              <Link to="/app">All drawings</Link>
+              <Link to="/app">{tu("all_drawings")}</Link>
             </Button>
             <Button variant="outline" asChild>
               <Link to={`/d/${BUNDLED_DRAWING_ID}`}>
-                Open the sample drawing
+                {tu("open_sample")}
               </Link>
             </Button>
           </EmptyContent>
