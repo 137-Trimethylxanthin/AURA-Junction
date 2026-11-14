@@ -58,6 +58,15 @@ export function toChatEvent(event: string, data: unknown): ChatEvent | null {
     case 'turn':
       if (!isObj(data) || typeof data.conversation_id !== 'string' || typeof data.turn_id !== 'string') throw bad()
       return { event, data: data as never }
+    case 'progress':
+      if (
+        !isObj(data) ||
+        typeof data.queue_position !== 'number' ||
+        !Number.isFinite(data.queue_position) ||
+        data.queue_position < 0
+      )
+        throw bad()
+      return { event, data: { queue_position: data.queue_position } }
     case 'understood':
       if (!isObj(data) || typeof data.canonical_en !== 'string') throw bad()
       return { event, data: data as never }

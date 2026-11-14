@@ -1,6 +1,9 @@
 import { useUi } from "@/i18n/uiLang"
 import { Suspense, lazy, useMemo } from "react"
 import { BlocksIcon, SquarePenIcon } from "lucide-react"
+import { toast } from "sonner"
+import type { ProjectBundle } from "@/api/client"
+import { displayDrawingTitle } from "@/api/library"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { actions, selectActiveTurn, selectDrawing, useAppStore } from "@/store"
@@ -15,17 +18,42 @@ const PluginsSheet = lazy(() =>
 import { callsText, fmtUsd, roundCost } from "./view"
 import { BudgetMeter } from "@/features/budget/BudgetMeter"
 
+const CHAT_TOASTER = "chat"
+const NEW_CHAT_UNDO_TOAST = "new-chat-undo"
+
 export function DrawingTitle() {
   const d = useAppStore(selectDrawing)
+  const activeProject = useAppStore(
+    (s) =>
+      (s as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
+      (s.session as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
+      null,
+  )
+  const floorLabel = useMemo(() => {
+    const fromProject = activeProject?.floors.find((f) => f.drawing_id === d.id)?.label
+    if (fromProject) return fromProject
+    const raw = (d as unknown as { floor_label?: string }).floor_label
+    return typeof raw === "string" && raw.trim() ? raw.trim() : null
+  }, [activeProject, d])
+  const titleText = activeProject ? activeProject.title || displayDrawingTitle(d) : displayDrawingTitle(d)
+
   return (
-    <span className="flex min-w-0 items-baseline gap-2">
-      <span className="truncate font-medium text-foreground">{d.title}</span>
+    <h1 className="m-0 flex min-w-0 items-baseline gap-2 text-sm font-normal">
+      <span className="truncate font-medium text-foreground">{titleText}</span>
+      {floorLabel ? (
+        <span
+          data-header-floor
+          className="num shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground"
+        >
+          {floorLabel}
+        </span>
+      ) : null}
       {d.subtitle ? (
         <span className="num hidden truncate text-xs text-muted-foreground sm:inline">
           {d.subtitle}
         </span>
       ) : null}
-    </span>
+    </h1>
   )
 }
 
@@ -81,14 +109,25 @@ export function HeaderActions() {
           <Button
             variant="ghost"
             size="icon"
-            aria-label="New conversation"
+            aria-label={tu("new_chat")}
             disabled={!hasTurns}
-            onClick={() => actions().newConversation()}
+            onClick={() => {
+              const restore = actions().newConversation()
+              toast(tu("new_chat_cleared"), {
+                id: NEW_CHAT_UNDO_TOAST,
+                toasterId: CHAT_TOASTER,
+                duration: 6000,
+                action: {
+                  label: tu("undo"),
+                  onClick: () => restore(),
+                },
+              })
+            }}
           >
             <SquarePenIcon />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>New conversation</TooltipContent>
+        <TooltipContent>{tu("new_chat")}</TooltipContent>
       </Tooltip>
       <BudgetMeter />
       <SessionButton />

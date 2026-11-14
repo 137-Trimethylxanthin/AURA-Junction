@@ -249,6 +249,58 @@ describe('answer.ts', () => {
     const r = ask({ drawing_id: 'swiss-46639', question: 'What is the fire rating of the entrance door?' })
     expect(deriveAnswer(r, emptyToggles())).toMatchObject({ kind: 'abstain', value: null, gold: { state: 'none' } })
   })
+
+  it('1.2 AnswerNote derives numeric value and gold state when number is present, and null when prose-only', () => {
+    const base = ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+    const proseOnly = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      answer: { kind: 'note' as const, value: 'Stair S1 leads from EG entrance lobby up to 1. OG corridor.' },
+      gold: { dataset_qid: 'q-99', value: 1, tolerance: 'exact' as const, match: true },
+    }
+    expect(deriveAnswer(proseOnly, emptyToggles())).toMatchObject({ kind: 'note', value: null, original: null, gold: { state: 'none' } })
+
+    const numericNote = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      answer: { kind: 'note' as const, value: 'Narrowest doorway is 0.80 m', number: 0.8, unit: 'm' },
+      gold: { dataset_qid: 'q-100', value: 0.8, tolerance: 'exact' as const, match: true },
+    }
+    expect(deriveAnswer(numericNote, emptyToggles())).toMatchObject({
+      kind: 'note',
+      value: 0.8,
+      original: 0.8,
+      gold: { state: 'match', dataset: 0.8 },
+    })
+  })
+
+  it('1.2 agent_estimate room and apartment counts over boxes update on box rejection without evidence.rooms', () => {
+    const base = ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+    const boxes = base.evidence.boxes.slice(0, 3).map((b, i) => ({ ...b, id: `apt-${i + 1}`, subject: 'apartment' as const }))
+    const agentAptCount = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      answer: { kind: 'count' as const, value: 3, subject: 'apartment' as const },
+      evidence: { boxes, rooms: [] },
+      gold: undefined,
+    }
+    const tog = emptyToggles()
+    tog.rejected['apt-2'] = true
+    expect(deriveAnswer(agentAptCount, tog, bundledDrawing).value).toBe(2)
+
+    const roomBoxes = boxes.map((b, i) => ({ ...b, id: `rm-${i + 1}`, subject: 'room' as const }))
+    const agentRoomCount = {
+      ...agentAptCount,
+      answer: { kind: 'count' as const, value: 3, subject: 'room' as const },
+      evidence: { boxes: roomBoxes, rooms: [] },
+    }
+    const roomTog = emptyToggles()
+    roomTog.rejected['rm-1'] = true
+    expect(deriveAnswer(agentRoomCount, roomTog, bundledDrawing).value).toBe(2)
+  })
 })
 
 describe('i18n', () => {

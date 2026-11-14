@@ -76,9 +76,17 @@ export function deriveAnswer(resp: AskResponse, t: Toggles, drawing?: Drawing): 
     else if (answer.subject === 'apartment') {
       if (drawing && evidence.rooms.length > 0) {
         const unitOf = new Map(drawing.rooms.map((r) => [r.room_id, r.unit]))
-        value = new Set(includedRooms.map((r) => unitOf.get(r.room_id)).filter(Boolean)).size
+        const units = new Set(
+          includedRooms
+            .map((r) => unitOf.get(r.room_id) ?? (r as { group_id?: string }).group_id)
+            .filter(Boolean),
+        )
+        value = units.size > 0 || includedRooms.length === 0 ? units.size : answer.value
+      } else if (evidence.boxes.length > 0) {
+        value = counted.length
       } else value = answer.value
-    } else value = counted.length
+    } else if (evidence.boxes.length > 0) value = counted.length
+    else value = answer.value
   } else if (answer.kind === 'quantity') {
     // Measured quantities (IFC) are shown as given; nothing here can recompute them.
     original = answer.value

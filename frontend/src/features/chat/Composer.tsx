@@ -5,33 +5,50 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react"
-import { ArrowUpIcon, CrosshairIcon, MicIcon, SparklesIcon, XIcon } from "lucide-react"
+import { ArrowUpIcon, CrosshairIcon, LayersIcon, MicIcon, SparklesIcon, TerminalIcon, XIcon } from "lucide-react"
+import { toast } from "sonner"
+import type { Lang, Scope } from "@/api/contract"
+import type { ProjectBundle } from "@/api/client"
 import { Button } from "@/components/ui/button"
-import { LOCALE } from "@/lib/format"
+import { LOCALE, fmtCount } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import {
   actions,
+  appStore,
+  selectActiveTurn,
   selectAttachedMark,
+  selectDrawing,
   selectIsPending,
   selectSessionLang,
   useAppStore,
 } from "@/store"
+import { downloadText, evidenceCsv } from "@/features/plugins/csv"
 import { speechSupported, useSpeech } from "@/features/voice/useSpeech"
 import { RewriteCard } from "@/features/rewrite/RewriteCard"
 import { needsTidy, splitLocally } from "@/features/rewrite/heuristic"
 import { canRewriteWithModel, useRewrite } from "@/features/rewrite/state"
 import { t } from "@/i18n/strings"
-import { PROMPT_BLOCKS, fillBlock, useDraft } from "./draft"
-import { markLabel } from "@/features/plan/MarkTool"
+import { promptBlocksFor, fillBlock, useDraft } from "./draft"
+import { markLabel } from "@/features/plan/shared"
 import type { UiKey } from "@/i18n/strings"
 
 const PB_LABEL: Record<string, UiKey> = { Count: "pb_count", Area: "pb_area", "Where is": "pb_where", Check: "pb_check", List: "pb_list" }
 import { ScrollRow } from "./ScrollRow"
 import { SuggestionList } from "./Suggestions"
-import { LANG_NAME_EN } from "./view"
+import {
+  LANG_NAME_EN,
+  filterSlashCommands,
+  resolveSlashCommand,
+  type ParsedSlashAction,
+  type SlashCommandSpec,
+} from "./view"
+
+const CHAT_TOASTER = "chat"
+const NEW_CHAT_UNDO_TOAST = "new-chat-undo"
 
 /** Loaded the first time the microphone is used. */
 const VoiceCard = lazy(() =>
@@ -41,12 +58,11 @@ const VoiceCard = lazy(() =>
 const MAX_LINES = 4
 const LINE_PX = 20
 
-function isTyping(el: Element | null) {
-  return (
-    el instanceof HTMLElement &&
-    (el.isContentEditable ||
-      ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))
-  )
+const ALL_FLOORS_LABEL: Record<Lang, (n: string) => string> = {
+  en: (n) => `All ${n} floors`,
+  fr: (n) => `Les ${n} niveaux`,
+  fi: (n) => `Kaikki ${n} kerrosta`,
+  de: (n) => `Alle ${n} Geschosse`,
 }
 
 /** The server's question limit (AskRequest.question max_length); the textarea stops there. */
@@ -56,26 +72,49 @@ export function Composer() {
   const text = useDraft((s) => s.text)
   const focusTick = useDraft((s) => s.focusTick)
   const pending = useAppStore(selectIsPending)
+  const drawing = useAppStore(selectDrawing)
+  const activeProject = useAppStore(
+    (s) =>
+      (s as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
+      (s.session as unknown as { activeProject?: ProjectBundle | null }).activeProject ??
+      null,
+  )
+  const crossPlanScope = useAppStore(
+    (s) =>
+      (s as unknown as { crossPlanScope?: boolean }).crossPlanScope ??
+      (s.ui as unknown as { crossPlanScope?: boolean }).crossPlanScope ??
+      false,
+  )
   const hintId = useId()
-  const { tu } = useUi()
+  const slashMenuId = useId()
+  const { lang: uiLang, tu } = useUi()
   const mark = useAppStore(selectAttachedMark)
   const hasTurns = useAppStore((s) => s.turns.length > 0)
   const lang = useAppStore(selectSessionLang)
+  const promptBlocks = useMemo(() => promptBlocksFor(drawing), [drawing])
   const ta = useRef<HTMLTextAreaElement>(null)
   const [voiceOpen, setVoiceOpen] = useState(false)
   const [canSpeak] = useState(speechSupported)
+  const [slashIndex, setSlashIndex] = useState(0)
+  const [dismissedSlashText, setDismissedSlashText] = useState<string | null>(null)
   const speech = useSpeech(LOCALE[lang])
   const rewriteOpen = useRewrite((s) => s.status !== "idle")
   // Re-evaluated when the source changes (the model rewrite needs the API).
   const sourceKind = useAppStore((s) => s.session.source.kind)
   const withModel = sourceKind === "api" && canRewriteWithModel()
   /** What tidy-up can honestly do for this text: the model (any text), or a local split (clear joins only). */
-  const tidyAvailable = (s: string) => s.trim().length >= 12 && (withModel || splitLocally(s).length >= 2)
+  const tidyAvailable = (s: string) =>
+    !s.trimStart().startsWith("/") && s.trim().length >= 12 && (withModel || splitLocally(s).length >= 2)
   const suggestTidy = !rewriteOpen && tidyAvailable(text) && needsTidy(text)
   const startTidy = (s: string) => {
     useDraft.getState().setText("")
     void useRewrite.getState().start(s)
   }
+
+  const slashMatches = useMemo(() => filterSlashCommands(text), [text])
+  const slashOpen = slashMatches.length > 0 && dismissedSlashText !== text
+  const safeSlashIndex = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0
+  const activeSlashCmd: SlashCommandSpec | undefined = slashOpen ? slashMatches[safeSlashIndex] : undefined
 
   // Auto-grow up to MAX_LINES.
   useLayoutEffect(() => {
@@ -96,31 +135,135 @@ export function Composer() {
     else el.setSelectionRange(el.value.length, el.value.length)
   }, [focusTick])
 
-  // "/" focuses the composer from anywhere outside a text field.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (
-        e.key !== "/" ||
-        e.ctrlKey ||
-        e.metaKey ||
-        e.altKey ||
-        isTyping(document.activeElement)
-      )
-        return
-      e.preventDefault()
-      ta.current?.focus()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [])
+  const setCrossPlanScopeSafe = (on: boolean) => {
+    const act = actions() as unknown as { setCrossPlanScope?: (on: boolean) => void }
+    act.setCrossPlanScope?.(on)
+  }
 
-  const send = () => {
-    const q = text.trim()
+  const submitQuestion = (questionText: string) => {
+    const q = questionText.trim()
     if (!q || pending) return
     useDraft.getState().setText("")
-    void actions().ask(q)
+    setDismissedSlashText(null)
+    if (!mark && crossPlanScope && activeProject && activeProject.floors.length >= 2) {
+      const projectScope = {
+        kind: "project",
+        project_id: activeProject.id,
+        drawing_ids: activeProject.floors.map((f) => f.drawing_id),
+      } as unknown as Scope
+      void actions().ask(q, { scope: projectScope })
+    } else {
+      void actions().ask(q)
+    }
     ta.current?.focus()
   }
+
+  const executeSlashAction = (action: ParsedSlashAction) => {
+    if (action.kind === "invalid") {
+      toast(action.message, { toasterId: CHAT_TOASTER })
+      ta.current?.focus()
+      return
+    }
+    if (action.kind === "prompt") {
+      if (pending) return
+      submitQuestion(action.prompt)
+      return
+    }
+    useDraft.getState().setText("")
+    setDismissedSlashText(null)
+    const st = appStore.getState()
+    switch (action.id) {
+      case "clear": {
+        if (st.turns.length > 0) {
+          const restore = actions().newConversation()
+          toast(tu("new_chat_cleared"), {
+            id: NEW_CHAT_UNDO_TOAST,
+            toasterId: CHAT_TOASTER,
+            duration: 6000,
+            action: {
+              label: tu("undo"),
+              onClick: () => restore(),
+            },
+          })
+        }
+        break
+      }
+      case "export": {
+        const activeTurn = selectActiveTurn(st)
+        if (activeTurn?.response) {
+          downloadText(
+            `aura-${drawing.id}-${activeTurn.id}-evidence.csv`,
+            evidenceCsv(activeTurn.response, activeTurn.toggles, drawing),
+          )
+        } else {
+          toast(tu("pl_csv_empty"), { toasterId: CHAT_TOASTER })
+        }
+        break
+      }
+      case "trace":
+        actions().setTraceOpen(!st.ui.traceOpen)
+        break
+      case "compare":
+        if (drawing.images.original) {
+          actions().setCompare({ on: !st.ui.compare.on })
+        } else {
+          toast("No separate original image on this drawing.", { toasterId: CHAT_TOASTER })
+        }
+        break
+      case "all-floors":
+        if (activeProject && activeProject.floors.length >= 2) {
+          setCrossPlanScopeSafe(!crossPlanScope)
+        } else {
+          toast("Open or bundle a multi-floor project in the library first.", { toasterId: CHAT_TOASTER })
+        }
+        break
+      case "fit":
+        actions().resetZoom()
+        break
+      case "zoom":
+        actions().setZoom(action.zoom)
+        break
+      case "select":
+      case "mark":
+      case "whatif":
+        actions().setTool(action.id)
+        break
+      case "undo":
+        actions().undo()
+        break
+      case "help":
+        actions().setShortcutsOpen(true)
+        break
+    }
+    ta.current?.focus()
+  }
+
+  const pickSlashSpec = (spec: SlashCommandSpec) => {
+    if (spec.id === "zoom" && !/^\/zoom\s+\S+/i.test(text.trim())) {
+      useDraft.getState().fill("/zoom ")
+      setDismissedSlashText(null)
+      return
+    }
+    const resolved = resolveSlashCommand(spec.cmd, { hasTurns })
+    if (resolved) executeSlashAction(resolved)
+  }
+
+  const send = () => {
+    const exact = resolveSlashCommand(text, { hasTurns })
+    if (exact) {
+      executeSlashAction(exact)
+      return
+    }
+    if (slashOpen && activeSlashCmd) {
+      pickSlashSpec(activeSlashCmd)
+      return
+    }
+    submitQuestion(text)
+  }
+
+  const resolvedDraftSlash = resolveSlashCommand(text, { hasTurns })
+  const canSend =
+    Boolean(text.trim()) && (!pending || resolvedDraftSlash?.kind === "client")
 
   const openVoice = () => {
     setVoiceOpen(true)
@@ -154,6 +297,48 @@ export function Composer() {
         </Suspense>
       ) : null}
 
+      {slashOpen ? (
+        <ul
+          id={slashMenuId}
+          role="listbox"
+          aria-label="Slash commands"
+          data-slash-menu
+          className="flex max-h-56 flex-col gap-0.5 overflow-y-auto rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-md"
+        >
+          {slashMatches.map((spec, idx) => {
+            const activeOpt = idx === safeSlashIndex
+            return (
+              <li
+                key={spec.id}
+                id={`${slashMenuId}-${spec.id}`}
+                role="option"
+                aria-selected={activeOpt}
+                data-slash-cmd={spec.id}
+                onMouseDown={(e) => {
+                  // Keep textarea focus when clicking an option.
+                  e.preventDefault()
+                  pickSlashSpec(spec)
+                }}
+                onPointerEnter={(e) => {
+                  if (e.pointerType === "mouse") setSlashIndex(idx)
+                }}
+                className={cn(
+                  "flex min-h-10 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors",
+                  activeOpt ? "bg-muted text-foreground" : "text-foreground hover:bg-muted/70",
+                )}
+              >
+                <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                <span className="num shrink-0 font-semibold text-foreground">
+                  {spec.cmd}
+                  {spec.argHint ? <span className="ml-1 font-normal text-muted-foreground">{spec.argHint}</span> : null}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{spec.description}</span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
+
       {suggestTidy ? (
         // Suggested by the local heuristic (several questions, long or rambling text): never a model call to decide.
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -183,11 +368,32 @@ export function Composer() {
             </Button>
           </span>
         </div>
+      ) : crossPlanScope && activeProject && activeProject.floors.length >= 2 ? (
+        <div className="flex">
+          <span
+            data-project-scope-chip={activeProject.id}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-info-surface py-0 pr-0 pl-2.5 text-sm font-medium text-info"
+          >
+            <LayersIcon className="size-3.5" aria-hidden />
+            <span className="num">
+              {ALL_FLOORS_LABEL[uiLang](fmtCount(activeProject.floors.length, uiLang))}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-info hover:bg-info/10 hover:text-info"
+              aria-label={`${ALL_FLOORS_LABEL[uiLang](fmtCount(activeProject.floors.length, uiLang))} — single floor`}
+              onClick={() => setCrossPlanScopeSafe(false)}
+            >
+              <XIcon />
+            </Button>
+          </span>
+        </div>
       ) : null}
 
       <div
         className={cn(
-          "flex items-end gap-1.5 rounded-xl border border-input/60 bg-background p-1.5 transition-shadow",
+          "flex items-end gap-1.5 rounded-xl border border-input bg-background p-1.5 transition-shadow",
           "focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30"
         )}
       >
@@ -195,8 +401,48 @@ export function Composer() {
           ref={ta}
           rows={1}
           value={text}
-          onChange={(e) => useDraft.getState().setText(e.target.value)}
+          onChange={(e) => {
+            setSlashIndex(0)
+            setDismissedSlashText(null)
+            useDraft.getState().setText(e.target.value)
+          }}
           onKeyDown={(e) => {
+            if (slashOpen) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault()
+                setSlashIndex((i) => (i + 1) % slashMatches.length)
+                return
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault()
+                setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length)
+                return
+              }
+              if (e.key === "Escape") {
+                e.preventDefault()
+                e.stopPropagation()
+                setDismissedSlashText(text)
+                return
+              }
+              if (
+                e.key === "Tab" &&
+                !e.shiftKey &&
+                !e.ctrlKey &&
+                !e.metaKey &&
+                !e.altKey &&
+                activeSlashCmd
+              ) {
+                e.preventDefault()
+                const nextFill = activeSlashCmd.acceptsArgs ? `${activeSlashCmd.cmd} ` : activeSlashCmd.cmd
+                if (text === nextFill && !activeSlashCmd.acceptsArgs) {
+                  pickSlashSpec(activeSlashCmd)
+                } else {
+                  useDraft.getState().fill(nextFill)
+                  setDismissedSlashText(null)
+                }
+                return
+              }
+            }
             if (
               e.key === "Enter" &&
               !e.shiftKey &&
@@ -208,6 +454,8 @@ export function Composer() {
           }}
           placeholder={tu('ask_placeholder')}
           aria-label={tu('ask_label')}
+          aria-controls={slashOpen ? slashMenuId : undefined}
+          aria-activedescendant={slashOpen && activeSlashCmd ? `${slashMenuId}-${activeSlashCmd.id}` : undefined}
           maxLength={MAX_QUESTION}
           aria-describedby={hintId}
           aria-keyshortcuts="/"
@@ -245,7 +493,7 @@ export function Composer() {
           size="icon"
           aria-label={tu('send')}
           title={tu('send_hint')}
-          disabled={!text.trim() || pending}
+          disabled={!canSend}
           onClick={send}
         >
           <ArrowUpIcon />
@@ -264,7 +512,7 @@ export function Composer() {
 
       <ScrollRow label={tu("pb_row")}>
         <ul aria-label="Prompt blocks" className="flex shrink-0 gap-1.5">
-          {PROMPT_BLOCKS.map((b) => (
+          {promptBlocks.map((b) => (
             <li key={b.label}>
               <button
                 type="button"

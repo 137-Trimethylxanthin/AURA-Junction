@@ -1,5 +1,17 @@
-import { ApiError, TransportError, getDrawing, getDrawingStatus, getHealth, postAsk, type FetchLike } from './client'
-import type { AskRequest, AskResponse, ChatEvent, Drawing, DrawingStatusBody, Lang, Override, Scope } from './contract'
+import {
+  ApiError,
+  TransportError,
+  deleteProject,
+  getDrawing,
+  getDrawingStatus,
+  getHealth,
+  listProjects,
+  postAsk,
+  saveProject,
+  type FetchLike,
+  type ProjectBundle,
+} from './client'
+import type { AnswererMode, AskRequest, AskResponse, ChatEvent, Drawing, DrawingStatusBody, Lang, Override, Scope } from './contract'
 import { ChatUnavailable, getConversation, streamChat } from './stream'
 import type { Conversation } from './contract'
 import { safeUrl } from './contract'
@@ -14,6 +26,10 @@ export interface SourceStatus {
   state: SourceState
   /** Why the session is local although an API URL is configured. */
   reason?: 'no_api_url' | 'health_failed' | 'fell_back'
+  /** Server answerer mode (`exact`, `hybrid`, or `agent`) from GET /health (1.2). */
+  answerer?: AnswererMode
+  /** Whether the agent sidecar was reachable when GET /health ran (1.2). */
+  agentOk?: boolean
 }
 
 export interface AskResult {
@@ -43,6 +59,12 @@ export interface Source {
   chat(req: ChatTurnRequest, onEvent: (e: ChatEvent) => void, signal?: AbortSignal): Promise<AskResult>
   /** GET /conversations/:id (API only; null when unknown or local). */
   conversation(id: string): Promise<Conversation | null>
+  /** GET /projects (1.2; empty array when local or unconfigured). */
+  projects?(): Promise<ProjectBundle[]>
+  /** POST /projects (1.2; API only). */
+  saveProject?(bundle: ProjectBundle): Promise<ProjectBundle>
+  /** DELETE /projects/:id (1.2; API only). */
+  deleteProject?(id: string): Promise<void>
 }
 
 export interface ChatTurnRequest {
@@ -96,7 +118,13 @@ export function createSource(opts: SourceOptions = {}): Source {
     set({ kind: status.kind, state: 'waking' })
     probing = getHealth({ baseUrl, fetch: opts.fetch }, healthTimeoutMs)
       .then(
-        () => ({ kind: 'api', state: 'ready' }) as SourceStatus,
+        (h) =>
+          ({
+            kind: 'api',
+            state: 'ready',
+            ...(h.answerer !== undefined ? { answerer: h.answerer } : {}),
+            ...(h.agent_ok !== undefined ? { agentOk: h.agent_ok } : {}),
+          }) as SourceStatus,
         () => ({ kind: 'local', state: 'ready', reason: 'health_failed' }) as SourceStatus,
       )
       .then((s) => {
@@ -147,6 +175,26 @@ export function createSource(opts: SourceOptions = {}): Source {
       await init()
       if (status.kind !== 'api' || !baseUrl) return null
       return getConversation({ baseUrl, fetch: opts.fetch }, id)
+    },
+    async projects() {
+      await init()
+      if (status.kind !== 'api' || !baseUrl) return []
+      try {
+        return await listProjects({ baseUrl, fetch: opts.fetch })
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return []
+        throw e
+      }
+    },
+    async saveProject(bundle) {
+      await init()
+      if (!baseUrl) throw new TransportError('No API configured', 'network')
+      return saveProject({ baseUrl, fetch: opts.fetch }, bundle)
+    },
+    async deleteProject(id) {
+      await init()
+      if (!baseUrl) throw new TransportError('No API configured', 'network')
+      await deleteProject({ baseUrl, fetch: opts.fetch }, id)
     },
     async chat(turn, onEvent, signal) {
       await init()
