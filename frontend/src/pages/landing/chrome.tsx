@@ -117,8 +117,9 @@ export function SiteFooter() {
               </span>
             </div>
             <p className="text-sm text-muted-foreground">
-              Automated Understanding of Rooms &amp; Areas. Built at Junction
-              2026 for the Stoa challenge “Make Blueprints Talk”.
+              Automated Understanding of Rooms &amp; Areas. Built by KuK
+              Hofclankerei at Junction 2026 for the Stoa challenge “Make
+              Blueprints Talk”.
             </p>
           </div>
           <nav

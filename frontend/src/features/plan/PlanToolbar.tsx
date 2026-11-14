@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { Toggle } from '@/components/ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { ZOOM_STEPS, actions, selectZoom, useAppStore, useAppStoreShallow, useSource, type Tool } from '@/store'
 
@@ -108,29 +109,39 @@ export function PlanToolbar() {
       <div className="ml-auto flex items-center gap-2">
         <SourceBadge />
         <div className="flex items-center rounded-lg border" role="group" aria-label="Zoom">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Zoom out"
-            disabled={zoomIndex <= 0}
-            onClick={() => actions().zoomOut()}
-            className="rounded-r-none"
-          >
-            <MinusIcon />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Zoom out"
+                disabled={zoomIndex <= 0}
+                onClick={() => actions().zoomOut()}
+                className="rounded-r-none"
+              >
+                <MinusIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Zoom out</TooltipContent>
+          </Tooltip>
           <span className="num w-12 text-center text-xs tabular-nums" aria-live="polite" aria-label={`Zoom ${zoom} percent`}>
             {zoom}%
           </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Zoom in"
-            disabled={zoomIndex >= ZOOM_STEPS.length - 1}
-            onClick={() => actions().zoomIn()}
-            className="rounded-l-none"
-          >
-            <PlusIcon />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Zoom in"
+                disabled={zoomIndex >= ZOOM_STEPS.length - 1}
+                onClick={() => actions().zoomIn()}
+                className="rounded-l-none"
+              >
+                <PlusIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Zoom in</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </div>

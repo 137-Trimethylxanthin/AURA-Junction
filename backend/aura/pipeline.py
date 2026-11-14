@@ -7,6 +7,7 @@ understood, (tool_call, tool_result)*, check?, answer | error. /ask collects it.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -18,7 +19,7 @@ from aura import tools
 from aura.budget import Budget, BudgetError
 from aura.cache import AnswerCache, CheckCache, answer_key
 from aura.config import Settings, models_enabled
-from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse
+from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse, ChatRequest
 from aura.gemini.check import check_key, default_anchors, run_check, slice_check
 from aura.gemini.client import GeminiClient, GeminiError
 from aura.gemini.understand import understand
@@ -80,14 +81,36 @@ def _tool_events(built: A.Built) -> list[tuple[str, dict]]:
     return out
 
 
+def context_from(turns: list[dict]) -> dict | None:
+    """Last subject, intent and scope of a conversation, for short follow-ups."""
+    for t in reversed(turns):
+        resp = t.get("response") or {}
+        ans = resp.get("answer") or {}
+        if ans.get("kind") in ("count", "area"):
+            return {"intent": ans["kind"], "subject": ans.get("subject"), "scope": resp.get("scope")}
+    return None
+
+
 async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller: Caller,
-                  stats: dict) -> A.Built:
+                  stats: dict, context: dict | None = None) -> A.Built:
     question = req.question.strip()
     r = route(question, d.ctx)
+    if context:
+        short = len(question.split()) <= 5
+        if r.intent == "unknown" and (r.scope or req.scope) and context["intent"] in ("count",
+                                                                                     "area"):
+            # "and in apartment B?" → the previous question, new scope
+            r.intent, r.subject = context["intent"], context.get("subject")
+            r.matched.append("follow-up")
+        elif r.intent in ("count", "area") and r.scope is None and short and context.get("scope"):
+            # "and doors?" → new subject, previous scope
+            r.scope = context["scope"] if context["scope"].get("kind") != "region" else None
+            r.matched.append("follow-up")
     lang = r.lang if r.lang_signal else (req.lang_hint or "en")
     overrides = [o.model_dump() for o in req.overrides or []]
     req_scope = req.scope.model_dump(exclude_none=True) if req.scope else None
-    intent, subject, text_scope, tag, conf = r.intent, r.subject, r.scope, "router", None
+    intent, subject, text_scope, conf = r.intent, r.subject, r.scope, None
+    tag = "router · follow-up" if "follow-up" in r.matched else "router"
 
     if intent == "unknown":
         if svc.models_usable():
@@ -157,6 +180,10 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
             return A.unclear(question, lang, d, scope, intent_tag=tag)
         return A.count(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf)
 
+    if not d.engine.supports("area"):
+        return A.abstain(question, lang, scope, "not_supported_yet", "What is the net floor area",
+                         "No rooms with areas are extracted from this drawing yet.",
+                         intent_tag=tag)
     tr = tools.room_areas(d, scope, overrides or None)
     if tr.kind == "none":
         return A.unclear(question, lang, d, scope, intent_tag=tag)
@@ -174,6 +201,9 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
     key = check_key(d.id, subject, ids)
     full = svc.checks.get(key, d.dir, subject)
     cached = full is not None
+    if full is None and d.image_path() is None and d.source == "upload":
+        stats["no_image"] = True
+        return None
     if full is None:
         image = d.image_path()
         if image is None or not svc.models_usable():
@@ -207,7 +237,7 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
 
 
 def _check_cost(stats: dict, cached: bool) -> dict:
-    return {"calls": stats["check_calls"], "cost_usd": round(stats["check_cost_usd"], 6),
+    return {"calls": stats["check_calls"], "cost_usd": round(stats["check_cost_usd"], 8),
             "tokens": stats["check_tokens"], "cached": cached}
 
 
@@ -233,7 +263,8 @@ def _check_node(check: dict, cached: bool, stats: dict, subject: str) -> dict:
             "evidence_ids": check["ranking"]}
 
 
-async def run(svc: Services, req: AskRequest, caller: Caller) -> AsyncIterator[tuple[str, dict]]:
+async def run(svc: Services, req: AskRequest, caller: Caller,
+              context: dict | None = None) -> AsyncIterator[tuple[str, dict]]:
     t0 = time.perf_counter()
     d = svc.registry.get(req.drawing_id)
     if d is None:
@@ -241,6 +272,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller) -> AsyncIterator[t
     scope_dump = req.scope.model_dump(exclude_none=True) if req.scope else None
     ov_dump = [o.model_dump() for o in req.overrides] if req.overrides else None
     key = answer_key(d.id, req.question, scope_dump, ov_dump, req.lang_hint, models_enabled())
+    if context:
+        key += json.dumps(context, sort_keys=True)
     hit = svc.answers.get(key)
     if hit is not None:
         body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
@@ -254,7 +287,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller) -> AsyncIterator[t
 
     stats = {"calls": 0, "cost_usd": 0.0, "route": "template", "check_calls": 0,
              "check_cost_usd": 0.0, "check_tokens": 0}
-    built = await _decide(svc, req, d, caller, stats)
+    built = await _decide(svc, req, d, caller, stats, context)
     yield "understood", {"detected_lang": built.body["detected_lang"],
                          "canonical_en": built.body["canonical_en"], "route": stats["route"]}
     for ev in _tool_events(built):
@@ -267,6 +300,15 @@ async def run(svc: Services, req: AskRequest, caller: Caller) -> AsyncIterator[t
         node = _check_node(check, stats["check_calls"] == 0, stats, built.subject or "")
         body["trace"] = [node if n["id"] == "check" else n for n in body["trace"]]
         yield "check", {"check": check}
+    elif stats.get("no_image"):
+        body["check"] = {"method": "decisions_api", "status": "sample", "image": "none"}
+        for n in body["trace"]:
+            if n["id"] == "check":
+                n.update(tag="no image",
+                         body="No independent image to check against: an uploaded DXF has only "
+                              "its own geometry, and checking our own rendering would be circular.")
+                n.pop("confidence", None)
+                n["kind"] = "info"
     elif stats.get("check_note"):
         for n in body["trace"]:
             if n["id"] == "check":
@@ -295,8 +337,6 @@ async def run(svc: Services, req: AskRequest, caller: Caller) -> AsyncIterator[t
 def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: dict) -> None:
     if svc.writer is None:
         return
-    import json
-
     now = time.time()
     svc.writer.submit(
         "INSERT INTO answers(id, t, day, drawing_id, question, route, method, calls, cost_usd, "
@@ -313,3 +353,73 @@ async def ask(svc: Services, req: AskRequest, caller: Caller) -> dict:
             return data["response"]
     raise PipelineError("internal", "The pipeline ended without an answer.", 500)
 
+
+
+async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
+                      deadline_s: float) -> AsyncIterator[tuple[str, dict]]:
+    """/chat: turn, understood, (tool_call, tool_result)*, check?, answer | error, done.
+
+    The pipeline runs in its own task so the turn deadline is exact; on timeout the task is
+    cancelled and the stream ends with error {code: 'timeout'} then done.
+    """
+    store, writer = svc.store, svc.writer
+    conv_id = body.conversation_id or "c-" + uuid.uuid4().hex[:20]
+    turn_id = "t-" + uuid.uuid4().hex[:16]
+    existing = store.conversation(conv_id) if store else None
+    now = time.time()
+    if writer is not None and existing is None:
+        await writer.execute("INSERT OR IGNORE INTO conversations(id, t, drawing_id) VALUES (?,?,?)",
+                             (conv_id, now, body.drawing_id))
+    yield "turn", {"conversation_id": conv_id, "turn_id": turn_id}
+
+    context = context_from(store.recent_turns(conv_id) if store and existing else [])
+    req = AskRequest(drawing_id=body.drawing_id, question=body.message, scope=body.scope,
+                     overrides=body.overrides, lang_hint=body.lang_hint)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def produce() -> None:
+        try:
+            async for item in run(svc, req, caller, context):
+                await queue.put(item)
+        except PipelineError as e:
+            await queue.put(("error", {"error": str(e), "code": e.code}))
+        except Exception:
+            log.exception("chat turn failed")
+            await queue.put(("error", {"error": "Internal error.", "code": "internal"}))
+        await queue.put(None)
+
+    task = asyncio.create_task(produce(), name=f"chat-{turn_id}")
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + deadline_s
+    response: dict | None = None
+    error: dict | None = None
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), max(0.0, deadline - loop.time()))
+            except TimeoutError:
+                task.cancel()
+                error = {"error": "The answer took too long.", "code": "timeout"}
+                yield "error", error
+                break
+            if item is None:
+                break
+            event, data = item
+            if event == "answer":
+                response = data["response"] | {"conversation_id": conv_id, "turn_id": turn_id}
+                data = {"response": response}
+            elif event == "error":
+                error = data
+            yield event, data
+    finally:
+        if not task.done():
+            task.cancel()
+        if writer is not None:
+            writer.submit(
+                "INSERT INTO turns(id, conversation_id, t, message, response, error) "
+                "VALUES (?,?,?,?,?,?)",
+                (turn_id, conv_id, time.time(), body.message,
+                 json.dumps(response, ensure_ascii=False) if response else None,
+                 json.dumps({"contract_version": AskResponse.model_fields["contract_version"].default,
+                             **error}) if error else None))
+    yield "done", {}

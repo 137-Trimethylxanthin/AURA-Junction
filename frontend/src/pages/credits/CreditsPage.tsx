@@ -97,9 +97,9 @@ export default function CreditsPage() {
 
         <ProseSection title="The team">
           <p>
-            Built by a team at the Junction 2026 hackathon for the Stoa
-            challenge “Make Blueprints Talk”. AURA is not affiliated with or
-            endorsed by Stoa. The code is open source under the{" "}
+            Built by KuK Hofclankerei at the Junction 2026 hackathon for the
+            Stoa challenge “Make Blueprints Talk”. AURA is not affiliated with
+            or endorsed by Stoa. The code is open source under the{" "}
             <a href={LICENSE_URL}>MIT licence</a>.
           </p>
         </ProseSection>

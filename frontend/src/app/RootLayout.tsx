@@ -1,12 +1,16 @@
-import { useEffect } from 'react'
-import { Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
-import { motion, useReducedMotion } from 'motion/react'
-import { toast } from 'sonner'
-import { Spinner } from '@/components/ui/spinner'
-import { Toaster } from '@/components/ui/sonner'
-import { TooltipProvider } from '@/components/ui/tooltip'
-import { useMediaQuery } from '@/hooks/use-media-query'
-import { presenter } from '@/api/library'
+import { useEffect } from "react"
+import {
+  Outlet,
+  ScrollRestoration,
+  useLocation,
+  useNavigate,
+} from "react-router"
+import { toast } from "sonner"
+import { Spinner } from "@/components/ui/spinner"
+import { Toaster } from "@/components/ui/sonner"
+import { TooltipProvider } from "@/components/ui/tooltip"
+import { useMediaQuery } from "@/hooks/use-media-query"
+import { presenter } from "@/api/library"
 
 /**
  * A `?presenter=<token>` link stores the presenter token in this browser (never in the bundle) and is then
@@ -17,45 +21,43 @@ function usePresenterLink() {
   const navigate = useNavigate()
   useEffect(() => {
     const params = new URLSearchParams(search)
-    const token = params.get('presenter')
+    const token = params.get("presenter")
     if (token === null) return
-    params.delete('presenter')
+    params.delete("presenter")
     if (token.trim()) {
       presenter.set(token.trim())
-      toast.success('Presenter access is on in this browser.')
+      toast.success("Presenter access is on in this browser.")
     }
     const rest = params.toString()
-    void navigate({ pathname, search: rest ? `?${rest}` : '', hash }, { replace: true })
+    void navigate(
+      { pathname, search: rest ? `?${rest}` : "", hash },
+      { replace: true }
+    )
   }, [pathname, search, hash, navigate])
 }
 
 /**
  * Each top-level section (landing, library, workspace, …) settles in with a short critically damped rise.
  * Entrance only: the old page is gone at once, so nothing ever blocks input. Reduced motion: a quick fade.
+ * (Styles: .page-enter in index.css.)
  */
 function PageTransition() {
   const section = useLocation().pathname.split('/')[1] ?? ''
-  const reduce = useReducedMotion()
+  // Entrance only, never gesture-driven, so a CSS animation is enough and keeps motion out of the entry chunk.
   return (
-    <motion.div
-      key={section}
-      className="min-h-dvh"
-      initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
-      animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
-      transition={reduce ? { duration: 0.12 } : { type: 'spring', bounce: 0, duration: 0.35 }}
-    >
+    <div key={section} className="page-enter min-h-dvh">
       <Outlet />
-    </motion.div>
+    </div>
   )
 }
 
 export function RootLayout() {
-  const narrow = useMediaQuery('(max-width: 899px)')
+  const narrow = useMediaQuery("(max-width: 899px)")
   usePresenterLink()
   return (
     <TooltipProvider delayDuration={400}>
       <PageTransition />
-      <Toaster position={narrow ? 'bottom-center' : 'bottom-right'} />
+      <Toaster position={narrow ? "bottom-center" : "bottom-right"} />
       <ScrollRestoration />
     </TooltipProvider>
   )
@@ -64,7 +66,10 @@ export function RootLayout() {
 /** Shown while the first route's code loads. */
 export function RootFallback() {
   return (
-    <div className="flex h-dvh items-center justify-center bg-background text-muted-foreground" aria-busy="true">
+    <div
+      className="flex h-dvh items-center justify-center bg-background text-muted-foreground"
+      aria-busy="true"
+    >
       <Spinner className="size-6" />
     </div>
   )

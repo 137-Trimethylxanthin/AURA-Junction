@@ -101,7 +101,9 @@ class BundleEngine:
     def supports(self, subject: str) -> bool:
         if subject in BOX_SUBJECTS:
             return subject in self.evidence
-        return True
+        if subject == "apartment":
+            return bool(self.unit_ids)
+        return bool(self.rooms)  # room counts and areas
 
     def capabilities(self) -> list[str]:
         caps = [s for s in BOX_SUBJECTS if s in self.evidence]
@@ -247,7 +249,9 @@ class SwissEngine:
         self.model = model
 
     def supports(self, subject: str) -> bool:
-        return subject in self.capabilities() or subject in ("room", "apartment")
+        if subject in ("room", "area"):
+            return bool(self.model.rooms)
+        return subject in self.capabilities() or subject == "apartment"
 
     def capabilities(self) -> list[str]:
         return list(self.swiss.capabilities(self.model))
@@ -313,15 +317,20 @@ class LoadedDrawing:
 class Registry:
     """Finds and caches drawings by id across the drawing dirs."""
 
-    def __init__(self, dirs: list[Path], extra: dict[str, LoadedDrawing] | None = None):
+    def __init__(self, dirs: list[Path], extra: dict[str, LoadedDrawing] | None = None,
+                 uploads_dir: Path | None = None):
         self.dirs = dirs
+        self.uploads_dir = uploads_dir  # looked up by id only, never listed
         self._cache: dict[str, LoadedDrawing] = dict(extra or {})
+
+    def evict(self, drawing_id: str) -> None:
+        self._cache.pop(drawing_id, None)
 
     def add(self, d: LoadedDrawing) -> None:
         self._cache[d.id] = d
 
     def ids(self) -> list[str]:
-        seen = list(self._cache)
+        seen = [k for k, v in self._cache.items() if v.source != "upload"]
         for base in self.dirs:
             index = base / "index.json"
             if index.is_file():  # the library order written by preprocess
@@ -340,7 +349,8 @@ class Registry:
             return self._cache[drawing_id]
         if not ID_RE.match(drawing_id):
             return None
-        for base in self.dirs:
+        bases = [*self.dirs, *([self.uploads_dir] if self.uploads_dir else [])]
+        for base in bases:
             p = base / drawing_id
             if (p / "drawing.json").is_file():
                 d = load_dir(p)
@@ -363,7 +373,8 @@ def load_dir(p: Path, drawing_id: str | None = None) -> LoadedDrawing:
     else:
         engine = BundleEngine(data)
     return LoadedDrawing(id=drawing_id or data.get("id") or p.name, dir=p, drawing=data,
-                         engine=engine, gold=list(gold), anchors=list(data.get("anchors") or []))
+                         engine=engine, gold=list(gold), anchors=list(data.get("anchors") or []),
+                         source=data.get("source", "library"))
 
 
 def load_file(path: Path, assets_dir: Path | None = None) -> LoadedDrawing:

@@ -123,6 +123,15 @@ class AskRequest(_Open):
     lang_hint: Lang | None = None
 
 
+class ChatRequest(_Open):
+    conversation_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    drawing_id: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=2000)
+    scope: Scope | None = None
+    overrides: list[Override] | None = Field(default=None, max_length=50)
+    lang_hint: Lang | None = None
+
+
 # ---- answer -----------------------------------------------------------------------------
 
 

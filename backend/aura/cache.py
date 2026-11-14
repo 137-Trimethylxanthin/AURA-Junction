@@ -57,10 +57,11 @@ class CheckCache:
                 self._mem[key] = v
                 return v
         if bundle_dir is not None and subject:
-            p = bundle_dir / "checks" / f"{subject}.json"
+            # Precomputed library checks: checks.json = {subject: run_check(...) result + "key"}.
+            p = bundle_dir / "checks.json"
             if p.is_file():
-                v = json.loads(p.read_text())
-                if v.get("key") in (None, key):
+                v = json.loads(p.read_text()).get(subject)
+                if v and v.get("key") == key:
                     self._mem[key] = v
                     return v
         return None

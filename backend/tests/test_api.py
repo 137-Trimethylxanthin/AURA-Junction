@@ -360,3 +360,33 @@ def test_allowed_origins_env_forms(monkeypatch, tmp_path, raw):
         r = c.options("/ask", headers={"origin": "http://b.test",
                                        "access-control-request-method": "POST"})
         assert r.headers.get("access-control-allow-origin") == "http://b.test"
+
+
+def test_precomputed_checks_json_is_used_at_zero_calls(tmp_path):
+    import json as _json
+    import shutil
+
+    from aura import tools
+    from aura.gemini.check import check_key
+    from tests.conftest import FRONTEND_DRAWING, SWISS_IMAGE
+
+    data = _json.loads(FRONTEND_DRAWING.read_text())
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    shutil.copy(SWISS_IMAGE, bundle / "original.png")
+    ids = [b["id"] for b in data["evidence"]["washbasin"]]
+    rec = _json.loads((GEMINI / "check_washbasin.json").read_text())["response"]["answers"]
+    full = {"subject": "washbasin", "key": check_key(SWISS, "washbasin", ids),
+            "per_box": {i: rec[f"b0{n + 1}"]["noul"] for n, i in enumerate(ids)},
+            "anchors": [0.08], "anchors_max": 0.08, "input_tokens": 4784, "cost_usd": 0.0004784}
+    (bundle / "checks.json").write_text(_json.dumps({"washbasin": full}))
+    d = tools.LoadedDrawing(id=SWISS, dir=bundle, drawing=data, engine=tools.BundleEngine(data))
+    fake = FakeTransport(tmp_path / "no-fixtures")
+    from aura.config import Settings
+    from aura.main import create_app
+
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild")
+    with TestClient(create_app(s, transport=fake, extra_drawings=[d])) as c:
+        b = ask(c, "How many washbasins are drawn on this floor plan?")
+        assert b["check"]["cached"] is True and b["check"]["calls"] == 0
+        assert b["check"]["total"] == 5 and fake.calls == []

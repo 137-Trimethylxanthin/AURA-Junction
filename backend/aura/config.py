@@ -6,12 +6,11 @@ environment on every call, so flipping it takes effect on the next request.
 
 from __future__ import annotations
 
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
-
-import json
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -81,6 +80,10 @@ class Settings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.data_dir / "aura.sqlite3"
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.data_dir / "uploads"
 
     @property
     def logs_dir(self) -> Path:

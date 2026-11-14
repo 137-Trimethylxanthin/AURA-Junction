@@ -203,11 +203,33 @@ const METHOD_FOOTER: Record<Method, StringKey> = {
 }
 
 /** Footer parts, built only from response fields, in the answer's language. */
+/** Requests and cost of the answer's model check (contract 1.1); empty when the response does not report them. */
+export function checkParts(resp: AskResponse, lang: Lang): string[] {
+  const c = resp.check
+  if (!c || (c.calls === undefined && c.cached === undefined)) return []
+  const label = `${t(lang, 'footer_check')}:`
+  if (c.cached || c.calls === 0) return [`${label} ${t(lang, 'check_cached')}`, fmtUsd(c.cost_usd ?? 0)]
+  const n = c.calls ?? 0
+  const pr = plural.get(lang) ?? new Intl.PluralRules(LOCALE[lang])
+  plural.set(lang, pr)
+  const parts = [`${label} ${t(lang, pr.select(n) === 'one' ? 'req_one' : 'req_other', { n: fmtCount(n, lang) })}`]
+  if (c.tokens) parts.push(t(lang, 'tokens', { n: fmtTokens(c.tokens, lang) }))
+  parts.push(fmtUsd(c.cost_usd ?? 0))
+  return parts
+}
+
+/** 13 612 → "13.6k" (en) / "13,6 k" style per locale. */
+function fmtTokens(n: number, lang: Lang): string {
+  if (n < 1000) return fmtCount(n, lang)
+  return `${new Intl.NumberFormat(LOCALE[lang], { maximumFractionDigits: 1 }).format(n / 1000)}k`
+}
+
 export function footerParts(resp: AskResponse, lang: Lang): string[] {
   return [
     `${t(lang, 'footer_answer')}: ${t(lang, METHOD_FOOTER[resp.method])}`,
     callsText(resp.calls, lang),
     fmtUsd(resp.cost_usd),
+    ...checkParts(resp, lang),
     `${fmtCount(resp.latency_ms, lang)} ms`,
     t(lang, resp.source === 'local' ? 'source_local' : 'source_api'),
   ]

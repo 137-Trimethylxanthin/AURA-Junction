@@ -273,6 +273,14 @@ export interface Check {
   total?: number
   /** Evidence id → probability 0–1. */
   per_box?: Record<string, number>
+  /** 1.1: Decisions requests made for THIS answer's check (1 live, 0 when served from the cache). */
+  calls?: number
+  /** 1.1: USD of those requests (0 when cached). */
+  cost_usd?: number
+  /** 1.1: input tokens of those requests (0 when cached). */
+  tokens?: number
+  /** 1.1: true when the check came from the cache (precomputed or an earlier answer). */
+  cached?: boolean
 }
 
 /** 1.1: the ranked check that can accompany an answer. */
@@ -540,6 +548,10 @@ function isCheck(v: unknown): boolean {
     optNum(v.agreed) &&
     optNum(v.total) &&
     (v.per_box === undefined || (isObj(v.per_box) && Object.values(v.per_box).every(isNum))) &&
+    optNum(v.calls) &&
+    optNum(v.cost_usd) &&
+    optNum(v.tokens) &&
+    (v.cached === undefined || typeof v.cached === 'boolean') &&
     (v.scope === undefined || v.scope === 'drawn_boxes') &&
     (v.ranking === undefined || (Array.isArray(v.ranking) && v.ranking.every(isStr))) &&
     optStr(v.least_certain_id) &&

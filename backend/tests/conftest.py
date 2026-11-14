@@ -31,7 +31,8 @@ CONFORMANCE = REPO / "frontend" / "src" / "api" / "conformance.fixtures.json"
 SWISS_IMAGE = REPO / "design" / "assets" / "original-crop.png"
 
 
-def make_app(tmp_path, *, transport=None, use_gemini=False, with_image=False, **settings):
+def make_app(tmp_path, *, transport=None, use_gemini=False, with_image=False, job_options=None,
+             **settings):
     """App over the frontend's bundled swiss-46639 file (local.ts semantics), isolated DATA_DIR."""
     import shutil
 
@@ -46,7 +47,7 @@ def make_app(tmp_path, *, transport=None, use_gemini=False, with_image=False, **
         shutil.copy(SWISS_IMAGE, assets / "original.png")
     s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild", **settings)
     d = tools.load_file(FRONTEND_DRAWING, assets_dir=assets)
-    return create_app(s, transport=transport, extra_drawings=[d],
+    return create_app(s, transport=transport, extra_drawings=[d], job_options=job_options,
                       use_gemini=use_gemini or transport is not None)
 
 

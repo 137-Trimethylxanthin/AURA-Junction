@@ -101,6 +101,16 @@ class Store:
         rows = self._q("SELECT response FROM answers WHERE id=?", (answer_id,))
         return json.loads(rows[0]["response"]) if rows else None
 
+    def answer_drawing(self, answer_id: str) -> str | None:
+        rows = self._q("SELECT drawing_id FROM answers WHERE id=?", (answer_id,))
+        return rows[0]["drawing_id"] if rows else None
+
+    def recent_turns(self, conv_id: str, n: int = 6) -> list[dict]:
+        rows = self._q("SELECT message, response FROM turns WHERE conversation_id=? AND response "
+                       "IS NOT NULL ORDER BY t DESC LIMIT ?", (conv_id, n))
+        return [{"message": r["message"], "response": json.loads(r["response"])}
+                for r in reversed(rows)]
+
     def stats(self, day: str) -> dict[str, Any]:
         rows = self._q(
             "SELECT calls, check_calls, check_cost_usd, cost_usd FROM answers WHERE day=?", (day,))

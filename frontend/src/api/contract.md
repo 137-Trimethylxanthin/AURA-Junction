@@ -447,6 +447,10 @@ Ranked check fields (all optional on `AskResponse.check`; `scope` and `ranking` 
 | `agreed`, `total` | number | Agreed means `p > anchors_max + 0.05`. |
 | `image` | `"dataset_png" \| "upload" \| "none"` | What the boxes were checked against. DXF uploads: `"none"` ("No independent image to check against"). |
 | `recall` | `{ value, n, source }` | Raster only, from the measured eval. |
+| `calls` | number | Decisions requests made for **this** answer's check: `1` live, `0` from the cache. Not included in the top-level `calls`. |
+| `cost_usd` | number | USD of those requests (`0` when cached). Not included in the top-level `cost_usd`. |
+| `tokens` | number | Input tokens of those requests (`0` when cached). |
+| `cached` | boolean | `true` when the check came from the cache (precomputed or an earlier answer). |
 
 ### New answer kind
 
@@ -503,7 +507,7 @@ All of these except `timeout` are 4xx, so the frontend shows an error card and n
 | `Drawing.facts` / `DrawingSummary.facts` | `languages?: string[]` | Languages the gold rows were counted in, e.g. `["en"]`. |
 | `ErrorCode` | adds `"timeout"` | The 60 s chat-turn deadline: SSE `error` event. `/ask` answers `504` (5xx, so the bundled drawing falls back to local answers). |
 
-`detected_lang` stays `en | fr | fi | de`; Italian questions report `"en"` (`canonical_en` is English anyway). A check's own model calls and cost are not added to the answer's `calls`/`cost_usd`; they appear in the check's trace node and in `/stats`.
+`detected_lang` stays `en | fr | fi | de`; Italian questions report `"en"` (`canonical_en` is English anyway). A check's own model calls and cost are not added to the answer's `calls`/`cost_usd`; they are reported in `check.calls`, `check.cost_usd`, `check.tokens` and `check.cached`, and in `/stats`. The UI shows both and sums both in the session total.
 
 ### Conformance JSON
 

@@ -23,8 +23,9 @@ function SessionButton() {
     let cost = 0
     for (const t of turns)
       if (t.role === 'agent' && t.response) {
-        calls += t.response.calls
-        cost += roundCost(t.response.cost_usd)
+        // The answer's own calls plus its check's requests (contract 1.1 reports them separately).
+        calls += t.response.calls + (t.response.check?.calls ?? 0)
+        cost += roundCost(t.response.cost_usd) + roundCost(t.response.check?.cost_usd ?? 0)
       }
     return { calls, cost }
   }, [turns])

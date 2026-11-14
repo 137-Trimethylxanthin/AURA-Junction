@@ -8,7 +8,8 @@ export default defineConfig({
   reporter: "list",
   use: { baseURL: "http://localhost:4173", trace: "retain-on-failure" },
   webServer: {
-    command: "npm run build && npm run preview",
+    // The local suite tests the build without a backend: an empty VITE_API_URL overrides a developer's .env.local.
+    command: "VITE_API_URL= npm run build && npm run preview",
     url: "http://localhost:4173",
     reuseExistingServer: true,
     timeout: 120_000,

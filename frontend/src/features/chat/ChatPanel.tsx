@@ -1,33 +1,45 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
-import { motion, useReducedMotion } from 'motion/react'
-import { toast } from 'sonner'
-import { Toaster } from '@/components/ui/sonner'
-import { useMediaQuery } from '@/hooks/use-media-query'
-import { isRoomEvidenceId, roomIdOfEvidence, deriveAnswer } from '@/lib/answer'
-import { noun } from '@/lib/format'
-import { appStore, actions, useAppStore, type AgentTurn, type AppState, type UserTurn } from '@/store'
-import { AgentCard } from './AgentCard'
-import { SuggestionList } from './Suggestions'
-import { UserBubble } from './UserBubble'
-import { announce } from './view'
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react"
+import { motion, useReducedMotion } from "motion/react"
+import { toast } from "sonner"
+import { Toaster } from "@/components/ui/sonner"
+import { useMediaQuery } from "@/hooks/use-media-query"
+import { isRoomEvidenceId, roomIdOfEvidence, deriveAnswer } from "@/lib/answer"
+import { noun } from "@/lib/format"
+import {
+  appStore,
+  actions,
+  useAppStore,
+  type AgentTurn,
+  type AppState,
+  type UserTurn,
+} from "@/store"
+import { AgentCard } from "./AgentCard"
+import { SuggestionList } from "./Suggestions"
+import { UserBubble } from "./UserBubble"
+import { announce } from "./view"
 
-const UNDO_TOAST = 'evidence-undo'
+const UNDO_TOAST = "evidence-undo"
 
 /** Chat toasts render in their own toaster at the top of the sidebar column (off the plan and the composer). */
-const CHAT_TOASTER = 'chat'
+const CHAT_TOASTER = "chat"
 const REJECT_TOAST_MS = 6000
 
 function isTyping(el: Element | null): boolean {
   if (!el || !(el instanceof HTMLElement)) return false
-  return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'
+  return (
+    el.isContentEditable ||
+    el.tagName === "INPUT" ||
+    el.tagName === "TEXTAREA" ||
+    el.tagName === "SELECT"
+  )
 }
 
 function ChatToaster() {
-  const wide = useMediaQuery('(min-width: 900px)', true)
+  const wide = useMediaQuery("(min-width: 900px)", true)
   return (
     <Toaster
       id={CHAT_TOASTER}
-      position={wide ? 'top-right' : 'top-center'}
+      position={wide ? "top-right" : "top-center"}
       offset={wide ? { top: 108, right: 16 } : { top: 64 }}
       visibleToasts={2}
     />
@@ -37,12 +49,13 @@ function ChatToaster() {
 /** "Window 3", "Room 3.04" for toasts. */
 function evidenceName(s: AppState, turnId: string, evidenceId: string): string {
   const x = s.turns.find((t) => t.id === turnId)
-  const resp = x && x.role === 'agent' ? x.response : undefined
-  if (isRoomEvidenceId(evidenceId)) return `Room ${roomIdOfEvidence(evidenceId)}`
+  const resp = x && x.role === "agent" ? x.response : undefined
+  if (isRoomEvidenceId(evidenceId))
+    return `Room ${roomIdOfEvidence(evidenceId)}`
   const i = resp?.evidence.boxes.findIndex((b) => b.id === evidenceId) ?? -1
   const box = resp?.evidence.boxes[i]
   if (!box) return evidenceId
-  const n = noun(box.subject, 1, 'en')
+  const n = noun(box.subject, 1, "en")
   return `${n.charAt(0).toUpperCase()}${n.slice(1)} ${i + 1}`
 }
 
@@ -54,21 +67,29 @@ function useChatSideEffects() {
       if (s.undoStack.length > prev.undoStack.length) {
         const e = s.undoStack[s.undoStack.length - 1]
         const x = s.turns.find((t) => t.id === e.turn_id)
-        if (x && x.role === 'agent') {
+        if (x && x.role === "agent") {
           const name = evidenceName(s, e.turn_id, e.evidence_id)
           let verb: string
           if (isRoomEvidenceId(e.evidence_id)) {
-            const room = x.response?.evidence.rooms.find((r) => `room-${r.room_id}` === e.evidence_id)
+            const room = x.response?.evidence.rooms.find(
+              (r) => `room-${r.room_id}` === e.evidence_id
+            )
             const now = x.toggles.included[e.evidence_id] ?? room?.included
-            verb = now ? 'added' : 'left out'
-          } else verb = x.toggles.rejected[e.evidence_id] ? 'rejected' : 'restored'
-          const d = x.response ? deriveAnswer(x.response, x.toggles, s.session.drawing) : null
+            verb = now ? "added" : "left out"
+          } else
+            verb = x.toggles.rejected[e.evidence_id] ? "rejected" : "restored"
+          const d = x.response
+            ? deriveAnswer(x.response, x.toggles, s.session.drawing)
+            : null
           toast(`${name} ${verb}`, {
             id: UNDO_TOAST,
             toasterId: CHAT_TOASTER,
             duration: REJECT_TOAST_MS,
-            description: d?.value !== null && d?.value !== undefined ? `Answer is now ${d.value}.` : undefined,
-            action: { label: 'Undo', onClick: () => actions().undo() },
+            description:
+              d?.value !== null && d?.value !== undefined
+                ? `Answer is now ${d.value}.`
+                : undefined,
+            action: { label: "Undo", onClick: () => actions().undo() },
           })
         }
       } else if (s.undoStack.length < prev.undoStack.length) {
@@ -77,25 +98,28 @@ function useChatSideEffects() {
       // A new question makes the reject toast stale.
       if (s.turns.length > prev.turns.length) toast.dismiss(UNDO_TOAST)
       for (const t of s.turns) {
-        if (t.role === 'agent' && t.fellBack && !seenFallback.has(t.id)) {
+        if (t.role === "agent" && t.fellBack && !seenFallback.has(t.id)) {
           seenFallback.add(t.id)
-          toast('Backend unreachable. Answering from local data.', { id: 'fell-back', toasterId: CHAT_TOASTER })
+          toast("Backend unreachable. Answering from local data.", {
+            id: "fell-back",
+            toasterId: CHAT_TOASTER,
+          })
         }
       }
     })
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey
-      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
         if (isTyping(document.activeElement)) return
         if (appStore.getState().undoStack.length === 0) return
         e.preventDefault()
         actions().undo()
       }
     }
-    window.addEventListener('keydown', onKey)
+    window.addEventListener("keydown", onKey)
     return () => {
       unsub()
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener("keydown", onKey)
     }
   }, [])
 }
@@ -109,35 +133,52 @@ interface Pair {
  * Bring the newest question and its answer into view: the pair's top when it fits; otherwise as much of the
  * answer card as possible (its bottom, i.e. actions and footer, when the card alone fits; else the card's top).
  */
-function scrollPairToTop(root: HTMLElement | null, userId: string | undefined, smooth: boolean) {
+function scrollPairToTop(
+  root: HTMLElement | null,
+  userId: string | undefined,
+  smooth: boolean
+) {
   if (!root || !userId) return
   const pair = root.querySelector<HTMLElement>(`[data-pair="${userId}"]`)
   const scroller = root.parentElement
   if (!pair || !scroller) return
-  const behavior: ScrollBehavior = smooth ? 'smooth' : 'auto'
-  const card = pair.querySelector<HTMLElement>('article[data-turn]')
+  const behavior: ScrollBehavior = smooth ? "smooth" : "auto"
+  const card = pair.querySelector<HTMLElement>("article[data-turn]")
   const room = scroller.clientHeight
-  if (!card || pair.offsetHeight + 12 <= room) return pair.scrollIntoView({ block: 'start', behavior })
-  card.scrollIntoView({ block: card.offsetHeight + 12 <= room ? 'end' : 'start', behavior })
+  if (!card || pair.offsetHeight + 12 <= room)
+    return pair.scrollIntoView({ block: "start", behavior })
+  card.scrollIntoView({
+    block: card.offsetHeight + 12 <= room ? "end" : "start",
+    behavior,
+  })
 }
 
 function usePairs(): Pair[] {
   const turns = useAppStore((s) => s.turns)
   return useMemo(() => {
     const replies = new Map<string, AgentTurn>()
-    for (const t of turns) if (t.role === 'agent') replies.set(t.replyTo, t)
-    return turns.filter((t): t is UserTurn => t.role === 'user').map((u) => ({ user: u, reply: replies.get(u.id) }))
+    for (const t of turns) if (t.role === "agent") replies.set(t.replyTo, t)
+    return turns
+      .filter((t): t is UserTurn => t.role === "user")
+      .map((u) => ({ user: u, reply: replies.get(u.id) }))
   }, [turns])
 }
 
 function LiveRegion() {
   const turns = useAppStore((s) => s.turns)
   const drawing = useAppStore((s) => s.session.drawing)
-  const last = [...turns].reverse().find((t): t is AgentTurn => t.role === 'agent')
-  let text = ''
-  if (last?.status === 'done' && last.response) text = announce(last.response, deriveAnswer(last.response, last.toggles, drawing))
-  else if (last?.status === 'error') text = 'The question could not be answered.'
-  else if (last?.status === 'pending') text = 'Reading the drawing.'
+  const last = [...turns]
+    .reverse()
+    .find((t): t is AgentTurn => t.role === "agent")
+  let text = ""
+  if (last?.status === "done" && last.response)
+    text = announce(
+      last.response,
+      deriveAnswer(last.response, last.toggles, drawing)
+    )
+  else if (last?.status === "error")
+    text = "The question could not be answered."
+  else if (last?.status === "pending") text = "Reading the drawing."
   return (
     <div className="sr-only" aria-live="polite" aria-atomic="true">
       {text}
@@ -167,7 +208,8 @@ export function ChatPanel() {
   const lastId = pairs[pairs.length - 1]?.user.id
   const lastStatus = pairs[pairs.length - 1]?.reply?.status
   useLayoutEffect(() => {
-    if (follow.current && lastStatus && lastStatus !== 'pending') scrollPairToTop(root.current, lastId, false)
+    if (follow.current && lastStatus && lastStatus !== "pending")
+      scrollPairToTop(root.current, lastId, false)
   }, [lastId, lastStatus])
 
   // Any manual scroll intent stops following.
@@ -175,13 +217,13 @@ export function ChatPanel() {
     const scroller = root.current?.parentElement
     if (!scroller) return
     const stop = () => (follow.current = false)
-    scroller.addEventListener('wheel', stop, { passive: true })
-    scroller.addEventListener('touchmove', stop, { passive: true })
-    scroller.addEventListener('keydown', stop)
+    scroller.addEventListener("wheel", stop, { passive: true })
+    scroller.addEventListener("touchmove", stop, { passive: true })
+    scroller.addEventListener("keydown", stop)
     return () => {
-      scroller.removeEventListener('wheel', stop)
-      scroller.removeEventListener('touchmove', stop)
-      scroller.removeEventListener('keydown', stop)
+      scroller.removeEventListener("wheel", stop)
+      scroller.removeEventListener("touchmove", stop)
+      scroller.removeEventListener("keydown", stop)
     }
   }, [])
 
@@ -192,10 +234,13 @@ export function ChatPanel() {
       {pairs.length === 0 ? (
         <div className="flex flex-col gap-3 p-4 pt-5">
           <div className="flex flex-col gap-1">
-            <h3 className="text-base font-semibold text-balance">Ask this floor plan</h3>
+            <h3 className="text-base font-semibold text-balance">
+              Ask this floor plan
+            </h3>
             <p className="text-sm text-pretty text-muted-foreground">
-              Every answer comes with its number, the boxes it counted on the plan, and a check against the dataset
-              where one exists. Reject a box and the number follows.
+              Every answer comes with its number, the boxes it counted on the
+              plan, and a check against the dataset where one exists. Reject a
+              box and the number follows.
             </p>
           </div>
           <SuggestionList />
@@ -211,7 +256,11 @@ export function ChatPanel() {
               className="flex scroll-mt-3 flex-col gap-3"
               initial={reduce ? { opacity: 0 } : { opacity: 0, y: 12 }}
               animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
-              transition={reduce ? { duration: 0.15 } : { type: 'spring', bounce: 0, duration: 0.35 }}
+              transition={
+                reduce
+                  ? { duration: 0.15 }
+                  : { type: "spring", bounce: 0, duration: 0.35 }
+              }
             >
               <UserBubble turn={user} reply={reply} />
               {reply ? <AgentCard turn={reply} lang={user.lang} /> : null}
