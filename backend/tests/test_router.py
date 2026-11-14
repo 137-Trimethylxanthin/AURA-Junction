@@ -195,17 +195,18 @@ def test_templates_refuse_questions_they_do_not_account_for():
                      units=["A", "B"])
     for q in ("How many places to sleep are there in this flat?",
               "Which bedroom has the most windows?",
-              "Which room has the largest area?",
               "How many rooms have a window?",
               "How many rooms with more than two doors are there?",
               "Quelle chambre a le plus de fenêtres ?",
               "Combien de places pour dormir dans cet appartement ?",
               "Welches Zimmer hat die meisten Fenster?",
               "Wie viele Schlafplätze gibt es in dieser Wohnung?",
-              "Missä huoneessa on eniten ikkunoita?",
-              "Mikä huone on suurin?"):
+              "Missä huoneessa on eniten ikkunoita?"):
         r = route(q, ctx)
         assert r.intent == "unknown", (q, r.intent, r.subject)
+    # Largest/smallest room by area IS accounted for whole: grab all room areas, pick one.
+    for q in ("Which room has the largest area?", "Mikä huone on suurin?"):
+        assert (route(q, ctx).intent, route(q, ctx).subject) == ("room_rank", "max"), q
     # Apartments counted (template) vs apartment as scope only.
     assert route("How many apartments are on this floor?", ctx).subject == "apartment"
     assert route("Wie viele Wohnungen gibt es?", ctx).subject == "apartment"

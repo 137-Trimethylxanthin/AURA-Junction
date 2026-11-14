@@ -330,6 +330,13 @@ class TraceNode(_M):
     evidence_ids: list[str] | None = None
     confidence: float | Literal["sample"] | None = None
     tool: TraceTool | None = None
+    # 1.2 additive (AURA_TRACE_DETAIL=dev): which answering stage this node is, plus its
+    # structured detail. stage 'decision' = the routing decision (rules or gemini-decision-1);
+    # its detail: {decider, model?, question?, options?, chosen, confidence?, runner_up?,
+    # runner_up_confidence?, matched, route}. 'resources': {tables, grabbed, ms}.
+    # 'filter': {rule, kept, dropped[{id, reason}]}. 'answer': {source, calls, cost_usd}.
+    stage: Literal["resources", "decision", "filter", "answer"] | None = None
+    detail: dict[str, Any] | None = None
 
 
 class AskResponse(_M):

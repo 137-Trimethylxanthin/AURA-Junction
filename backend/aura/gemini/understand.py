@@ -229,6 +229,11 @@ class HybridDecision:
     cost_usd: float = 0.0
     input_tokens: int = 0
     latency_ms: int = 0
+    model: str = ""
+    # Every question asked of gemini-decision-1 → its calibrated output, for the reasoning trace:
+    # {"on_drawing": {"p": 0.97}, "intent": {"choice": "count", "confidence": 0.8,
+    #  "probabilities": {...}}, ...}
+    asked: dict = field(default_factory=dict)
 
     @property
     def off_drawing(self) -> bool:
@@ -363,6 +368,16 @@ async def decide_hybrid_route(
     intent, ic, _ = res.choice("intent") if "intent" in questions else (None, 0.0, {})
     subj, sc, _ = res.choice("subject") if "subject" in questions else (None, 0.0, {})
     skey, scc, _ = res.choice("scope") if "scope" in questions else (None, 0.0, {})
+    asked: dict[str, dict] = {}
+    for qk, qv in questions.items():
+        if qv["type"] == "noul":
+            asked[qk] = {"p": res.noul(qk)}
+        else:
+            ch, conf, probs = res.choice(qk)
+            if qk == "cache_match" and ch in key_by_opt:
+                ch = key_by_opt[ch][1]  # the cached question, not its option id
+                probs = {(key_by_opt[k][1] if k in key_by_opt else k): v for k, v in probs.items()}
+            asked[qk] = {"choice": ch, "confidence": conf, "probabilities": probs}
 
     return HybridDecision(
         on_drawing=res.noul("on_drawing") if "on_drawing" in questions else None,
@@ -380,6 +395,8 @@ async def decide_hybrid_route(
         cost_usd=res.cost_usd,
         input_tokens=res.input_tokens,
         latency_ms=res.latency_ms,
+        model=res.model,
+        asked=asked,
     )
 
 

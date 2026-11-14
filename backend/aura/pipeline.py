@@ -158,6 +158,49 @@ def last_turn_response(turns: list[dict] | None) -> dict | None:
     return None
 
 
+_REF_PHRASE = re.compile(r"\b(?:that|this|the same|those|these)\s+\w+|\b(?:it|them|its)\b", re.IGNORECASE)
+
+
+def resolve_reference(r, question: str, history: list[dict] | None, d: tools.LoadedDrawing) -> dict | None:
+    """'that room' / 'it' → the room(s) the most recent answer (of the last 3) highlighted.
+
+    On success rewrites `r` into an exact intent (doors/windows: `adjacent`, both sides of a
+    wall; fixtures: a count in that one room) and returns {phrase, answer_id, room_ids}. Returns
+    None when nothing (or too much) was highlighted, so the turn goes to the model with context."""
+    if "anaphora" not in r.matched or not history or not r.subject:
+        return None
+    if d.drawing.get("kind") != "cad_dxf":
+        return None
+    known = set(d.ctx.room_ids)
+    prev_resp: dict | None = None
+    rooms: list[str] = []
+    for t in list(reversed(history))[:3]:
+        resp = t.get("response")
+        if not isinstance(resp, dict) or not resp.get("answer"):
+            continue
+        ev = resp.get("evidence") or {}
+        rooms = [x.get("room_id") for x in ev.get("rooms") or [] if x.get("included")
+                 and x.get("room_id") in known]
+        if not rooms and (resp.get("scope") or {}).get("kind") == "room":
+            rooms = [resp["scope"]["room_id"]] if resp["scope"].get("room_id") in known else []
+        if rooms or ev.get("boxes"):
+            prev_resp = resp  # the most recent answer that showed something decides
+            break
+    if prev_resp is None or not rooms or len(rooms) > 3:
+        return None
+    if r.subject in ("door", "window"):
+        r.intent = "adjacent"
+    elif len(rooms) == 1:
+        r.intent = "count"
+    else:
+        return None
+    r.scope = {"kind": "room", "room_id": rooms[0]}
+    r.matched.append("resolved_reference")
+    m = _REF_PHRASE.search(question)
+    return {"phrase": m.group(0) if m else "that", "answer_id": prev_resp.get("answer_id"),
+            "room_ids": rooms}
+
+
 FOLLOW_UP_CUE = re.compile(
     r"^\s*(and|what about|how about|same|et|und|ja|entä|e|ed|plus|also|then)\b", re.IGNORECASE)
 WHOLE_FLOOR = re.compile(r"\b(in total|total|whole|entire|all|altogether|insgesamt|gesamt|au total|"
@@ -383,8 +426,27 @@ async def _execute_exact_intent(
     conf: float | None = None,
     pattern: str | None = None,
     topic: str | None = None,
+    ref: dict | None = None,
 ) -> tuple[A.Built, bool]:
     """Execute a deterministic solver call. Returns `(built, supported_cleanly)`."""
+    if intent == "room_rank":
+        if not d.engine.supports("area"):
+            return A.abstain(question, lang, scope, "not_supported_yet", question,
+                             "No rooms with areas are extracted from this drawing yet.",
+                             intent_tag=tag), False
+        printed = pattern.split("|") if pattern else None
+        tr = await asyncio.to_thread(tools.rank_rooms, d, subject or "max", scope, printed, topic)
+        if tr.kind == "none":
+            return A.unclear(question, lang, d, scope, intent_tag=tag, look=tr.summary), False
+        return A.room_rank(question, lang, d, tr, scope, matched, intent_tag=tag), True
+
+    if intent == "adjacent":
+        room_ids = (ref or {}).get("room_ids") or [scope.get("room_id")]
+        tr = await asyncio.to_thread(tools.adjacent_boxes, d, subject or "door", room_ids)
+        if tr.kind == "none":
+            return A.unclear(question, lang, d, scope, intent_tag=tag, look=tr.summary), False
+        return A.adjacent(question, lang, d, tr, matched, ref=ref, intent_tag=tag), True
+
     if intent == "find_text":
         pat = pattern or FIRE_PATTERN
         tr = await asyncio.to_thread(tools.find_text, d, pat, subject or "label")
@@ -458,6 +520,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
     if d.drawing.get("kind") == "raster" and (family := score_family_of(question)) is not None:
         return await _score(svc, d, question, lang, caller, stats, family)
 
+    ref = resolve_reference(r, question, history, d)
     overrides = [o.model_dump() for o in req.overrides or []]
     req_scope = req.scope.model_dump(exclude_none=True) if req.scope else None
     intent, subject, text_scope, conf = r.intent, r.subject, r.scope, None
@@ -538,6 +601,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
         conf=conf,
         pattern=r.pattern,
         topic=r.topic,
+        ref=ref,
     )
     return built
 
@@ -718,6 +782,12 @@ async def _finalize_and_emit(
 
     body["calls"] = meters["answer"].calls  # every request sent for the answer, failed or not
     body["cost_usd"] = round(meters["answer"].cost_usd, 8)
+    for n in body["trace"]:
+        if n.get("stage") == "answer" and isinstance(n.get("detail"), dict):
+            n["detail"] |= {"calls": body["calls"], "cost_usd": body["cost_usd"]}
+    if svc.settings.trace_detail == "demo":
+        body["trace"] = [{k: v for k, v in n.items() if k != "detail"} for n in body["trace"]
+                         if n.get("stage") not in ("resources", "filter")]
     body["route"] = stats["route"]
     body["answer_id"] = "a-" + uuid.uuid4().hex
     body["latency_ms"] = int((time.perf_counter() - t0) * 1000)
@@ -818,6 +888,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 r.scope = context["scope"] if context["scope"].get("kind") != "region" else None
                 r.matched.append("follow-up")
 
+        ref = resolve_reference(r, question, history, d)
+        if ref is not None:
+            has_followup_semantics = False  # the reference is resolved; answer it exactly
         eff_scope = scope_dump or r.scope or {"kind": "floor"}
         overrides = [o.model_dump() for o in req.overrides or []]
         is_project = eff_scope.get("kind") == "project"
@@ -827,11 +900,13 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
         # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
         if mode == "hybrid" and not is_project and not has_followup_semantics:
-            if dkind in ("cad_dxf", "ifc") and r.intent in ("count", "area", "quantity", "find_text"):
-                tag = "router · follow-up" if "follow-up" in r.matched else "router"
+            if dkind in ("cad_dxf", "ifc") and r.intent in (
+                    "count", "area", "quantity", "find_text", "room_rank", "adjacent"):
+                tag = ("router · reference" if ref else
+                       "router · follow-up" if "follow-up" in r.matched else "router")
                 exact_built, ok_exact = await _execute_exact_intent(
                     d, question, lang, r.intent, r.subject, eff_scope, overrides, r.matched,
-                    tag=tag, pattern=r.pattern, topic=r.topic,
+                    tag=tag, pattern=r.pattern, topic=r.topic, ref=ref,
                 )
                 if ok_exact or not models_enabled() or not svc.budget.can_spend():
                     yield "understood", {"detected_lang": exact_built.body["detected_lang"],

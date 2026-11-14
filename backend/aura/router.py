@@ -18,7 +18,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Literal
 
-Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown"]
+Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
+                 "room_rank", "adjacent"]
 InternalLang = Literal["en", "fr", "fi", "de", "it"]
 
 _LD = r"[^\W_]"  # letter or digit
@@ -451,6 +452,37 @@ ROOMS_WITH = S(r"(?:rooms?|bedrooms?|pièces?|chambres?|zimmer|räume|huonee?t?)
                r"(?:with|have|has|having|contain\w*|avec|ayant|mit|joissa|jossa)")
 
 
+# Superlative over room areas ("biggest room", "smallest bedroom", "welches Zimmer ist am grössten"):
+# answered from the indexed room areas (grab all rooms, filter to the max/min), never by a model.
+RANK_MAX = S(r"largest|biggest|most spacious|grösste[rnms]?|größte[rnms]?|am grössten|am größten|"
+             r"plus grand(?:e|es|s)?|più grand[ei]|suurin|suurimm\w*")
+RANK_MIN = S(r"smallest|tiniest|kleinste[rnms]?|am kleinsten|plus petit(?:e|es|s)?|più piccol[oaie]|"
+             r"pienin|pienimm\w*")
+
+# A reference back to the previous answer ("that room", "in it"). Resolved from the previous turn's
+# evidence in pipeline.py; never answered as an unqualified whole-floor template.
+ANAPHORA = re.compile(
+    r"\b(?:that|this|the same|said|these|those)\s+(?:rooms?|ones?|spaces?|apartments?|units?|flats?)\b|"
+    r"\b(?:in|into|to|of|from|inside|does|has|for)\s+(?:it|them)\b|\bits\b|"
+    r"\b(?:ce(?:tte)?|cet)\s+(?:pièce|chambre|appartement)\b|\b(?:diese[mnrs]?|dem)\s+(?:raum|zimmer)\b",
+    re.IGNORECASE,
+)
+# Doors/windows that open into / connect to a room (adjacency, both sides of a shared wall).
+ADJACENT = re.compile(
+    r"\b(?:lead(?:s|ing)?|open(?:s|ing)?|go(?:es|ing)?|connect(?:s|ed|ing)?|adjacent|next|access(?:es|ing)?)"
+    r"\s+(?:in)?to\b|\binto\b|\bconnected\s+with\b|\b(?:of|for|in|on)\s+(?:that|this|the same)\s+room\b",
+    re.IGNORECASE,
+)
+
+
+def room_concept(text: str) -> tuple[str | None, list[str]]:
+    """('bedroom', its printed label names) when the question names a room type."""
+    for concept, rx, printed in LABEL_CONCEPTS:
+        if concept != "outdoor" and rx.search(text):
+            return concept, printed
+    return None, []
+
+
 def _counts_apartments(s: str) -> bool:
     """Apartments are what is COUNTED/SHOWN ("how many flats…", "show apartments"), not just the
     scope ("…in this flat?"): the apartment word must follow the count/locate cue within 3 words."""
@@ -466,6 +498,8 @@ def is_followup_message(text: str, routed: Routed | None = None) -> bool:
     """True when `text` looks like an elliptical refinement/color/filter follow-up to a prior turn."""
     s = unicodedata.normalize("NFC", text or "")
     if COLOR_CUE.search(s) or FOLLOWUP_CUE.search(s):
+        return True
+    if routed is not None and "anaphora" in routed.matched:
         return True
     if routed is not None and "qualifier_guard" in routed.matched:
         has_explicit_noun = any(rx.search(s) for _, rx in SUBJECTS) or bool(
@@ -504,6 +538,30 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     # "count X"; it goes to the model step (or abstains when models are off).
     if DEICTIC_SIMILARITY.search(s):
         return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["deictic_similarity"])
+
+    box_subject = next((subj for subj, rx in SUBJECTS if rx.search(s)), None)
+    rank = "max" if RANK_MAX.search(s) else "min" if RANK_MIN.search(s) else None
+    if rank and box_subject is None and not APARTMENT.search(s) and not COUNT.search(s):
+        concept, printed = room_concept(s)
+        if concept or ROOM_WORD.search(s) or AREA.search(s):
+            sc = _scope(s, ctx)
+            if sc and sc["kind"] in ("label", "room"):
+                sc = None  # the room type is a filter over all rooms, not one printed label
+            return Routed("room_rank", lang, signal, subject=rank, scope=sc,
+                          topic=concept, pattern="|".join(printed) or None,
+                          matched=["room_rank", rank, *([concept] if concept else [])])
+
+    if box_subject is not None and (ANAPHORA.search(s) or ADJACENT.search(s)):
+        room = room_of(s, ctx)
+        if ADJACENT.search(s) and box_subject in ("door", "window"):
+            if room:
+                return Routed("adjacent", lang, signal, subject=box_subject,
+                              scope={"kind": "room", "room_id": room}, matched=["adjacent", box_subject])
+            return Routed("unknown", lang, signal, subject=box_subject,
+                          matched=["anaphora", "adjacent", box_subject])
+        if not room and ANAPHORA.search(s):
+            return Routed("unknown", lang, signal, subject=box_subject,
+                          matched=["anaphora", box_subject])
     if SELECTOR.search(s) or (ROOMS_WITH.search(s) and not LABELLED.search(s)):
         return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["needs_model"])
 

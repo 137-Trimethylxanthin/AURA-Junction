@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     agent_runs_per_day: int = Field(default=0, alias="AURA_AGENT_RUNS_PER_DAY")
 
     turn_deadline_s: float = Field(default=60.0, alias="AURA_TURN_DEADLINE_S")
+    # dev: every answering stage in the trace (grab, decision, filter, answer) with its detail;
+    # demo: the short trace (decision and answer nodes only, no detail payloads).
+    trace_detail: Literal["dev", "demo"] = Field(default="dev", alias="AURA_TRACE_DETAIL")
     # /chat turns routed to the sidecar agent (SSE heartbeats keep the client alive meanwhile).
     agent_deadline_s: float = Field(default=150.0, alias="AURA_AGENT_DEADLINE_S")
     volume_commit_every_s: float = Field(default=60.0, alias="AURA_VOLUME_COMMIT_S")
