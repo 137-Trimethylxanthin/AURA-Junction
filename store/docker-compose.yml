@@ -1,0 +1,50 @@
+# Lossless project store: Postgres (PostGIS + pgvector) and the API.
+#   docker compose up -d --build          start everything; the API is on http://127.0.0.1:8000
+#   docker compose run --rm api python -m jstore.cli ingest /data/dataset   preprocess a folder
+# Both published ports are bound to localhost only; reach the API through an SSH tunnel.
+name: jstore
+
+services:
+  db:
+    build: ./db
+    image: jstore-db:17
+    environment:
+      POSTGRES_PASSWORD: ${JSTORE_DB_PASSWORD:-jstore}
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    shm_size: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h 127.0.0.1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      args:
+        WITH_LIBREDWG: ${WITH_LIBREDWG:-0}     # 1 adds dwg2dxf (LibreDWG, GPL-3.0, a separate program)
+    image: jstore-api:latest
+    env_file: .env                             # GEMINI_API_KEY, JSTORE_API_TOKEN, JSTORE_MODEL ...
+    environment:
+      JSTORE_DSN: postgresql://postgres:${JSTORE_DB_PASSWORD:-jstore}@db:5432/${JSTORE_DB_NAME:-postgres}
+      JSTORE_DATA_DIR: /data/store
+      JSTORE_DATASET_DIR: /data/dataset
+      JSTORE_INTERPRET_TIMEOUT_S: ${JSTORE_INTERPRET_TIMEOUT_S:-300}   # per drawing; the Gemini readers take up to ~200 s
+    volumes:
+      - store:/data/store
+      - ${JSTORE_DATASET_HOST_DIR:-/root/junction/dataset-preview/junction-dataset-preview}:/data/dataset:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"                  # localhost only, never 0.0.0.0 on the host
+    restart: unless-stopped
+
+volumes:
+  pgdata: {}
+  store: {}
