@@ -111,3 +111,35 @@ def test_cached_agent_answer_never_outranks_an_exact_route(tmp_path):
         again = c.post("/ask", json={"drawing_id": SWISS, "question": "what is the biggest room"}).json()
         assert first["method"] == again["method"] == "cad_geometry"
         assert again["route"] == "template"
+
+
+def test_cached_sidecar_answer_never_outranks_the_tool_tier(tmp_path, monkeypatch):
+    """A cached agent_estimate (sidecar) is replayed only after the tool-step answerer declined."""
+    import aura.pipeline as P
+    from aura import answer as A
+    from aura import tools
+
+    q = "show only doors that are in rooms that have toilets"
+    sc = MockSidecarState()
+
+    async def declines(*a, **k):
+        return None
+
+    async def answers(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        stats["route"] = "choice"
+        tr = tools.count_objects(d, "door", {"kind": "floor"})
+        return A.count(question, lang, d, tr, {"kind": "floor"}, None, intent_tag="tool steps")
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc)) as c:
+        monkeypatch.setattr(P, "answer_with_tools", declines)
+        first = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
+        assert first["method"] == "agent_estimate" and len(sc.runs) == 1
+
+        monkeypatch.setattr(P, "answer_with_tools", answers)
+        tools_r = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
+        assert tools_r["method"] == "cad_geometry" and tools_r["route"] == "choice"
+
+        monkeypatch.setattr(P, "answer_with_tools", declines)
+        replay = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
+        assert replay["route"] == "cache" and replay["method"] == "agent_estimate"
+        assert len(sc.runs) == 1  # the cached sidecar answer replaced a new sidecar run

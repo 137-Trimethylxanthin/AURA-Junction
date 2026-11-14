@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 3
+ROUTER_VERSION = 4  # 4: tool-step tier (aura/steps.py) before the sidecar
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",

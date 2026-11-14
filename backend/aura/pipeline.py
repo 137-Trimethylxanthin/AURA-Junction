@@ -968,20 +968,30 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     elif context:
         key += json.dumps(context, sort_keys=True)
 
-    hit = svc.answers.get(key)
-    if hit is not None and hit.get("method") == "agent_estimate" and r_pre.intent in EXACT_INTENTS:
-        hit = None  # an exact route always wins over a cached model estimate
-    if hit is not None:
+    def replay(cached: dict) -> list[tuple[str, dict]]:
         # A fresh answer id, persisted: its CSV link and /stats see this answer too.
-        body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
-                            "answer_id": "a-" + uuid.uuid4().hex,
-                            "latency_ms": int((time.perf_counter() - t0) * 1000)}
+        body = dict(cached) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
+                               "answer_id": "a-" + uuid.uuid4().hex,
+                               "latency_ms": int((time.perf_counter() - t0) * 1000)}
         _persist(svc, d.id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
-        yield "understood", {"detected_lang": body["detected_lang"],
-                             "canonical_en": body["canonical_en"], "route": "cache"}
+        evs: list[tuple[str, dict]] = [("understood", {"detected_lang": body["detected_lang"],
+                                                       "canonical_en": body["canonical_en"], "route": "cache"})]
         if "check" in body:
-            yield "check", {"check": body["check"]}
-        yield "answer", {"response": body}
+            evs.append(("check", {"check": body["check"]}))
+        return [*evs, ("answer", {"response": body})]
+
+    hit = svc.answers.get(key)
+    deferred_agent_hit: dict | None = None
+    if hit is not None and hit.get("method") == "agent_estimate":
+        if r_pre.intent in EXACT_INTENTS:
+            hit = None  # an exact route always wins over a cached model estimate
+        elif svc.agent is not None:
+            # A cached sidecar estimate is replayed only once the cheaper, verifiable tool-step
+            # tier has declined this question (step 4b), in place of a new sidecar run.
+            deferred_agent_hit, hit = hit, None
+    if hit is not None:
+        for ev in replay(hit):
+            yield ev
         return
 
     stats = {"route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
@@ -1209,6 +1219,11 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                                                    allow_cache=not history):
                     yield ev
                 return
+
+        if deferred_agent_hit is not None:  # tools declined: the cached sidecar answer stands
+            for ev in replay(deferred_agent_hit):
+                yield ev
+            return
 
         # 5. Escalate directly to `agent_client` (`deep_agent`) — NEVER fall back to legacy `understand` or `flash-lite`!
         agent_deadline = max(turn_deadline, agent_deadline_s or 0.0)
