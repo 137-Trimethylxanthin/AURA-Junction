@@ -528,6 +528,9 @@ class DrawingStore:
         doc = normalise(ours, built["doc"], built["evidence"], built["model"],
                         {int(k): v for k, v in built["sources"].items()})
         doc["store"] = {"file_id": file_id, "drawing_key": key}
+        if ext in (".png", ".jpg", ".jpeg"):  # rooms as the drawn regions their labels sit in (vector rebuild)
+            from aura import rebuild
+            doc = await asyncio.to_thread(rebuild.apply, out_dir, doc)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)

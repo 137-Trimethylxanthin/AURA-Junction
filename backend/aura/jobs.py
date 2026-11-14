@@ -159,6 +159,11 @@ class Jobs:
                         log.warning("pdf detection skipped on %d page(s): %s",
                                     sum(1 for e in errs if e), next(e for e in errs if e))
                         note = f"Not indexed: {next(e for e in errs if e)}"[:300]
+                if res.get("ok") and kind == "raster":
+                    # A vector rebuild (plan.svg) for Compare and 3D; never fails the upload.
+                    from aura import rebuild
+                    await self._set(drawing_id, "processing", 0.8)
+                    await asyncio.to_thread(rebuild.apply_file, out)
                 if res.get("ok"):
                     await self._register_pdf_bundle(drawing_id, meta, ctx, res)
                     await self._set(drawing_id, "ready", 1.0, note)
