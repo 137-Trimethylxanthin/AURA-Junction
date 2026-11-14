@@ -15,7 +15,6 @@ const PluginsSheet = lazy(() =>
   }))
 )
 import { callsText, fmtUsd, roundCost } from "./view"
-import { BudgetMeter } from "@/features/budget/BudgetMeter"
 
 const CHAT_TOASTER = "chat"
 const NEW_CHAT_UNDO_TOAST = "new-chat-undo"
@@ -122,7 +121,6 @@ export function HeaderActions() {
         </TooltipTrigger>
         <TooltipContent>{tu("new_chat")}</TooltipContent>
       </Tooltip>
-      <BudgetMeter />
       <SessionButton />
       <Button variant="outline" onClick={() => actions().setPluginsOpen(true)}>
         <BlocksIcon data-icon="inline-start" />
