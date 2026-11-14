@@ -167,7 +167,9 @@ export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
         outline: true,
       })
     }
-  } else out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'neutral' })
+  } else
+    // A vision count is a model estimate (plan principle: model-detected items are always labelled as estimates).
+    out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: resp.method === 'vision' ? 'info' : 'neutral' })
 
   const c = resp.check
   if (c?.image === 'none')

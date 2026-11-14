@@ -126,7 +126,10 @@ async function askLive(page: Page, seen: Record<string, unknown>[], question: st
   await expect(page.locator('article[data-turn]')).toHaveCount(cards + 1)
   await expect.poll(() => seen.length, { timeout: ANSWER_TIMEOUT_MS }).toBeGreaterThan(before)
   await expect(page.locator('article[data-turn]').last().locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 30_000 })
-  const a = seen.at(-1)! as {
+  // The SSE `answer` event carries { response: AskResponse } (contract.ts ChatEvent).
+  const last = seen.at(-1)! as { response?: unknown }
+  fs.appendFileSync(TABLE.replace(/\.md$/, '.answers.jsonl'), JSON.stringify({ question, response: last.response ?? last }) + '\n')
+  const a = (last.response ?? last) as {
     route?: string
     calls?: number
     method?: string
@@ -165,28 +168,40 @@ test.describe('merged upload flow (live stack)', () => {
 
     try {
       // ---- 1. upload and watch the stages ------------------------------------------------------------------
+      await page.addInitScript(() => {
+        const w = window as unknown as { __aura: { stages: string[]; openNow: boolean } }
+        w.__aura = { stages: [], openNow: false }
+        new MutationObserver(() => {
+          for (const el of document.querySelectorAll('[data-slot="card"][data-outcome] > [data-stage]')) {
+            const v = el.getAttribute('data-stage') ?? ''
+            if (v && w.__aura.stages.at(-1) !== v) w.__aura.stages.push(v)
+          }
+          if ([...document.querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Open now')) w.__aura.openNow = true
+        }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true })
+      })
       await page.goto('/upload')
       await expect(page.getByRole('heading', { name: 'Upload drawings' })).toBeVisible()
       await expect(page.locator('[data-mode="full"]')).toBeVisible()
       await dropFile(page, file)
 
-      const card = page.locator('[data-outcome]').filter({ has: page.getByRole('heading', { name }) })
+      const card = page.locator('[data-slot="card"][data-outcome]').filter({ has: page.getByRole('heading', { name }) })
       await expect(card).toBeVisible({ timeout: 30_000 })
       const stages = new Set<string>()
       let openNowSeen = false
       let final = ''
       const deadline = Date.now() + INDEX_TIMEOUT_MS
       while (Date.now() < deadline) {
-        const stage = await card.locator('[data-stage]').first().getAttribute('data-stage').catch(() => null)
+        const stage = await card.locator('> [data-stage]').getAttribute('data-stage').catch(() => null)
         const outcome = (await card.getAttribute('data-outcome').catch(() => null)) ?? ''
-        if (stage) stages.add(stage)
-        if (await card.getByRole('link', { name: 'Open now' }).isVisible().catch(() => false)) openNowSeen = true
         if (outcome && outcome !== 'working') {
           final = `${stage}/${outcome}`
           break
         }
         await page.waitForTimeout(1000)
       }
+      const seenInPage = await page.evaluate(() => (window as unknown as { __aura: { stages: string[]; openNow: boolean } }).__aura)
+      for (const st of seenInPage.stages) stages.add(st)
+      openNowSeen = seenInPage.openNow
       const note = await card.locator('p').allTextContents().catch(() => [])
       test.info().annotations.push({ type: 'stages', description: `${[...stages].join(' → ')} ⇒ ${final || 'timeout'}` })
       expect(stages.size, `distinct stages seen: ${[...stages].join(', ')}; notes: ${note.join(' | ')}`).toBeGreaterThanOrEqual(4)
@@ -211,6 +226,7 @@ test.describe('merged upload flow (live stack)', () => {
       rows.push({ a: await askLive(page, seen, qApt.question), truth: qApt.answer, judge: 'area1' })
       rows.push({ a: await askLive(page, seen, qSql), judge: 'none' })
 
+      await page.screenshot({ path: TABLE.replace(/\.md$/, '.png') })
       // The SQL question: its query must be visible in the reasoning tree.
       const sqlCard = page.locator('article[data-turn]').last()
       await sqlCard.getByRole('button', { name: 'Reasoning tree' }).click()
@@ -245,13 +261,13 @@ test.describe('merged upload flow (live stack)', () => {
       // ---- 4. delete through the page ---------------------------------------------------------------------
       await page.unrouteAll({ behavior: 'ignoreErrors' })
       await page.goto('/upload')
-      const mine = page.locator('[data-outcome]').filter({ has: page.getByRole('heading', { name }) })
+      const mine = page.locator('[data-slot="card"][data-outcome]').filter({ has: page.getByRole('heading', { name }) })
       if (await mine.count()) {
         await mine.getByRole('button', { name: `Delete ${name}` }).click().catch(async () => {
           await mine.locator('button[aria-label^="Delete"]').click()
         })
         await page.getByRole('alertdialog').getByRole('button', { name: /^Delete/ }).click()
-        await expect(page.locator('[data-outcome]').filter({ has: page.getByRole('heading', { name }) })).toHaveCount(0)
+        await expect(page.locator('[data-slot="card"][data-outcome]').filter({ has: page.getByRole('heading', { name }) })).toHaveCount(0)
       }
     }
   })
@@ -284,7 +300,7 @@ test.describe('quick mode (mocked /health and status)', () => {
     )
     await page.goto('/upload')
     await expect(page.locator('[data-mode="quick"]')).toContainText('Quick mode')
-    const card = page.locator('[data-outcome="quick"]')
+    const card = page.locator('[data-slot="card"][data-outcome="quick"]')
     await expect(card).toBeVisible()
     await expect(card.locator('[data-callout="quick"]')).toContainText('not indexed')
     await expect(card.locator('[data-upload-counts]')).toContainText('Doors (estimate)')
