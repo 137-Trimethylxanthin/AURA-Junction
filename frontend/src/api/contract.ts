@@ -361,6 +361,9 @@ export interface TraceNode {
   confidence?: number | 'sample'
   /** 1.1: present when this node is a tool call. */
   tool?: ToolCall
+  /** Tool-step answerer stage; `detail` has one shape per stage (read defensively, see features/trace/detail.ts). */
+  stage?: 'resources' | 'decision' | 'filter' | 'answer'
+  detail?: Record<string, unknown>
 }
 
 export type AbstainReason = 'not_on_drawing' | 'not_supported_yet' | 'unclear_question' | 'low_confidence'
@@ -810,7 +813,9 @@ function isTraceNode(v: unknown): v is TraceNode {
     (v.parent === undefined || isStr(v.parent)) &&
     (v.evidence_ids === undefined || (Array.isArray(v.evidence_ids) && v.evidence_ids.every(isStr))) &&
     (v.confidence === undefined || v.confidence === 'sample' || isNum(v.confidence)) &&
-    (v.tool === undefined || isToolCall(v.tool))
+    (v.tool === undefined || isToolCall(v.tool)) &&
+    (v.stage === undefined || isStr(v.stage)) &&
+    (v.detail === undefined || isObj(v.detail))
   )
 }
 

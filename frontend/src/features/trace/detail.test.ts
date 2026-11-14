@@ -1,26 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import type { TraceNode } from '@/api/contract'
 import { traceDetail } from './detail'
 
-const node = (args: Record<string, unknown>) =>
-  ({ tool: { name: 'count_objects', args, result_id: 'r', ms: 1 } }) as Pick<TraceNode, 'tool'>
-
 describe('traceDetail', () => {
-  it('reads decision, kept/dropped and grabbed fields', () => {
-    const d = traceDetail(
-      node({
-        decision: { question: 'q', chosen: 'doors', confidence: 0.87, matched: 'doors', runner_up: 'windows' },
-        kept_ids: ['a', 'b'],
-        dropped_ids: ['c'],
-        grabbed: { source: 'ifc', count: 12, ms: 3 },
-      }),
-    )
-    expect(d.decision).toMatchObject({ confidencePct: 87, matched: 'doors', runnerUp: 'windows' })
-    expect([d.kept, d.dropped]).toEqual([2, 1])
-    expect(d.grabbed).toEqual({ source: 'ifc', count: 12, ms: 3 })
+  it('reads a decision node', () => {
+    const d = traceDetail({
+      stage: 'decision',
+      detail: {
+        decider: 'gemini-decision-1',
+        chosen: 'doors',
+        confidence: 0.87,
+        route: 'exact',
+        matched: ['doors', 7],
+        runner_up: 'windows',
+        runner_up_confidence: 0.1,
+      },
+    }).decision
+    expect(d).toMatchObject({ decider: 'gemini-decision-1', confidencePct: 87, route: 'exact', matched: ['doors'], runnerUp: 'windows', runnerUpPct: 10 })
   })
-  it('ignores missing or malformed fields', () => {
-    expect(traceDetail({})).toEqual({})
-    expect(traceDetail(node({ decision: 'x', kept_ids: 'y', grabbed: 3 }))).toEqual({})
+  it('reads resources, filter and answer nodes', () => {
+    expect(traceDetail({ stage: 'resources', detail: { tables: ['rooms', 'doors'], grabbed: 12, ms: 3 } }).resources).toEqual({ tables: 'rooms, doors', grabbed: 12, ms: 3 })
+    const f = traceDetail({ stage: 'filter', detail: { rule: 'on floor', kept: ['a', 'b'], dropped: [{ id: 'c', reason: 'other floor' }, 5] } }).filter
+    expect(f).toEqual({ rule: 'on floor', kept: 2, dropped: 2, reasons: [{ id: 'c', reason: 'other floor' }] })
+    expect(traceDetail({ stage: 'answer', detail: { source: 'exact', calls: 1, cost_usd: 0.002 } }).answer).toEqual({ source: 'exact', calls: 1, cost: 0.002 })
+  })
+  it('tolerates missing or malformed detail', () => {
+    expect(traceDetail({})).toEqual({ stage: undefined })
+    expect(traceDetail({ stage: 'filter', detail: { kept: 'x', dropped: 3 } }).filter).toMatchObject({ kept: undefined, dropped: undefined, reasons: [] })
   })
 })

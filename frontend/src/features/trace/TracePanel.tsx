@@ -7,7 +7,14 @@ import { Button } from '@/components/ui/button'
 import { useDraft } from '@/features/chat/draft'
 import { useUi } from '@/i18n/uiLang'
 import { cn } from '@/lib/utils'
+import { callsText, fmtUsd } from '@/features/chat/view'
 import { traceDetail } from './detail'
+
+const ROUTE_KEY: Record<string, 'tr_route_exact' | 'tr_route_cache' | 'tr_route_agent'> = {
+  exact: 'tr_route_exact',
+  cache: 'tr_route_cache',
+  agent: 'tr_route_agent',
+}
 import { actions, appStore, selectActiveTurn, useAppStore } from '@/store'
 
 const KIND: Record<TraceKind, { dot: string; card: string; conf: string }> = {
@@ -58,7 +65,7 @@ export function TracePanel() {
     const u = turn ? s.turns.find((x) => x.id === turn.replyTo) : undefined
     return u && u.role === 'user' ? u.text : ''
   })
-  const { tu } = useUi()
+  const { lang, tu } = useUi()
   const reduce = useReducedMotion()
   const back = useRef<HTMLButtonElement>(null)
   // A finished answer shows its full trace; a streaming one shows its tool calls as they arrive.
@@ -147,7 +154,7 @@ export function TracePanel() {
               <div
                 tabIndex={0}
                 data-trace-node={node.id}
-                aria-label={`${detail.decision ? tu('tr_decision') : KIND_LABEL[kind]}: ${node.title}. ${node.body}${ids.length ? ` Lights ${ids.length} on the plan.` : ''}`}
+                aria-label={`${detail.decision?.decider === 'gemini-decision-1' ? tu('tr_decision') : KIND_LABEL[kind]}: ${node.title}. ${node.body}${ids.length ? ` Lights ${ids.length} on the plan.` : ''}`}
                 onPointerEnter={(e) => e.pointerType === 'mouse' && light()}
                 onFocus={light}
                 onBlur={() => actions().hover([])}
@@ -168,42 +175,85 @@ export function TracePanel() {
                 <p className="text-[13px] text-foreground/85">{node.body}</p>
                 {detail.decision ? (
                   <div className="flex flex-wrap items-center gap-1.5" data-decision>
-                    <Badge>{tu('tr_decision')}</Badge>
+                    {detail.decision.decider === 'gemini-decision-1' ? (
+                      <Badge>{tu('tr_decision')}</Badge>
+                    ) : (
+                      <Badge variant="secondary">
+                        {detail.decision.decider === 'context' ? tu('tr_context') : tu('tr_router')}
+                      </Badge>
+                    )}
                     {detail.decision.confidencePct !== undefined ? (
                       <span className="num text-xs font-semibold text-primary">{detail.decision.confidencePct} %</span>
                     ) : null}
-                    {detail.decision.matched ? (
-                      <Badge variant="secondary">
-                        {tu('tr_matched')}: {detail.decision.matched}
+                    {detail.decision.route ? (
+                      <Badge variant="outline">
+                        {ROUTE_KEY[detail.decision.route] ? tu(ROUTE_KEY[detail.decision.route]) : detail.decision.route}
                       </Badge>
                     ) : null}
+                    {detail.decision.matched.map((m) => (
+                      <Badge key={m} variant="secondary">
+                        {m}
+                      </Badge>
+                    ))}
                     {detail.decision.runnerUp ? (
-                      <Badge variant="outline">
+                      <Badge variant="outline" className="num text-muted-foreground">
                         {tu('tr_runner_up')}: {detail.decision.runnerUp}
+                        {detail.decision.runnerUpPct !== undefined ? ` ${detail.decision.runnerUpPct} %` : ''}
                       </Badge>
                     ) : null}
                   </div>
                 ) : null}
-                {detail.kept !== undefined || detail.dropped !== undefined || detail.grabbed?.count !== undefined ? (
-                  <div className="flex flex-wrap items-center gap-1.5" data-counts>
-                    {detail.grabbed?.count !== undefined ? (
-                      <Badge variant="outline" className="num">
-                        {detail.grabbed.source
-                          ? tu('tr_grabbed_from', { n: detail.grabbed.count, source: detail.grabbed.source })
-                          : tu('tr_grabbed', { n: detail.grabbed.count })}
-                      </Badge>
-                    ) : null}
-                    {detail.kept !== undefined ? (
-                      <Badge variant="secondary" className="num">
-                        {tu('tr_kept', { n: detail.kept })}
-                      </Badge>
-                    ) : null}
-                    {detail.dropped !== undefined ? (
-                      <Badge variant="outline" className="num text-muted-foreground">
-                        {tu('tr_dropped', { n: detail.dropped })}
-                      </Badge>
+                {detail.resources?.grabbed !== undefined ? (
+                  <p className="num text-xs text-muted-foreground" data-resources>
+                    {tu('tr_resources', {
+                      n: detail.resources.grabbed,
+                      tables: detail.resources.tables ?? '–',
+                      ms: detail.resources.ms ?? 0,
+                    })}
+                  </p>
+                ) : null}
+                {detail.filter && (detail.filter.kept !== undefined || detail.filter.dropped !== undefined) ? (
+                  <div className="flex flex-col gap-1" data-filter>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {detail.filter.kept !== undefined ? (
+                        <Badge variant="secondary" className="num">
+                          {tu('tr_kept', { n: detail.filter.kept })}
+                        </Badge>
+                      ) : null}
+                      {detail.filter.dropped !== undefined ? (
+                        <Badge variant="outline" className="num text-muted-foreground">
+                          {tu('tr_dropped', { n: detail.filter.dropped })}
+                        </Badge>
+                      ) : null}
+                      {detail.filter.rule ? (
+                        <span className="text-xs text-muted-foreground">{tu('tr_rule', { rule: detail.filter.rule })}</span>
+                      ) : null}
+                    </div>
+                    {detail.filter.reasons.length > 0 ? (
+                      <details className="text-xs text-muted-foreground">
+                        <summary className="cursor-pointer select-none">{tu('tr_why_dropped')}</summary>
+                        <ul className="num mt-1 flex flex-col gap-0.5 pl-3">
+                          {detail.filter.reasons.map((r) => (
+                            <li key={r.id}>
+                              {r.id}
+                              {r.reason ? `: ${r.reason}` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                     ) : null}
                   </div>
+                ) : null}
+                {detail.answer ? (
+                  <p className="num text-xs text-muted-foreground" data-answer>
+                    {[
+                      detail.answer.source,
+                      detail.answer.calls !== undefined ? callsText(detail.answer.calls, lang) : null,
+                      detail.answer.cost !== undefined ? fmtUsd(detail.answer.cost) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
                 ) : null}
                 {node.tool ? (
                   <p className="num text-xs text-muted-foreground" data-tool={node.tool.name}>
