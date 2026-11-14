@@ -55,6 +55,7 @@ from aura.pipeline import Caller, PipelineError, Services, ask, chat_events
 from aura.sessions import router as sessions_router
 from aura.solvers.pdf import infer_floor_label_and_order
 from aura.store import Store, init_db
+from aura.voice import router as voice_router
 from aura.writer import Writer
 
 log = logging.getLogger("aura.main")
@@ -352,6 +353,7 @@ def create_app(
         max_age=600,
     )
     app.include_router(sessions_router)
+    app.include_router(voice_router)
     app.mount("/mcp", mcp_app)
     app.add_middleware(BodyCapMiddleware, cap=uploads.BODY_CAP)
     app.add_middleware(DefaultNoStoreMiddleware)
