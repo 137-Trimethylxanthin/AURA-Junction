@@ -110,3 +110,13 @@ describe('null as a value', () => {
     })
   })
 })
+
+describe('safeUrl', () => {
+  it('passes http(s) and root-relative URLs only', async () => {
+    const { safeUrl } = await import('./contract')
+    expect(safeUrl('https://doi.org/10.5281/zenodo.7788422')).toBe('https://doi.org/10.5281/zenodo.7788422')
+    expect(safeUrl('/drawings/x/plan.svg')).toBe('/drawings/x/plan.svg')
+    for (const bad of ['javascript:alert(1)', ' JavaScript:alert(1)', 'data:text/html,x', '//evil.test/x', 'vbscript:x', ''])
+      expect(safeUrl(bad)).toBeNull()
+  })
+})

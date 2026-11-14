@@ -41,11 +41,13 @@ export class ApiError extends Error {
 export class TransportError extends Error {
   readonly kind: 'network' | 'server' | 'timeout'
   readonly status?: number
-  constructor(message: string, kind: TransportError['kind'], status?: number) {
+  readonly body?: unknown
+  constructor(message: string, kind: TransportError['kind'], status?: number, body?: unknown) {
     super(message)
     this.name = 'TransportError'
     this.kind = kind
     this.status = status
+    this.body = body
   }
 }
 
@@ -67,6 +69,17 @@ export function dropNulls(v: unknown): unknown {
         .map(([k, x]) => [k, dropNulls(x)]),
     )
   return v
+}
+
+/**
+ * Model requests already sent before a failure (504 bodies and the SSE `timeout` error carry optional
+ * `calls`/`cost_usd`): they were paid for, so they count in the session total. Zero when not reported.
+ */
+export function spentOf(e: unknown): { calls: number; cost_usd: number } {
+  const b = e instanceof ApiError || e instanceof TransportError ? e.body : undefined
+  const o = (b && typeof b === 'object' ? b : {}) as { calls?: unknown; cost_usd?: unknown }
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0)
+  return { calls: n(o.calls), cost_usd: n(o.cost_usd) }
 }
 
 export const join = (base: string, path: string) => base.replace(/\/+$/, '') + path
@@ -109,7 +122,7 @@ export async function request(opts: ClientOptions, path: string, init: RequestIn
     body = null
   }
   body = dropNulls(body)
-  if (res.status >= 500) throw new TransportError(`Server error ${res.status}`, 'server', res.status)
+  if (res.status >= 500) throw new TransportError(`Server error ${res.status}`, 'server', res.status, body)
   if (res.status >= 400) {
     if (isErrorBody(body)) throw new ApiError(body.error, res.status, body.code, body)
     if (isFastApiDetail(body))

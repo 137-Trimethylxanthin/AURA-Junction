@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { useUi } from "@/i18n/uiLang"
 import { Link, useParams } from "react-router"
 import { AlertTriangleIcon, CloudOffIcon, FileQuestionIcon } from "lucide-react"
 import { AppShell } from "@/components/shell"
@@ -97,6 +98,7 @@ export default function Workspace() {
 }
 
 function LoadState({ load }: { load: DrawingLoad }) {
+  const { tu } = useUi()
   const pct =
     load.progress !== undefined
       ? Math.round(Math.min(1, Math.max(0, load.progress)) * 100)
@@ -110,7 +112,7 @@ function LoadState({ load }: { load: DrawingLoad }) {
             <Spinner />
           </EmptyMedia>
           <EmptyTitle>
-            <h1>Opening the drawing</h1>
+            <h1>{tu('opening')}</h1>
           </EmptyTitle>
         </EmptyHeader>
       )
@@ -123,17 +125,16 @@ function LoadState({ load }: { load: DrawingLoad }) {
               <Spinner />
             </EmptyMedia>
             <EmptyTitle>
-              <h1>Reading the drawing</h1>
+              <h1>{tu('reading')}</h1>
             </EmptyTitle>
             <EmptyDescription>
-              The server is extracting rooms and objects. This page opens the
-              drawing as soon as it is ready.
+              {tu('reading_text')}
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             {pct !== null ? (
               <div className="flex w-64 items-center gap-3">
-                <Progress value={pct} aria-label="Processing progress" />
+                <Progress value={pct} aria-label={tu('processing_progress')} />
                 <span className="num w-10 text-right text-xs text-muted-foreground">
                   {pct} %
                 </span>
@@ -150,28 +151,28 @@ function LoadState({ load }: { load: DrawingLoad }) {
       > = {
         failed: {
           icon: <AlertTriangleIcon />,
-          title: "This drawing could not be read",
-          text: load.message ?? "The server could not process the file.",
+          title: tu('load_failed'),
+          text: load.message ?? tu('load_failed_text'),
         },
         too_slow: {
           icon: <AlertTriangleIcon />,
-          title: "Reading this drawing is taking too long",
-          text: `The server has not finished after ${POLL_DEADLINE_MS / 60_000} minutes, so this page stopped waiting. Upload the file again, or try later.`,
+          title: tu('load_slow'),
+          text: tu('load_slow_text', { min: POLL_DEADLINE_MS / 60_000 }),
         },
         not_found: {
           icon: <FileQuestionIcon />,
-          title: "Drawing not found",
-          text: "It may have expired: uploads are deleted after 24 hours.",
+          title: tu('load_not_found'),
+          text: tu('load_not_found_text'),
         },
         unavailable: {
           icon: <CloudOffIcon />,
-          title: "This drawing needs the AURA server",
-          text: "The server is not connected right now, so only the bundled sample drawing can be opened.",
+          title: tu('load_unavailable'),
+          text: tu('load_unavailable_text'),
         },
         error: {
           icon: <AlertTriangleIcon />,
-          title: "The drawing could not be loaded",
-          text: load.message ?? "Try again in a moment.",
+          title: tu('load_error'),
+          text: load.message ?? tu('load_error_text'),
         },
       }
       const c = copy[load.state] ?? copy.error
@@ -186,11 +187,11 @@ function LoadState({ load }: { load: DrawingLoad }) {
           </EmptyHeader>
           <EmptyContent className="flex-row justify-center gap-2">
             <Button asChild>
-              <Link to="/app">All drawings</Link>
+              <Link to="/app">{tu('all_drawings')}</Link>
             </Button>
             <Button variant="outline" asChild>
               <Link to={`/d/${BUNDLED_DRAWING_ID}`}>
-                Open the sample drawing
+                {tu('open_sample')}
               </Link>
             </Button>
           </EmptyContent>

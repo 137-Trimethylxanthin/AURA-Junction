@@ -1,3 +1,4 @@
+import { spentOf } from '@/api/client'
 import { create } from 'zustand'
 import { apiBase } from '@/api/library'
 import { postRewrite } from '@/api/rewrite'
@@ -101,6 +102,8 @@ export const useRewrite = create<RewriteState>()((set, get) => ({
         cost: { calls: r.calls, cost_usd: r.cost_usd, tokens: r.tokens, model: r.model },
       })
     } catch (e) {
+      const spent = spentOf(e)
+      if (spent.calls || spent.cost_usd) actions().addSpend(spent.calls, spent.cost_usd)
       if (get().original !== original) return
       const blocks = localBlocks(original)
       set({ status: blocks.length ? 'ready' : 'error', via: 'local', blocks, note: errorText(e) })

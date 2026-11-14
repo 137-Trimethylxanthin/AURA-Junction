@@ -150,6 +150,7 @@ test.describe('laptop overflow', () => {
       const box = { id: 'text-01', x: 40, y: 40, w: 10, h: 3, label: 'Text', subject: 'fire_rating', note: value }
       await fakeChat(page, answerFrames({ ...base, answer: { kind: 'text', value, subject: 'fire_rating' }, evidence: { boxes: [box], rooms: [] }, detected_lang: 'de', canonical_en: 'Fire rating of the entrance door' }, 'de'))
       await open(page)
+      await minSidebar(page)
       await composerOf(page).fill('Welche Brandschutzklasse hat die Eingangstür?')
       await composerOf(page).press('Enter')
       const v = lastCard(page).locator('[data-answer-value]')
@@ -165,6 +166,7 @@ test.describe('laptop overflow', () => {
       const rows = Array.from({ length: 60 }, (_, i) => ({ id: `3cUkl32yn9qRSPvBJVyWYp${i}`, name: `Basic Wall:Interior - 138mm Partition (1-hr) ${i + 1}`, value: 4.25 + i }))
       await fakeChat(page, answerFrames({ ...base, answer: { kind: 'quantity', value: 412.5, unit: 'm' }, evidence: { boxes: [], rooms: [], rows }, canonical_en: 'Total wall length', detected_lang: 'en' }))
       await open(page)
+      await minSidebar(page)
       await composerOf(page).fill('What is the total wall length on this storey?')
       await composerOf(page).press('Enter')
       const card = lastCard(page)
@@ -215,6 +217,7 @@ test.describe('rewrite worst case', () => {
       await page.route('**/__api/health', (r) => json(r, 200, { ok: true, contract_version: V }))
       await page.route('**/__api/rewrite', (r) => json(r, 200, rewrite))
       await open(page)
+      await minSidebar(page)
       await expect(page.getByRole('status').filter({ hasText: 'Live API' })).toBeVisible()
       await composerOf(page).fill('ok also die wohnung a wie gross ist die eigentlich und auch noch die bäder und was ist mit den terrassen')
       await page.locator('[data-tidy]').first().click()
@@ -286,7 +289,7 @@ test.describe('library worst cases', () => {
       await page.locator('[data-upload-input]').setInputFiles(files)
       const alert = page.locator('[data-upload-rejected]')
       await expect(alert).toContainText('5 files not uploaded')
-      await expect(alert).toContainText('only 5 files are uploaded at a time; drop them again')
+      await expect(alert).toContainText('Only 5 files are uploaded at a time; drop these again')
       await expect.poll(() => posts.length).toBe(5)
       const ab = (await alert.boundingBox())!
       for (const li of await alert.locator('li').all()) {

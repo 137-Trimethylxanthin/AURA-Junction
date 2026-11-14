@@ -2,6 +2,7 @@ import { ApiError, TransportError, getDrawing, getDrawingStatus, getHealth, post
 import type { AskRequest, AskResponse, ChatEvent, Drawing, DrawingStatusBody, Lang, Override, Scope } from './contract'
 import { ChatUnavailable, getConversation, streamChat } from './stream'
 import type { Conversation } from './contract'
+import { safeUrl } from './contract'
 import { ask as askLocal } from './local'
 import { BUNDLED_DRAWING_ID } from '@/data/ids'
 
@@ -120,7 +121,10 @@ export function createSource(opts: SourceOptions = {}): Source {
     drawing(id) {
       if (!baseUrl) return Promise.reject(new TransportError('No API configured', 'network'))
       // Image URLs are root-relative to the API (contract §1.1); resolve them against the API base.
-      const abs = (u: string) => (u.startsWith('/') && !u.startsWith('//') ? baseUrl.replace(/\/+$/, '') + u : u)
+      const abs = (u: string) => {
+        const s = safeUrl(u) ?? ''
+        return s.startsWith('/') ? baseUrl.replace(/\/+$/, '') + s : s
+      }
       return getDrawing({ baseUrl, fetch: opts.fetch }, id).then((d) => ({
         ...d,
         images: {

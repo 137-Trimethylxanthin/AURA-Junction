@@ -1,3 +1,4 @@
+import { useUi } from "@/i18n/uiLang"
 import { Suspense, lazy, useMemo } from "react"
 import { BlocksIcon, SquarePenIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -69,6 +70,7 @@ function SessionButton() {
 
 export function HeaderActions() {
   const pluginsUsed = useEver(useAppStore((s) => s.ui.pluginsOpen))
+  const { tu } = useUi()
   const hasTurns = useAppStore((s) => s.turns.length > 0)
   return (
     <>
@@ -89,7 +91,7 @@ export function HeaderActions() {
       <SessionButton />
       <Button variant="outline" onClick={() => actions().setPluginsOpen(true)}>
         <BlocksIcon data-icon="inline-start" />
-        Plugins
+        {tu("plugins")}
       </Button>
       {pluginsUsed ? (
         <Suspense fallback={null}>

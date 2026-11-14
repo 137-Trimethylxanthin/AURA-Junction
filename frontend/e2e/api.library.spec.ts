@@ -314,3 +314,14 @@ test('an IFC drawing: notes are not read as "drawn twice", the licence id stays 
   await expect(page.getByText(/drawn twice|second copy/)).toHaveCount(0)
   await expect(card.locator('[data-chip="check"]')).toHaveText('No independent image to check against')
 })
+
+test('a #presenter= link turns presenter access on and leaves the address clean; other anchors are kept', async ({ page }) => {
+  await fakeApi(page, {})
+  await page.goto('/app#presenter=frag-tok')
+  await expect(page).toHaveURL('/app')
+  await expect(page.locator('[data-presenter="on"]')).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem('aura.presenter'))).toBe('frag-tok')
+  await page.goto('/app?presenter=q-tok#how')
+  await expect(page).toHaveURL('/app#how')
+  expect(await page.evaluate(() => localStorage.getItem('aura.presenter'))).toBe('q-tok')
+})

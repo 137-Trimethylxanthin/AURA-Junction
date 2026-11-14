@@ -134,7 +134,15 @@ export async function streamChat(req: ChatRequest, opts: ChatStreamOptions): Pro
       throw new TransportError(e instanceof Error ? e.message : 'Network error', 'network')
     }
     if (res.status === 404 || res.status === 405) throw new ChatUnavailable(res.status === 404)
-    if (res.status >= 500) throw new TransportError(`Server error ${res.status}`, 'server', res.status)
+    if (res.status >= 500) {
+      let body: unknown
+      try {
+        body = dropNulls(await res.json())
+      } catch {
+        body = undefined
+      }
+      throw new TransportError(`Server error ${res.status}`, 'server', res.status, body)
+    }
     if (res.status >= 400) {
       let body: unknown = null
       try {

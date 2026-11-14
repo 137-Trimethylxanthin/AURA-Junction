@@ -1,3 +1,4 @@
+import { useUi } from "@/i18n/uiLang"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   RotateCwIcon,
@@ -99,7 +100,8 @@ function FullSetLine() {
 }
 
 export default function LibraryPage() {
-  useTitle("Drawings")
+  const { tu } = useUi()
+  useTitle(tu("nav_drawings"))
   const base = apiBase()
   const { list, retry } = useLibrary(base)
   const [query, setQuery] = useState("")
@@ -152,7 +154,7 @@ export default function LibraryPage() {
           >
             <div className="flex min-h-10 flex-wrap items-center gap-3">
               <h2 id="library-title" className="mr-auto text-sm font-medium">
-                Library
+                {tu("library")}
                 {list.state === "ready" ? (
                   <span className="num ml-2 font-normal text-muted-foreground">
                     {shown.length}
@@ -169,8 +171,8 @@ export default function LibraryPage() {
                     type="search"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search drawings"
-                    aria-label="Search drawings"
+                    placeholder={tu("search_drawings")}
+                    aria-label={tu("search_drawings")}
                     className="h-10 pl-9"
                   />
                 </div>
@@ -182,7 +184,7 @@ export default function LibraryPage() {
                   spacing={0}
                   value={kind}
                   onValueChange={(v) => setKind((v || "all") as typeof kind)}
-                  aria-label="Drawing kind"
+                  aria-label={tu("drawing_kind")}
                 >
                   <ToggleGroupItem value="all">All</ToggleGroupItem>
                   {kinds.map((k) => (
@@ -197,26 +199,22 @@ export default function LibraryPage() {
             {list.state === "error" ? (
               <Alert variant="destructive" data-library-error>
                 <TriangleAlertIcon />
-                <AlertTitle>The drawing list could not be loaded</AlertTitle>
+                <AlertTitle>{tu("list_failed")}</AlertTitle>
                 <AlertDescription>
-                  {list.unreadable
-                    ? "The server answered, but this app could not read the list."
-                    : "The server did not answer."}{" "}
-                  The bundled sample below still works offline.
+                  {list.unreadable ? tu("list_unreadable") : tu("list_no_answer")}{" "}
+                  {tu("list_sample_works")}
                 </AlertDescription>
                 <AlertAction>
                   <Button variant="outline" onClick={retry}>
                     <RotateCwIcon data-icon="inline-start" />
-                    Retry
+                    {tu("retry")}
                   </Button>
                 </AlertAction>
               </Alert>
             ) : null}
             {list.state === "ready" && list.dropped ? (
               <p className="text-xs text-warning" data-library-dropped>
-                {list.dropped === 1
-                  ? "1 drawing in the list could not be read and is not shown."
-                  : `${list.dropped} drawings in the list could not be read and are not shown.`}
+                {list.dropped === 1 ? tu("dropped_1") : tu("dropped_n", { n: list.dropped })}
               </p>
             ) : null}
             {!base ? (
@@ -272,12 +270,10 @@ export default function LibraryPage() {
                     <SearchXIcon />
                   </EmptyMedia>
                   <EmptyTitle>
-                    {drawings.length ? "No drawing matches" : "No drawings yet"}
+                    {drawings.length ? tu("no_match") : tu("no_drawings")}
                   </EmptyTitle>
                   <EmptyDescription>
-                    {drawings.length
-                      ? "Try another search or kind."
-                      : "Upload a DXF to get started."}
+                    {drawings.length ? tu("no_match_text") : tu("no_drawings_text")}
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>

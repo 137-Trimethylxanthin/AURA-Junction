@@ -1,6 +1,6 @@
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { AskResponse, AskRoute, Box, ChatEvent, Check, Drawing, EvidenceRoom, Lang, Override, PctRect, RankedCheck, Scope, TraceNode } from '@/api/contract'
-import { ApiError, TransportError } from '@/api/client'
+import { ApiError, TransportError, spentOf } from '@/api/client'
 import { createSource, type Source, type SourceStatus } from '@/api/source'
 import { BUNDLED_DRAWING_ID, bundledDrawing } from '@/data/drawing'
 import { emptyToggles, isRoomEvidenceId, roomIdOfEvidence, type Toggles } from '@/lib/answer'
@@ -420,6 +420,8 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
           set((st) => ({ session: { ...st.session, lang: response.detected_lang } }))
         } catch (e) {
           if (inflight === ctrl) inflight = null
+          const spent = spentOf(e)
+          if (spent.calls || spent.cost_usd) get().addSpend(spent.calls, spent.cost_usd)
           if (ctrl.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
             patchAgent(pending.id, () => ({ status: 'error', error: { message: t(get().session.lang, 'stopped'), code: 'cancelled' } }))
             return pending.id

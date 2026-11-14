@@ -1,10 +1,14 @@
 # Cloudflare Pages response headers.
-# Before deploying, replace https://aura-backend.example.modal.run in connect-src
-# with the real Modal web URL (the one `modal deploy` prints). Everything else is fixed.
+# Before deploying, replace BOTH occurrences of https://aura-backend.example.modal.run (connect-src and img-src)
+# with the real Modal web URL (the one `modal deploy` prints). Plans and thumbnails are images served by the API,
+# so img-src needs its origin; never widen it to `img-src *` or `https:`. Everything else is fixed.
+# Permissions-Policy: the voice composer needs the microphone on this origin only.
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://aura-backend.example.modal.run; frame-ancestors 'none'; base-uri 'self'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://aura-backend.example.modal.run; font-src 'self' data:; connect-src 'self' https://aura-backend.example.modal.run; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'
+  Permissions-Policy: microphone=(self), camera=(), geolocation=(), payment=(), usb=()
+  X-Frame-Options: DENY
 
 /assets/*
   Cache-Control: public, max-age=31536000, immutable

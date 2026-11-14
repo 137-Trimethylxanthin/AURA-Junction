@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from "react"
+import { LanguageMenu } from "./LanguageMenu"
+import { useUi } from "@/i18n/uiLang"
 import { ChevronsDownIcon, ChevronsUpIcon } from "lucide-react"
 import { Link } from "react-router"
 
@@ -36,6 +38,10 @@ export type AppShellSlots = {
 /** Desktop split from this width up; below it the chat is a sticky bottom panel. */
 export const SPLIT_QUERY = "(min-width: 900px)"
 
+function AgentTitle() {
+  return <>{useUi().tu("agent_title")}</>
+}
+
 function Header({ title, headerActions }: Pick<AppShellSlots, "title" | "headerActions">) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4 pt-[env(safe-area-inset-top)]">
@@ -48,6 +54,7 @@ function Header({ title, headerActions }: Pick<AppShellSlots, "title" | "headerA
       </div>
       <div className="flex shrink-0 items-center gap-2" data-slot="header-actions">
         {headerActions}
+        <LanguageMenu />
       </div>
     </header>
   )
@@ -82,7 +89,9 @@ function Sidebar({
   return (
     <aside aria-label="Drawing agent" className={cn("flex h-full min-h-0 min-w-0 flex-col bg-background", className)}>
       <div className="flex h-11 shrink-0 items-center justify-between border-b pr-1 pl-4">
-        <h2 className="text-sm font-semibold">Drawing agent</h2>
+        <h2 className="text-sm font-semibold">
+          <AgentTitle />
+        </h2>
         {expand ? (
           <Button
             variant="ghost"

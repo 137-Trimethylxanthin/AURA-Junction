@@ -1,5 +1,5 @@
 import { appStore, useAppStore } from '@/store'
-import { licenceLabel } from '@/api/contract'
+import { licenceLabel, safeUrl } from '@/api/contract'
 import './plan.css'
 
 export { PlanStage } from './PlanStage'
@@ -15,9 +15,9 @@ export function Credit() {
     // Wraps rather than truncates: the full attribution stays readable without interaction.
     <p className="min-w-0 leading-snug text-pretty">
       <span>{credit.text}</span>{' '}
-      {credit.url ? (
+      {safeUrl(credit.url) ? (
         <a
-          href={credit.url}
+          href={safeUrl(credit.url)!}
           target="_blank"
           rel="noreferrer"
           className="rounded-sm font-medium whitespace-nowrap text-foreground underline underline-offset-2"

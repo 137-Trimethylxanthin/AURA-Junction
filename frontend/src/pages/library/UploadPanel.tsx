@@ -1,3 +1,5 @@
+import { useUi } from "@/i18n/uiLang"
+import type { UiKey } from "@/i18n/strings"
 import {
   useCallback,
   useEffect,
@@ -106,8 +108,12 @@ function useUploads(base: string) {
   const poll = useCallback(
     (id: string, createdAt: string) => {
       const sent = Date.parse(createdAt)
+      const started = Date.now()
+      // Still queued/processing this long after upload: stuck.
       const overdue = () =>
         Number.isFinite(sent) && Date.now() - sent > UPLOAD_DEADLINE_MS
+      // Status calls failing: give up only after failing for this long in this session (a cold start is not "stuck").
+      const failingTooLong = () => Date.now() - started > UPLOAD_DEADLINE_MS
       const tick = async () => {
         clearTimeout(timers.current.get(id))
         try {
@@ -139,7 +145,7 @@ function useUploads(base: string) {
             patch(id, { phase: "expired" })
             return
           }
-          if (overdue()) {
+          if (failingTooLong()) {
             patch(id, { phase: "too_slow", progress: undefined, error: undefined })
             return
           }
@@ -239,14 +245,14 @@ function useUploads(base: string) {
   return { rows: rows.filter((r) => r.phase !== "expired"), start, remove }
 }
 
-const PHASE_LABEL: Record<Row["phase"], string> = {
-  uploading: "Uploading",
-  queued: "Queued",
-  processing: "Processing",
-  ready: "Ready",
-  failed: "Could not be read",
-  expired: "Expired",
-  too_slow: "Took too long",
+const PHASE_LABEL: Record<Row["phase"], UiKey> = {
+  uploading: "phase_uploading",
+  queued: "phase_queued",
+  processing: "phase_processing",
+  ready: "phase_ready",
+  failed: "phase_failed",
+  expired: "phase_expired",
+  too_slow: "phase_too_slow",
 }
 
 const ATTACHMENT_STATE = {
@@ -270,7 +276,12 @@ const PhaseIcon = ({ phase }: { phase: Row["phase"] }) =>
     <FileIcon />
   )
 
+function UiText({ k }: { k: UiKey }) {
+  return <>{useUi().tu(k)}</>
+}
+
 function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
+  const { tu } = useUi()
   const pct =
     r.progress !== undefined
       ? Math.round(Math.min(1, Math.max(0, r.progress)) * 100)
@@ -285,7 +296,7 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
       <AttachmentContent>
         <AttachmentTitle title={r.name}>{r.name}</AttachmentTitle>
         <AttachmentDescription aria-live="polite" className="whitespace-normal">
-          {PHASE_LABEL[r.phase]}
+          {tu(PHASE_LABEL[r.phase])}
           {r.phase === "failed" && r.error
             ? `: ${r.error.replace(/^(DXF |The file |This file )?could not be read:?\s*/i, "")}`
             : ""}
@@ -299,7 +310,7 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
         {busy ? (
           <Progress
             value={pct ?? 0}
-            aria-label={`${r.name}: ${PHASE_LABEL[r.phase].toLowerCase()}`}
+            aria-label={`${r.name}: ${tu(PHASE_LABEL[r.phase]).toLowerCase()}`}
             className={cn("mt-1.5", pct === null && "opacity-50")}
           />
         ) : null}
@@ -307,7 +318,7 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
       <AttachmentActions className="gap-1">
         {r.phase === "ready" ? (
           <Button variant="outline" asChild>
-            <Link to={`/d/${encodeURIComponent(r.id)}`}>Open</Link>
+            <Link to={`/d/${encodeURIComponent(r.id)}`}>{tu("open")}</Link>
           </Button>
         ) : null}
         {r.delete_token ? (
@@ -353,8 +364,9 @@ function UsageNote() {
   return (
     <p className="text-xs text-muted-foreground">
       Upload only drawings you may share. Uploads are processed on our server
-      and deleted after 24 hours; drawings without CAD data are sent to Google
-      Gemini for detection and checks.{" "}
+      and deleted after 24 hours. Drawings without CAD data are sent to Google
+      Gemini for detection and checks; a question our routing cannot match is
+      sent to Gemini with the drawing’s room labels and areas.{" "}
       <Link
         to="/privacy"
         className="font-medium text-foreground underline underline-offset-2"
@@ -371,7 +383,9 @@ export function UploadPanel({ base }: { base: string | null }) {
     <Card size="sm" role="region" aria-labelledby="upload-title">
       <CardHeader>
         <CardTitle>
-          <h2 id="upload-title">Upload a drawing</h2>
+          <h2 id="upload-title">
+            <UiText k="upload_title" />
+          </h2>
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -398,6 +412,7 @@ export function UploadPanel({ base }: { base: string | null }) {
 }
 
 function Uploader({ base }: { base: string }) {
+  const { tu } = useUi()
   const { rows, start, remove } = useUploads(base)
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
@@ -423,7 +438,7 @@ function Uploader({ base }: { base: string }) {
       out.push({
         name: extra.map((f) => f.name).join(", "),
         n: extra.length,
-        reason: `only ${UPLOAD_BATCH} files are uploaded at a time; drop ${extra.length === 1 ? "it" : "them"} again afterwards.`,
+        reason: `Only ${UPLOAD_BATCH} files are uploaded at a time; drop ${extra.length === 1 ? "this one" : "these"} again afterwards:`,
       })
     setRejection(out)
     // One after another, so the server's per-IP limits see a steady trickle, not a burst.
@@ -455,15 +470,14 @@ function Uploader({ base }: { base: string }) {
       >
         <FileUpIcon className="size-6 text-muted-foreground" aria-hidden />
         <div className="flex flex-col gap-1">
-          <p className="text-sm text-foreground">Drop a DXF file here</p>
+          <p className="text-sm text-foreground">{tu("drop_here")}</p>
           <p className="text-xs text-muted-foreground">
             <span className="num">DXF ≤ {UPLOAD_CAPS.dxf.bytes / MB} MB</span>{" "}
-            for everyone · up to <span className="num">{UPLOAD_BATCH}</span>{" "}
-            at a time
+            {tu("for_everyone", { n: UPLOAD_BATCH })}
           </p>
         </div>
         <Button variant="outline" onClick={() => input.current?.click()}>
-          Choose a file
+          {tu("choose_file")}
         </Button>
         <input
           ref={input}
@@ -522,7 +536,16 @@ function Uploader({ base }: { base: string }) {
             <ul className="flex flex-col gap-1">
               {rejection.map((r, i) => (
                 <li key={i} className="line-clamp-3" title={`${r.name}: ${r.reason}`}>
-                  <b className="font-medium break-all">{r.name}</b>: {r.reason}
+                  {r.n ? (
+                    // Several files: the reason first, so a long list of names can't hide it.
+                    <>
+                      {r.reason} <b className="font-medium break-all">{r.name}</b>
+                    </>
+                  ) : (
+                    <>
+                      <b className="font-medium break-all">{r.name}</b>: {r.reason}
+                    </>
+                  )}
                 </li>
               ))}
             </ul>
@@ -536,9 +559,9 @@ function Uploader({ base }: { base: string }) {
         <div className="flex flex-col gap-2">
           <Separator />
           <h3 className="text-xs font-medium text-muted-foreground">
-            Your uploads
+            {tu("your_uploads")}
           </h3>
-          <ul className="flex flex-col gap-2" aria-label="Your uploads">
+          <ul className="flex flex-col gap-2" aria-label={tu("your_uploads")}>
             {rows.map((r) => (
               <li key={r.uid ?? r.id} data-upload={r.phase} className={r.leaving ? "exit-fall" : "enter-rise"}>
                 <UploadRow r={r} onDelete={(x) => void remove(x)} />

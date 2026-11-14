@@ -1,3 +1,5 @@
+import { tu } from "@/i18n/uiLang"
+import type { UiKey } from "@/i18n/strings"
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { motion, useReducedMotion } from "motion/react"
 import { toast } from "sonner"
@@ -69,27 +71,27 @@ function useChatSideEffects() {
         const x = s.turns.find((t) => t.id === e.turn_id)
         if (x && x.role === "agent") {
           const name = evidenceName(s, e.turn_id, e.evidence_id)
-          let verb: string
+          let verb: UiKey
           if (isRoomEvidenceId(e.evidence_id)) {
             const room = x.response?.evidence.rooms.find(
               (r) => `room-${r.room_id}` === e.evidence_id
             )
             const now = x.toggles.included[e.evidence_id] ?? room?.included
-            verb = now ? "added" : "left out"
+            verb = now ? "ev_added" : "ev_left_out"
           } else
-            verb = x.toggles.rejected[e.evidence_id] ? "rejected" : "restored"
+            verb = x.toggles.rejected[e.evidence_id] ? "ev_rejected" : "ev_restored"
           const d = x.response
             ? deriveAnswer(x.response, x.toggles, s.session.drawing)
             : null
           // Formatted like the card (decimal comma in French, the unit or noun after it).
           const now =
             x.response && d ? valueParts(x.response, d, x.response.detected_lang) : null
-          toast(`${name} ${verb}`, {
+          toast(tu(verb, { name }), {
             id: UNDO_TOAST,
             toasterId: CHAT_TOASTER,
             duration: REJECT_TOAST_MS,
-            description: now ? `Answer is now ${now.join(" ")}.` : undefined,
-            action: { label: "Undo", onClick: () => actions().undo() },
+            description: now ? tu("answer_now", { value: now.join(" ") }) : undefined,
+            action: { label: tu("undo"), onClick: () => actions().undo() },
           })
         }
       } else if (s.undoStack.length < prev.undoStack.length) {

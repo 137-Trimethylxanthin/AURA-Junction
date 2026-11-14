@@ -115,6 +115,17 @@ export interface Credit {
 }
 
 /** The licence text to show: the human name, else an SPDX id such as "CC BY 4.0", never a LicenseRef-… id. */
+/**
+ * Links and image URLs that come from the API or a drawing file: only http(s) and root-relative paths pass;
+ * anything else (javascript:, data:, vbscript:, protocol-relative //host) gives null and is not rendered.
+ */
+export function safeUrl(u: string | undefined): string | null {
+  if (!u) return null
+  const s = u.trim()
+  if (s.startsWith('/') && !s.startsWith('//')) return s
+  return /^https?:\/\//i.test(s) ? s : null
+}
+
 export function licenceLabel(c: Pick<Credit, 'license' | 'license_name'>): string {
   if (c.license_name) return c.license_name
   return /^LicenseRef-/i.test(c.license) ? 'Licence terms' : c.license
@@ -386,7 +397,7 @@ export type ChatEvent =
   | { event: 'tool_result'; data: { node_id: string; evidence: AskResponse['evidence']; summary: string } }
   | { event: 'check'; data: { check: Check & Partial<Omit<RankedCheck, keyof Check>> } }
   | { event: 'answer'; data: { response: AskResponse } }
-  | { event: 'error'; data: { error: string; code: ErrorCode } }
+  | { event: 'error'; data: { error: string; code: ErrorCode; calls?: number; cost_usd?: number } }
   | { event: 'done'; data: Record<string, never> }
 export type ChatEventName = ChatEvent['event']
 export const CHAT_EVENTS: readonly ChatEventName[] = [
@@ -492,6 +503,9 @@ export interface ErrorBody {
   contract_version: string
   error: string
   code: ErrorCode
+  /** 504 (timeout) only: model requests already sent for this turn, and their cost. Counted in the session total. */
+  calls?: number
+  cost_usd?: number
 }
 
 /** FastAPI's default validation body (422); treated as a 4xx like ErrorBody. */

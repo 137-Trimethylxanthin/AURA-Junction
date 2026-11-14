@@ -17,8 +17,14 @@ export default function PrivacyPage() {
             cookies, and the site loads no analytics or advertising scripts.
           </p>
           <p>
-            Your browser keeps the delete token of each drawing you upload in
-            its own local storage. Clearing this site’s data removes it.
+            Your browser keeps a few things in its own local storage: the
+            delete token of each drawing you upload, the id of your current
+            conversation on each drawing (so a reload can bring it back), the
+            presenter token if you opened a presenter link, and small interface
+            choices. Each item goes only to our server, and only where it is
+            needed: the conversation id with your next question, a delete
+            token when you delete that drawing, the presenter token with an
+            upload. Clearing this site’s data removes all of it.
           </p>
         </ProseSection>
 
@@ -26,18 +32,20 @@ export default function PrivacyPage() {
           <ul className="flex list-disc flex-col gap-1.5 pl-5">
             <li>The file is processed on our server, which runs on Modal.</li>
             <li>
-              It is deleted 24 hours after upload by an hourly clean-up, or at
-              once when you delete it with its delete token in the app.
+              An hourly clean-up deletes it 24 hours after upload. Deleting it in
+              the app with its delete token removes it from the server at once
+              and stops it being served.
             </li>
             <li>
-              DXF files are answered by code on our server, with no model and no
-              image check. Only a question our routing cannot match sends its
-              text, with no image of your drawing, to Google.
+              The DXF file itself is never sent to a model. Counts and areas are
+              computed by code on our server. When a question needs a model (see
+              below), text taken from your drawing goes with it: room names and
+              numbers, apartment letters, room areas and printed text.
             </li>
             <li>
               Image and PDF uploads are open only with a presenter link. Those
               images are sent to the Google Gemini API to detect and check
-              items.
+              items, and again with any question our routing cannot match.
             </li>
           </ul>
         </ProseSection>
@@ -49,10 +57,18 @@ export default function PrivacyPage() {
               model and never leave our server.
             </li>
             <li>
-              Only when our routing cannot match a question is its text sent to
-              the Google Gemini API to work out what you asked. For library
-              drawings a low-resolution copy of the public dataset image goes
-              with it; for your own DXF uploads, the text alone.
+              Only when our routing cannot match a question is it sent to the
+              Google Gemini API. The request holds the question, the room labels
+              and apartment letters of the drawing, and, when the model looks
+              things up, the results it asked for (room names and areas, counts,
+              printed text) and up to the last six questions and answers of the
+              conversation. For library drawings a low-resolution copy of the
+              public dataset image may go with it; for an image upload, that
+              image. Every such call is shown on the answer with its cost.
+            </li>
+            <li>
+              The “tidy this up” button sends the text you typed and the
+              drawing’s room labels to Gemini, as one call shown with its cost.
             </li>
             <li>
               Answers and conversations, including the question text, are
@@ -79,15 +95,17 @@ export default function PrivacyPage() {
 
         <ProseSection title="Request logs">
           <p>
-            Your IP address is used in memory to apply rate limits and is never
-            stored. Logs keep a salted hash of it instead, with the time, the
-            path or model called, the status, the latency, and for model calls
-            the token count and cost. They hold no question text, no browser
-            details and no raw IP address.
+            Our server uses your IP address in memory to apply rate limits. Our
+            own logs keep a salted hash of it instead, with the time, the path
+            or model called, the status, the latency, and for model calls the
+            token count and cost. They hold no question text and no browser
+            details.
           </p>
           <p>
-            Logs are kept for the duration of the hackathon and deleted when the
-            server is taken down.
+            Our hosting providers (Modal for the server, Cloudflare for this
+            site) keep their own request logs under their own retention rules,
+            and those can include IP addresses. We delete our log files when the
+            server is taken down after the hackathon.
           </p>
         </ProseSection>
 

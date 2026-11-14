@@ -1,5 +1,5 @@
 import { ApiError, TransportError } from './client'
-import { fastApiMessage, isErrorBody, isUploadResult, type UploadResult } from './contract'
+import { fastApiMessage, isErrorBody, isUploadResult, safeUrl, type UploadResult } from './contract'
 
 /**
  * Thin, JSON-free helpers for the library page: API base, presenter token, the user's own uploads and the upload
@@ -12,9 +12,10 @@ export function apiBase(): string | null {
 }
 
 /** Resolve a root-relative URL served by the API (thumbnails, images) against the API base. */
-export function apiUrl(url: string, base = apiBase()): string {
-  if (!base || !url.startsWith('/') || url.startsWith('//')) return url
-  return base.replace(/\/+$/, '') + url
+export function apiUrl(url: string, base = apiBase()): string | null {
+  const safe = safeUrl(url)
+  if (!safe || !base || !safe.startsWith('/')) return safe
+  return base.replace(/\/+$/, '') + safe
 }
 
 // ---- storage (localStorage can throw in private mode; every access is guarded) -----------------------------

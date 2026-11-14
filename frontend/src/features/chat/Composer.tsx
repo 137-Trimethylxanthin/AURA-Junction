@@ -1,3 +1,4 @@
+import { useUi } from "@/i18n/uiLang"
 import {
   Suspense,
   lazy,
@@ -52,6 +53,7 @@ export function Composer() {
   const focusTick = useDraft((s) => s.focusTick)
   const pending = useAppStore(selectIsPending)
   const hintId = useId()
+  const { tu } = useUi()
   const mark = useAppStore(selectAttachedMark)
   const hasTurns = useAppStore((s) => s.turns.length > 0)
   const lang = useAppStore(selectSessionLang)
@@ -200,8 +202,8 @@ export function Composer() {
               send()
             }
           }}
-          placeholder="Ask in any language…"
-          aria-label="Ask about this drawing"
+          placeholder={tu('ask_placeholder')}
+          aria-label={tu('ask_label')}
           maxLength={MAX_QUESTION}
           aria-describedby={hintId}
           aria-keyshortcuts="/"
@@ -224,9 +226,9 @@ export function Composer() {
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Ask by voice"
+            aria-label={tu('ask_voice')}
             aria-pressed={voiceOpen}
-            title="Ask by voice"
+            title={tu('ask_voice')}
             onClick={voiceOpen ? closeVoice : openVoice}
             className={cn(
               voiceOpen && "bg-destructive-surface text-destructive"
@@ -237,8 +239,8 @@ export function Composer() {
         ) : null}
         <Button
           size="icon"
-          aria-label="Send"
-          title="Send (Enter)"
+          aria-label={tu('send')}
+          title={tu('send_hint')}
           disabled={!text.trim() || pending}
           onClick={send}
         >
@@ -248,11 +250,11 @@ export function Composer() {
 
       {pending && text.trim() ? (
         <p id={hintId} className="px-1 text-xs text-muted-foreground" role="status">
-          Waiting for the answer above. Stop it or wait, then send this one.
+          {tu('waiting')}
         </p>
       ) : text.length > MAX_QUESTION - 200 ? (
         <p id={hintId} className="num px-1 text-xs text-muted-foreground" role="status">
-          {text.length} / {MAX_QUESTION} characters
+          {tu('chars', { n: text.length, max: MAX_QUESTION })}
         </p>
       ) : null}
 

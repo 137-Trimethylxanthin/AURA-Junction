@@ -34,6 +34,7 @@ function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
   const ready = d.status === "ready"
   const facts = factsRatio(d)
   const [broken, setBroken] = useState(false)
+  const thumb = d.thumbnail ? apiUrl(d.thumbnail) : null
   const pct =
     d.progress !== undefined
       ? Math.round(Math.min(1, Math.max(0, d.progress)) * 100)
@@ -41,9 +42,9 @@ function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
   return (
     <Card size="sm" className="h-full gap-3 pt-0">
       <div className="relative aspect-[3/2] w-full overflow-hidden border-b bg-muted/60">
-        {d.thumbnail && !broken ? (
+        {thumb && !broken ? (
           <img
-            src={apiUrl(d.thumbnail)}
+            src={thumb}
             alt=""
             loading="lazy"
             decoding="async"

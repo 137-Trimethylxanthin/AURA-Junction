@@ -12,24 +12,28 @@ import { useMediaQuery } from "@/hooks/use-media-query"
 import { presenter } from "@/api/library"
 
 /**
- * A `?presenter=<token>` link stores the presenter token in this browser (never in the bundle) and is then
- * removed from the address bar, so it does not end up in history, screenshots or shared links.
+ * A `#presenter=<token>` link (or the older `?presenter=`) stores the presenter token in this browser (never in
+ * the bundle) and is then removed from the address bar, so it does not end up in history, screenshots or shared
+ * links. Prefer the #fragment: browsers never send it to a server, so it stays out of request logs and Referer
+ * headers. The token is only ever sent as the X-AURA-Presenter header of POST /uploads.
  */
 function usePresenterLink() {
   const { pathname, search, hash } = useLocation()
   const navigate = useNavigate()
   useEffect(() => {
     const params = new URLSearchParams(search)
-    const token = params.get("presenter")
-    if (token === null) return
+    // Only a hash that is itself "presenter=…" is read as parameters; any other hash is an anchor and stays as is.
+    const frag = /^#presenter=/.test(hash) ? new URLSearchParams(hash.slice(1)) : null
+    const token = frag?.get("presenter") ?? params.get("presenter")
+    if (token === null || token === undefined) return
     params.delete("presenter")
     if (token.trim()) {
-      presenter.set(token.trim())
+      presenter.set(token.trim().slice(0, 512))
       toast.success("Presenter access is on in this browser.")
     }
     const rest = params.toString()
     void navigate(
-      { pathname, search: rest ? `?${rest}` : "", hash },
+      { pathname, search: rest ? `?${rest}` : "", hash: frag ? "" : hash },
       { replace: true }
     )
   }, [pathname, search, hash, navigate])

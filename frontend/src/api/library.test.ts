@@ -27,7 +27,9 @@ describe('apiUrl', () => {
   it('resolves root-relative URLs against the API base only', () => {
     expect(apiUrl('/drawings/x/plan.svg', 'https://api.example/')).toBe('https://api.example/drawings/x/plan.svg')
     expect(apiUrl('https://cdn/x.png', 'https://api.example')).toBe('https://cdn/x.png')
-    expect(apiUrl('//cdn/x.png', 'https://api.example')).toBe('//cdn/x.png')
+    // Protocol-relative and non-http URLs from the API are refused (security review L8/XSS surfaces).
+    expect(apiUrl('//cdn/x.png', 'https://api.example')).toBeNull()
+    expect(apiUrl('javascript:alert(1)', 'https://api.example')).toBeNull()
     expect(apiUrl('/drawings/x/plan.svg', null)).toBe('/drawings/x/plan.svg')
   })
 })

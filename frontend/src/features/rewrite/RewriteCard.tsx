@@ -247,7 +247,7 @@ function Block({
           ) : null}
         </div>
       ) : null}
-      {/* Grows with the sentence (up to about 8 lines) so the whole question can be read before it is sent. */}
+      {/* Grows with the sentence (up to about 12 lines) so the whole question can be read before it is sent. */}
       <Textarea
         rows={1}
         value={b.question}
@@ -267,7 +267,7 @@ function Block({
             void st.askOne(b.key)
           }
         }}
-        className="max-h-44 min-h-10 resize-none [overflow-wrap:anywhere]"
+        className="max-h-64 min-h-10 resize-none [overflow-wrap:anywhere]"
       />
       {!b.routable ? (
         <p className="text-xs text-muted-foreground">

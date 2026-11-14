@@ -1,4 +1,6 @@
 import { Columns2Icon, Loader2Icon, MinusIcon, MousePointer2Icon, PlusIcon, RefreshCwIcon, RulerIcon, SquareDashedIcon } from 'lucide-react'
+import { useUi } from '@/i18n/uiLang'
+import type { UiKey } from '@/i18n/strings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
@@ -8,10 +10,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import { ZOOM_STEPS, actions, selectZoom, useAppStore, useAppStoreShallow, useSource, type Tool } from '@/store'
 
-const TOOLS: { id: Tool; label: string; hint: string; Icon: typeof MousePointer2Icon }[] = [
-  { id: 'select', label: 'Select', hint: 'Click a box to find it; click again to reject it', Icon: MousePointer2Icon },
-  { id: 'mark', label: 'Mark area', hint: 'Drag a rectangle on the plan to scope your question', Icon: SquareDashedIcon },
-  { id: 'whatif', label: 'What-if sizes', hint: 'Pick a room to change its sizes', Icon: RulerIcon },
+const TOOLS: { id: Tool; label: UiKey; hint: UiKey; Icon: typeof MousePointer2Icon }[] = [
+  { id: 'select', label: 'tool_select', hint: 'tool_select_hint', Icon: MousePointer2Icon },
+  { id: 'mark', label: 'tool_mark', hint: 'tool_mark_hint', Icon: SquareDashedIcon },
+  { id: 'whatif', label: 'tool_whatif', hint: 'tool_whatif_hint', Icon: RulerIcon },
 ]
 
 function pickTool(next: string) {
@@ -29,23 +31,24 @@ export function PlanToolbar() {
   const canWhatIf = useAppStore((s) => s.session.drawing.rooms.some((r) => !!r.rect))
   const zoom = useAppStore(selectZoom)
   const zoomIndex = useAppStore((s) => s.ui.zoomIndex)
+  const { tu } = useUi()
 
   return (
-    <div className="@container flex w-full min-w-0 flex-wrap items-center gap-2" role="toolbar" aria-label="Plan tools">
+    <div className="@container flex w-full min-w-0 flex-wrap items-center gap-2" role="toolbar" aria-label={tu('plan_tools')}>
       <ToggleGroup
         type="single"
         variant="outline"
         spacing={0}
         value={tool}
         onValueChange={pickTool}
-        aria-label="Tool"
+        aria-label={tu('tool')}
       >
         {TOOLS.filter((x) => x.id !== 'whatif' || canWhatIf).map(({ id, label, hint, Icon }) => (
           <ToggleGroupItem
             key={id}
             value={id}
-            title={hint}
-            aria-label={label}
+            title={tu(hint)}
+            aria-label={tu(label)}
             className={cn(
               // One shape for all three. Select is neutral; Mark and What-if are user input → user colour.
               'gap-1.5 data-[state=on]:text-primary-foreground hover:data-[state=on]:text-primary-foreground',
@@ -55,7 +58,7 @@ export function PlanToolbar() {
             )}
           >
             <Icon data-icon="inline-start" />
-            <span className="@max-[520px]:sr-only">{label}</span>
+            <span className="@max-[520px]:sr-only">{tu(label)}</span>
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
@@ -66,12 +69,12 @@ export function PlanToolbar() {
             variant="outline"
             pressed={compare.on}
             onPressedChange={(on) => actions().setCompare({ on })}
-            aria-label="Compare with original"
+            aria-label={tu('compare')}
             className="gap-1.5"
           >
             <Columns2Icon data-icon="inline-start" />
             {/* Icon-only while on: the Swipe/Blend group next to it already says what's active. */}
-            <span className={cn(compare.on ? 'sr-only' : '@max-[520px]:sr-only')}>Compare with original</span>
+            <span className={cn(compare.on ? 'sr-only' : '@max-[520px]:sr-only')}>{tu('compare')}</span>
           </Toggle>
           {compare.on ? (
             <>
@@ -81,10 +84,10 @@ export function PlanToolbar() {
                 spacing={0}
                 value={compare.mode}
                 onValueChange={(m) => m && actions().setCompare({ mode: m as 'swipe' | 'blend' })}
-                aria-label="Compare mode"
+                aria-label={tu('compare_mode')}
               >
-                <ToggleGroupItem value="swipe">Swipe</ToggleGroupItem>
-                <ToggleGroupItem value="blend">Blend</ToggleGroupItem>
+                <ToggleGroupItem value="swipe">{tu('swipe')}</ToggleGroupItem>
+                <ToggleGroupItem value="blend">{tu('blend')}</ToggleGroupItem>
               </ToggleGroup>
               {compare.mode === 'blend' ? (
                 <div className="flex h-10 items-center gap-2 rounded-lg border px-2.5">
@@ -98,7 +101,7 @@ export function PlanToolbar() {
                     step={1}
                     value={[compare.opacity]}
                     onValueChange={([v]) => actions().setCompare({ opacity: v })}
-                    thumbLabel="Original opacity"
+                    thumbLabel={tu('original_opacity')}
                   />
                   <span className="num w-9 text-right text-xs">{compare.opacity}%</span>
                 </div>
@@ -116,7 +119,7 @@ export function PlanToolbar() {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Zoom out"
+                aria-label={tu('zoom_out')}
                 disabled={zoomIndex <= 0}
                 onClick={() => actions().zoomOut()}
                 className="rounded-r-none"
@@ -124,7 +127,7 @@ export function PlanToolbar() {
                 <MinusIcon />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Zoom out</TooltipContent>
+            <TooltipContent>{tu('zoom_out')}</TooltipContent>
           </Tooltip>
           <span className="num w-12 text-center text-xs tabular-nums" aria-live="polite" aria-label={`Zoom ${zoom} percent`}>
             {zoom}%
@@ -134,7 +137,7 @@ export function PlanToolbar() {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Zoom in"
+                aria-label={tu('zoom_in')}
                 disabled={zoomIndex >= ZOOM_STEPS.length - 1}
                 onClick={() => actions().zoomIn()}
                 className="rounded-l-none"
@@ -142,7 +145,7 @@ export function PlanToolbar() {
                 <PlusIcon />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Zoom in</TooltipContent>
+            <TooltipContent>{tu('zoom_in')}</TooltipContent>
           </Tooltip>
         </div>
       </div>

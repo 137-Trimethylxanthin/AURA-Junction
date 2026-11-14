@@ -1,15 +1,19 @@
 import { NavLink } from 'react-router'
 import { cn } from '@/lib/utils'
 import { Wordmark } from './Wordmark'
+import { LanguageMenu } from './LanguageMenu'
+import { useUi } from '@/i18n/uiLang'
+import type { UiKey } from '@/i18n/strings'
 
-const NAV = [
-  { to: '/app', label: 'Drawings' },
-  { to: '/credits', label: 'Credits' },
-  { to: '/privacy', label: 'Privacy' },
-] as const
+const NAV: { to: string; key: UiKey }[] = [
+  { to: '/app', key: 'nav_drawings' },
+  { to: '/credits', key: 'nav_credits' },
+  { to: '/privacy', key: 'nav_privacy' },
+]
 
 /** Header for the pages around the workspace (library, 404, errors). */
 export function SiteHeader() {
+  const { tu } = useUi()
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4 pt-[env(safe-area-inset-top)]">
       <NavLink to="/" aria-label="AURA home" className="-mx-1 flex h-10 items-center rounded-md px-1">
@@ -27,9 +31,10 @@ export function SiteHeader() {
               )
             }
           >
-            {n.label}
+            {tu(n.key)}
           </NavLink>
         ))}
+        <LanguageMenu />
       </nav>
     </header>
   )

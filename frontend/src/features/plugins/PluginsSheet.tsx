@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useUi } from '@/i18n/uiLang'
 import { CheckIcon, CopyIcon, DownloadIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -71,6 +72,7 @@ function Code({ children }: { children: string }) {
 }
 
 export function PluginsSheet() {
+  const { tu } = useUi()
   const open = useAppStore((s) => s.ui.pluginsOpen)
   const turn = useAppStore(selectActiveTurn)
   const drawing = useAppStore(selectDrawing)
@@ -87,11 +89,11 @@ export function PluginsSheet() {
       <SheetContent side="right" showCloseButton={false} className="w-full gap-0 p-0 data-[side=right]:sm:max-w-xl">
         <SheetHeader className="flex-row items-start gap-3 border-b">
           <div className="flex flex-1 flex-col gap-0.5">
-            <SheetTitle>Use it where you already work</SheetTitle>
-            <SheetDescription>Same answers and evidence, wherever the question comes from.</SheetDescription>
+            <SheetTitle>{tu('plugins_title')}</SheetTitle>
+            <SheetDescription>{tu('plugins_desc')}</SheetDescription>
           </div>
           <SheetClose asChild>
-            <Button variant="ghost" size="icon" aria-label="Close plugins">
+            <Button variant="ghost" size="icon" aria-label={tu('close_plugins')}>
               <XIcon />
             </Button>
           </SheetClose>

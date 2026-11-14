@@ -503,6 +503,7 @@ Confirmed against the live backend (14 Nov):
 | `presenter_required` | 403 | Raster/PDF upload without a valid `X-AURA-Presenter`. |
 | `processing` | 409 | The drawing is not `ready` yet. |
 | `timeout` | SSE only (`/ask`: 504) | The 60 s turn deadline passed. |
+| `timeout` extras | 504 / SSE | The `/ask` and `/rewrite` 504 bodies and the SSE `error` event with `code: "timeout"` may add `calls` and `cost_usd`: model requests already sent for the turn (answer + check). The UI adds them to the session total. |
 | `not_found` | 404 | Unknown conversation (`GET /conversations/:id`) or answer (`GET /answers/:id/evidence.csv`). Drawings keep `unknown_drawing`. |
 
 All of these except `timeout` are 4xx, so the frontend shows an error card and never falls back.
