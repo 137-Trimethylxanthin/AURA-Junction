@@ -400,6 +400,8 @@ class LoadedDrawing:
     gold: list[dict] = field(default_factory=list)
     anchors: list[dict] = field(default_factory=list)
     source: str = "library"
+    #: The registry this drawing was found in (set by Registry), so a whole-building answer can reach sibling floors.
+    registry: Any = field(default=None, repr=False, compare=False)
 
     @property
     def ctx(self) -> DrawingCtx:
@@ -469,6 +471,7 @@ class Registry:
         self._cache.pop(drawing_id, None)
 
     def add(self, d: LoadedDrawing) -> None:
+        d.registry = self
         self._cache[d.id] = d
 
     def library_ids(self) -> list[str]:
@@ -513,6 +516,7 @@ class Registry:
                     self.skipped.add(drawing_id)
                     return None
                 self.skipped.discard(drawing_id)
+                d.registry = self
                 self._cache[drawing_id] = d
                 self._loaded_at[drawing_id] = _mtime(p)
                 return d
@@ -653,7 +657,46 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
                           summary=f"No {noun(subject, 2)} are extracted from this drawing yet, "
                                   "so there is nothing to count.")
     raw = d.engine.answer(subject, scope, None)
+    if scope.get("kind") == "model":
+        raw = _box_on_sibling_floors(d, subject, raw)
     return _to_result(d, "count_objects", args, raw, _ms(t0), "count", subject)
+
+
+def _box_on_sibling_floors(d: LoadedDrawing, subject: str, raw: dict) -> dict:
+    """A whole-building IFC count lists its elements by GlobalId without boxes (one drawing is one storey). When
+    the building's other storeys are library drawings too (`ifc-<model>--<storey>`), each element is boxed on the
+    storey drawing whose evidence holds it (matched by the GUID in the box note), tagged with that drawing's id.
+    Elements no storey drawing boxes stay as rows. The count itself is unchanged."""
+    ev = raw.get("evidence") or {}
+    rows = ev.get("rows") or []
+    if ev.get("boxes") or not rows or d.registry is None or "--" not in d.id:
+        return raw
+    stem = d.id.split("--", 1)[0]
+    by_guid: dict[str, tuple[str, dict]] = {}
+    for sid in d.registry.library_ids():
+        if not sid.startswith(stem + "--"):
+            continue
+        sd = d.registry.get(sid)
+        for b in ((sd.drawing.get("evidence") or {}).get(subject) or []) if sd is not None else []:
+            note = b.get("note") or ""
+            if note.startswith("IFC "):
+                by_guid[note[4:].strip()] = (sid, b)
+    boxes, left = [], []
+    for r in rows:
+        hit = by_guid.get(str(r.get("id")))
+        if hit is None:
+            left.append(r)
+            continue
+        sid, b = hit
+        # Box ids repeat per storey (win-01 on every floor): qualify them with the storey.
+        boxes.append({**b, "id": f"{b['id']}@{sid.split('--', 1)[1]}", "drawing_id": sid})
+    if not boxes:
+        return raw
+    floors = len({b["drawing_id"] for b in boxes})
+    summary = raw.get("summary", "")
+    summary += (f" {len(boxes)} of them boxed on their storey plans ({floors} floors)"
+                + (f"; {len(left)} have no box." if left else "."))
+    return {**raw, "evidence": {**ev, "boxes": boxes, "rows": left}, "summary": summary}
 
 
 def count_rooms_labelled(d: LoadedDrawing, label: str, scope: dict | None = None) -> ToolResult:

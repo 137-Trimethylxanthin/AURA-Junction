@@ -44,7 +44,8 @@ export interface PlanModel {
   rooms: RoomHandle[]
   setWallHeight(h: number): void
   setHighlight(state: { evidence: Set<string>; hovered: string | null; selected: string | null }): void
-  setPins(boxes: Box[]): void
+  /** Numbered pins; `numberOf` gives each box its number in the answer (default: 1..n in order). */
+  setPins(boxes: Box[], numberOf?: (b: Box, i: number) => number): void
   setLabels(on: boolean): void
   /** Hide labels that would overlap a more important one (evidence, selected, then larger rooms). */
   afterRender(camera: THREE.Camera, viewW: number, viewH: number): void
@@ -400,8 +401,8 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
         r.label.element.classList.toggle('is-selected', selected === id)
       }
     },
-    setPins(boxes) {
-      const key = boxes.map((b) => b.id).join('|')
+    setPins(boxes, numberOf) {
+      const key = boxes.map((b, i) => `${b.id}#${numberOf ? numberOf(b, i) : i + 1}`).join('|')
       if (key === pinKey) return
       pinKey = key
       clearPins()
@@ -414,7 +415,7 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
         const stem = new THREE.Mesh(stemGeo, pinMat)
         const el = document.createElement('div')
         el.className = 'v3d-pin'
-        el.textContent = String(i + 1)
+        el.textContent = String(numberOf ? numberOf(b, i) : i + 1)
         el.title = b.id
         const badge = new CSS2DObject(el)
         pin.add(ring, stem, badge)

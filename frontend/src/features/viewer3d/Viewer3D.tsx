@@ -331,6 +331,8 @@ export default function Viewer3D() {
   const pinBoxes = !ev || !turn ? [] : ev.boxes.filter((b) => !isBoxRejected(b.id, turn.toggles) && b.subject !== 'label')
   const pinKey = pinBoxes.map((b) => b.id).join('|')
   const pins: Box[] = useStable(pinBoxes, pinKey)
+  const answerIds = (ev?.boxes ?? []).map((b) => b.id).join('|')
+  const answerNumber = useStable(new Map((ev?.boxes ?? []).map((b, i) => [b.id, i + 1] as const)), answerIds)
 
   // Per floor: a cross-floor answer tags each box and room with its floor's drawing id; others belong here.
   const roomFloors = !ev || !turn ? '' : ev.rooms.map((r) => (r as { drawing_id?: string }).drawing_id ?? '').join('|')
@@ -362,12 +364,14 @@ export default function Viewer3D() {
   useEffect(() => {
     const m = modelRef.current
     if (isBuilding(m)) {
-      m.setEvidence(perFloor, hovered, selected)
+      // Pins carry the answer card's numbers (1..n over every floor), so "window 19" means the same thing
+      // in the list, in 2D and on whichever floor it sits in 3D.
+      m.setEvidence(perFloor, hovered, selected, (b) => (answerNumber.get(b.id) ?? 0))
       m.setCounts(floorCounts)
     } else if (m && 'setHighlight' in m) m.setHighlight({ evidence: evidenceRooms, hovered, selected })
     invalidate()
      
-  }, [evidenceRooms, perFloor, floorCounts, hovered, selected, status, stackMode, drawing.id])
+  }, [evidenceRooms, perFloor, floorCounts, hovered, selected, status, stackMode, drawing.id, answerNumber])
   useEffect(() => {
     const m = modelRef.current
     if (!m || isBuilding(m) || !('setPins' in m)) return

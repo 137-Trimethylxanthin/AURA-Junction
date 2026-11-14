@@ -54,7 +54,12 @@ export interface BuildingModel extends Showable {
   /** Camera framing for a mode: the whole stack, or one floor. */
   framing(mode: StackMode, focusId: string): { center: THREE.Vector3; radius: number; dir?: THREE.Vector3 }
   /** Evidence, hovered and selected room per floor (rooms only light on plan floors). */
-  setEvidence(per: Map<string, FloorEvidence>, hoveredRoom: string | null, selectedRoom: string | null): void
+  setEvidence(
+    per: Map<string, FloorEvidence>,
+    hoveredRoom: string | null,
+    selectedRoom: string | null,
+    numberOf?: (b: Box) => number,
+  ): void
   setCounts(counts: Map<string, number>): void
   setRoomLabels(on: boolean): void
   floorOf(o: THREE.Object3D): string | null
@@ -287,7 +292,7 @@ export function buildBuilding(
       const f = floors.find((x) => x.id === focusId)
       if (mode === "floor" && f && isPlan(f.model)) f.model.afterRender(camera, w, h)
     },
-    setEvidence(per, hoveredRoom, selectedRoom) {
+    setEvidence(per, hoveredRoom, selectedRoom, numberOf) {
       for (const f of floors) {
         if (!isPlan(f.model)) continue
         const ev = per.get(f.id)
@@ -298,7 +303,7 @@ export function buildBuilding(
           selected: focused ? selectedRoom : null,
         })
         // Pins show on every floor in the stack (that is the point of a cross-floor answer), on one floor in focus.
-        f.model.setPins(mode === 'stack' || focused ? (ev?.boxes ?? []) : [])
+        f.model.setPins(mode === 'stack' || focused ? (ev?.boxes ?? []) : [], numberOf && ((b) => numberOf(b)))
       }
     },
     setCounts(counts) {
