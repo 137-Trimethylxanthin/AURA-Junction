@@ -188,7 +188,7 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                        look="The tool returned no value for this count.")
     value = int(tr.value)
     plural = noun(subject, 2)
-    gold = None if overrides or scope.get("kind") == "region" or tr.method == "vision" else (
+    gold = None if overrides or scope.get("kind") == "region" or tr.method in ("vision", "agent_estimate") else (
         gold_for(d, lang, "count", subject, scope, value))
     trace: list[dict] = [question_node(question, lang),
                          intent_node(f"count · {plural} · {scope_text(scope)}", intent_tag,
@@ -299,7 +299,10 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
                   "body": (f"{value:.2f} m², shown on the plan." if len(included) == 1 else
                            f"Sum of {len(included)} net room areas = {value:.2f} m², shown room by room."),
                   "kind": "exact", "evidence_ids": inc_ids})
-    gold = None if overrides or k == "region" else gold_for(d, lang, "area", None, scope, value)
+    # A model's free-form answer is not the template the dataset row asks ("the area of the rooms with two doors" is
+    # not the floor total): only exact template answers are compared with the dataset.
+    gold = (None if overrides or k == "region" or tr.method == "agent_estimate"
+            else gold_for(d, lang, "area", None, scope, value))
     ev_dict: dict = {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in rooms]}
     if tr.groups:
         ev_dict["groups"] = [g.model_dump(exclude_none=True) for g in tr.groups]
@@ -481,6 +484,78 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
         "trace": trace,
     }
     return Built(body, [tr], [], "room")
+
+
+_RBC: dict[str, dict] = {
+    "en": {"room": "Room", "together": "together",
+           "ops": {"gt": "more than", "ge": "at least", "lt": "fewer than", "le": "at most", "eq": "exactly"},
+           "things": {"door": ("door", "doors"), "window": ("window", "windows")},
+           "head": lambda k, p: f"{k} {'room has' if k == 1 else 'rooms have'} {p}"},
+    "de": {"room": "Raum", "together": "zusammen",
+           "ops": {"gt": "mehr als", "ge": "mindestens", "lt": "weniger als", "le": "höchstens", "eq": "genau"},
+           "things": {"door": ("Tür", "Türen"), "window": ("Fenster", "Fenster")},
+           "head": lambda k, p: f"{k} {'Raum hat' if k == 1 else 'Räume haben'} {p}"},
+    "fr": {"room": "Pièce", "together": "au total",
+           "ops": {"gt": "plus de", "ge": "au moins", "lt": "moins de", "le": "au plus", "eq": "exactement"},
+           "things": {"door": ("porte", "portes"), "window": ("fenêtre", "fenêtres")},
+           "head": lambda k, p: f"{k} {'pièce a' if k == 1 else 'pièces ont'} {p}"},
+    "fi": {"room": "Huone", "together": "yhteensä",
+           "ops": {"gt": "enemmän kuin", "ge": "vähintään", "lt": "vähemmän kuin", "le": "enintään", "eq": "tasan"},
+           "things": {"door": ("ovi", "ovea"), "window": ("ikkuna", "ikkunaa")},
+           "head": lambda k, p: f"{k} huoneessa on {p}"},
+}
+
+
+def rooms_by_count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, matched: list[str],
+                   intent_tag: str = "router") -> Built:
+    """'Rooms with more than 1 door' (marked, counted or summed by area): an exact filter over the indexed rooms."""
+    m = tr.meta
+    subject = tr.subject or "room"
+    box_subject = tr.args.get("subject", "door")
+    kept = m["kept"]
+    scope = {"kind": "floor"}
+    L = _RBC.get(lang, _RBC["en"])
+    op, n = tr.args["op"], int(tr.args["n"])
+    thing = L["things"][box_subject][0 if n == 1 else 1]
+    names = ", ".join(f"{k['name'] or L['room']} {k['id']} ({k['n']})" for k in kept)
+    head = L["head"](len(kept), f"{L['ops'][op]} {n} {thing}")
+    if m["measure"] == "area":
+        value = f"{head}; {L['together']} {m['total_m2']:.2f} m²" + (f": {names}." if kept else ".")
+        number, unit = m["total_m2"], "m2"
+    else:
+        value = head + (f": {names}." if kept else ".")
+        number, unit = float(len(kept)), None
+    kept_ids = [room_eid(k["id"]) for k in kept]
+    box_ids = [b.id for b in tr.boxes]
+    trace = [
+        question_node(question, lang),
+        intent_node(f"rooms with {m['phrase']} · {m['measure']} · {scope_text(scope)}", intent_tag),
+        rule_decision_node("rooms_by_count", matched),
+        stage_node("resources", "grab", "Grab candidates", f"drawing index · rooms + {noun(box_subject, 2)}",
+                   f"Read {m['candidates']} indoor rooms and every {box_subject} box on this floor in {tr.ms} ms, "
+                   "0 model calls." + (f" {m['outdoor']} outdoor spaces left out." if m["outdoor"] else ""),
+                   detail={"tables": ["rooms", box_subject], "grabbed": m["candidates"], "ms": tr.ms},
+                   evidence_ids=[room_eid(r.room_id) for r in tr.rooms], tool=tool_meta(tr)),
+        stage_node("filter", "filter", "Filter candidates", f"code · {box_subject}s touching each room outline",
+                   f"A {box_subject} counts for every room whose outline its box touches (within "
+                   f"{m['reach_m']:.2f} m), so one on a shared wall counts for both rooms. Kept the rooms with "
+                   f"{m['phrase']}: {len(kept)}.",
+                   parent="grab", detail={"rule": f"{tr.args['op']} {tr.args['n']}", "kept": kept},
+                   evidence_ids=kept_ids + box_ids),
+        stage_node("answer", "answer", "Answer", "exact · CAD rooms and boxes",
+                   value + " Source: indexed CAD rooms and boxes; 0 model calls, $0.",
+                   detail={"source": "cad_geometry", "calls": 0, "cost_usd": 0.0}, evidence_ids=kept_ids),
+    ]
+    body = _base(question, lang, scope) | {
+        "answer": {"kind": "note", "value": value, "number": round(float(number), 2),
+                   **({"unit": unit} if unit else {})},
+        "evidence": {"boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
+                     "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]},
+        "canonical_en": f"Which rooms have {m['phrase']}" + (" and what is their total area" if unit else ""),
+        "method": "cad_geometry",
+        "trace": trace,
+    }
+    return Built(body, [tr], [], subject)
 
 
 def adjacent(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, matched: list[str],

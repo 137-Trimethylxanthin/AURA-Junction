@@ -196,7 +196,6 @@ def test_templates_refuse_questions_they_do_not_account_for():
     for q in ("How many places to sleep are there in this flat?",
               "Which bedroom has the most windows?",
               "How many rooms have a window?",
-              "How many rooms with more than two doors are there?",
               "Quelle chambre a le plus de fenêtres ?",
               "Combien de places pour dormir dans cet appartement ?",
               "Welches Zimmer hat die meisten Fenster?",
@@ -204,6 +203,12 @@ def test_templates_refuse_questions_they_do_not_account_for():
               "Missä huoneessa on eniten ikkunoita?"):
         r = route(q, ctx)
         assert r.intent == "unknown", (q, r.intent, r.subject)
+    # Rooms filtered by how many doors/windows touch them ARE accounted for whole (exact filter, then mark, count
+    # or sum): "more than two doors" -> ('gt', 2), counted.
+    r = route("How many rooms with more than two doors are there?", ctx)
+    assert (r.intent, r.subject, r.pattern) == ("rooms_by_count", "door", "gt|2|count")
+    assert route("Räume mit mindestens einem Fenster", ctx).pattern == "ge|1|list"
+    assert route("total area of the rooms that have more than 1 door", ctx).pattern == "gt|1|area"
     # Largest/smallest room by area IS accounted for whole: grab all room areas, pick one.
     for q in ("Which room has the largest area?", "Mikä huone on suurin?"):
         assert (route(q, ctx).intent, route(q, ctx).subject) == ("room_rank", "max"), q
