@@ -19,7 +19,6 @@ from pathlib import Path
 
 AS_LIMIT = 4096 * 1024 * 1024
 CPU_LIMIT_S = 60
-MAX_PIXELS = 40_000_000
 
 
 FSIZE_LIMIT = 200 * 1024 * 1024  # no single output file (plan.svg, model.json) past 200 MB
@@ -88,11 +87,9 @@ def parse_dxf(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
 def parse_raster(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
     from PIL import Image
 
-    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+    Image.MAX_IMAGE_PIXELS = None  # no pixel limit on uploaded images; the byte cap still applies
     with Image.open(src) as im:
         w, h = im.size
-        if w * h > MAX_PIXELS:
-            raise ValueError("image larger than 40 MP")
         im = im.convert("RGB")
         im.save(out / "original.png", optimize=True)
         t = im.copy()

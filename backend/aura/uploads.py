@@ -19,7 +19,6 @@ BODY_CAP = 65 * MB
 CAPS = {"dxf": 20 * MB, "png": 15 * MB, "jpg": 15 * MB, "pdf": 40 * MB, "ifc": 60 * MB,
         "svg": 20 * MB}
 LABEL = {"dxf": "DXF", "ifc": "IFC", "pdf": "PDF", "png": "PNG", "jpg": "JPG", "svg": "SVG"}
-MAX_PIXELS = 40_000_000
 TTL_S = 24 * 3600
 
 
@@ -147,8 +146,6 @@ def validate(head: bytes, size: int, *, presenter_ok: bool, store_on: bool = Fal
         dims = image_size(head, kind)
         if dims is None:
             raise UploadError("unsupported_type", "Could not read the image header.", 415)
-        if dims[0] * dims[1] > MAX_PIXELS:
-            raise UploadError("too_large", "Images are limited to 40 megapixels.", 413)
         if not presenter_ok:
             raise UploadError("presenter_required",
                               "Image uploads need the presenter token; DXF, PDF and IFC are open.", 403)
