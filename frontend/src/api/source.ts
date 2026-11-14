@@ -31,6 +31,25 @@ import { ask as askLocal } from './local'
 import { BUNDLED_DRAWING_ID } from '@/data/ids'
 import { myProjects } from './library'
 
+/**
+ * Ownership headers for a project-scoped question: the server answers across a saved (private)
+ * project only for whoever holds its project token or the delete tokens of its upload floors.
+ */
+export function scopeHeaders(scope: Scope | undefined): Record<string, string> {
+  if (!scope || scope.kind !== 'project') return {}
+  const stored = myProjects.get(scope.project_id)
+  const bundle = stored ?? {
+    id: scope.project_id,
+    title: '',
+    floors: scope.drawing_ids.map((drawing_id, order) => ({ drawing_id, label: `F${order + 1}`, order })),
+  }
+  return myProjects.authHeaders(bundle)
+}
+
+/** True when the server does not know (or will not show) the project a scoped question names. */
+const unknownProject = (e: unknown, scope: Scope | undefined): boolean =>
+  !!scope && scope.kind === 'project' && e instanceof ApiError && e.status === 404 && e.code === 'not_found'
+
 export type SourceKind = 'api' | 'local'
 export type SourceState = 'waking' | 'ready'
 
@@ -123,6 +142,19 @@ export function createSource(opts: SourceOptions = {}): Source {
   const RECOVER_TIMEOUT_MS = 1_500
   const RETRY_DELAY_MS = 600
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+  /** Save this browser's copy of a project to the server again (it may have restarted with an empty database). */
+  const resyncProject = async (scope: Scope | undefined): Promise<boolean> => {
+    if (!baseUrl || !scope || scope.kind !== 'project') return false
+    const bundle = myProjects.get(scope.project_id)
+    if (!bundle) return false
+    try {
+      const { token } = await saveProject({ baseUrl, fetch: opts.fetch }, bundle, { headers: myProjects.authHeaders(bundle) })
+      if (token) myProjects.setToken(bundle.id, token)
+      return true
+    } catch {
+      return false
+    }
+  }
 
   const set = (s: SourceStatus) => {
     status = s
@@ -251,6 +283,8 @@ export function createSource(opts: SourceOptions = {}): Source {
     async chat(turn, onEvent, signal) {
       await init()
       await recover()
+      const headers = () => scopeHeaders(turn.scope)
+      let resynced = false
       const askReq: AskRequest = {
         drawing_id: turn.drawing_id,
         question: turn.question,
@@ -277,6 +311,7 @@ export function createSource(opts: SourceOptions = {}): Source {
               baseUrl,
               fetch: opts.fetch,
               signal,
+              headers: headers(),
               onEvent(e) {
                 seen = true
                 if (e.event === 'answer') response = e.data.response
@@ -291,6 +326,11 @@ export function createSource(opts: SourceOptions = {}): Source {
           if (e instanceof TransportError && e.kind !== 'timeout' && !seen && !signal?.aborted && !retried) {
             retried = true
             await sleep(RETRY_DELAY_MS)
+            continue
+          }
+          // The server lost (or never stored) this browser's project: save it again, then ask once more.
+          if (!seen && !resynced && unknownProject(e, turn.scope) && (await resyncProject(turn.scope))) {
+            resynced = true
             continue
           }
           // The stream broke after a complete answer arrived (before `done`): the answer stands.
@@ -325,14 +365,17 @@ export function createSource(opts: SourceOptions = {}): Source {
           throw new TransportError('This drawing needs the AURA server, which is not reachable right now', 'network')
         return { response: local(req), fellBack: false }
       }
+      const post = () => postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs, scopeHeaders(req.scope))
       try {
         try {
-          return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
+          return { response: await post(), fellBack: false }
         } catch (e) {
+          if (unknownProject(e, req.scope) && (await resyncProject(req.scope)))
+            return { response: await post(), fellBack: false }
           // A transient network error: the backend may just be restarting. Retry once before giving up.
           if (!(e instanceof TransportError) || e.kind === 'timeout') throw e
           await sleep(RETRY_DELAY_MS)
-          return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
+          return { response: await post(), fellBack: false }
         }
       } catch (e) {
         if (e instanceof ApiError) throw e

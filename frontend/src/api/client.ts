@@ -166,11 +166,20 @@ export async function getBudget(opts: ClientOptions, timeoutMs = 8_000): Promise
   return b as Budget
 }
 
-export async function postAsk(opts: ClientOptions, req: AskRequest, timeoutMs = 15_000): Promise<AskResponse> {
+export async function postAsk(
+  opts: ClientOptions,
+  req: AskRequest,
+  timeoutMs = 15_000,
+  headers: Record<string, string> = {},
+): Promise<AskResponse> {
   const body = await request(
     opts,
     '/ask',
-    { method: 'POST', headers: { 'content-type': 'application/json', ...presenterHeader() }, body: JSON.stringify(req) },
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...presenterHeader(), ...headers },
+      body: JSON.stringify(req),
+    },
     timeoutMs,
   )
   if (body && typeof body === 'object' && typeof (body as { contract_version?: unknown }).contract_version === 'string')
