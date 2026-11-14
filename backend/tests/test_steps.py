@@ -249,13 +249,14 @@ def test_area_upper_bound_strictness(d, question, strict):
 
 async def test_call_limit_returns_none(d):
     built, stats, client = await ask(d, [[("list_rooms", {})]])  # never finishes
-    assert built is None
-    assert stats["meter"].calls == steps.MAX_CALLS == len(client.sent)
+    assert built is None  # the reasoning step got no usable reply either
+    plan = [c for c in client.sent if c["tools"]]
+    assert len(plan) == steps.MAX_CALLS and stats["meter"].calls == steps.MAX_CALLS + 1
 
 
 async def test_step_limit_returns_none(d):
     built, stats, _ = await ask(d, [[("list_rooms", {})] * (steps.MAX_STEPS + 1)])
-    assert built is None and stats["meter"].calls == 1
+    assert built is None and stats["meter"].calls == 2  # 1 planning call + the reasoning step
 
 
 async def test_unanswerable_returns_none(d):
@@ -398,7 +399,7 @@ async def test_rooms_with_a_door_wider_than_answers_with_rooms(d):
 
 async def test_no_metric_scale_skips_the_geometric_tools(d, monkeypatch):
     built, _, client = await ask(store_doc(d, m_per_pct_x=0), [[("list_rooms", {"finish_as": "list"})]])
-    assert built is None and client.sent == []  # returned before any model call or toolbox
+    assert built is None and all(not c["tools"] for c in client.sent)  # no tool step, only reasoning
     flagged = tools.LoadedDrawing(id=d.id, dir=None, drawing={**d.drawing, "toolbox": False},
                                   engine=d.engine, source="upload")
     assert not steps.has_scale(flagged) and steps.has_scale(d)
@@ -423,3 +424,65 @@ async def test_a_door_set_answers_with_rooms_when_rooms_are_asked(d):
     ("which of them are wider than 0.95 m", False), ("how many doors are wider than 1 m", False)])
 def test_asks_for_rooms(q, rooms):
     assert steps.asks_for_rooms(q) is rooms
+
+
+def reasoning_reply(**out):
+    return json.dumps({"can_answer": True, "answer": "", "working": "", **out})
+
+
+async def test_reasoning_step_answers_what_the_tools_cannot(d):
+    """Kitchens x a price: the tools find the kitchens, the model does the arithmetic and is labelled
+    as reasoned; the handed data and its working are in the trace, the kitchens highlighted."""
+    kitchens = [r for r in d.drawing["rooms"] if steps.room_type(r) == "kitchen"]
+    total = round(sum(r["area_m2"] for r in kitchens), 2)
+    reply = reasoning_reply(answer=f"{len(kitchens)} kitchens, {total} m², ${round(total * 2.5, 2)}.",
+                            working=f"kitchens {total} m² × 2.5 = {round(total * 2.5, 2)}",
+                            used_ids=[r["room_id"] for r in kitchens] + ["nope"], number=round(total * 2.5, 2),
+                            unit="$")
+    q = "i will install wood floor on the kitchens, price of the whole plan at 2.5$ per m²"
+    built, stats, client = await ask(d, [[("list_rooms", {"room_type": "kitchen", "finish_as": "reason"})],
+                                         reply], question=q)
+    body = validated(built, stats)
+    assert body["method"] == "agent_estimate" and body["answer"]["kind"] == "note"
+    assert body["answer"]["number"] == round(total * 2.5, 2) and body["answer"]["unit"] == "$"
+    assert sorted(r["room_id"] for r in body["evidence"]["rooms"]) == sorted(r["room_id"] for r in kitchens)
+    nodes = {n["id"]: n for n in body["trace"]}
+    assert "Reasoned by the model" in body["explanation"]
+    assert nodes["working"]["detail"]["rule"].startswith("kitchens")
+    assert any("kitchen" in t for t in nodes["handed"]["detail"]["tables"])  # the tool's set was handed over
+    assert nodes["answer"]["detail"]["source"] == "reasoned"
+    handed = json.loads(client.sent[-1]["contents"][-1]["parts"][0]["text"].removeprefix("Plan data: "))
+    assert handed["tool_results"][0]["ids"] == [r["room_id"] for r in kitchens]
+    assert stats["meter"].calls == 2
+
+
+async def test_reasoning_step_cannot_answer_is_an_honest_abstain(d):
+    reply = json.dumps({"can_answer": False, "answer": "-", "working": "",
+                        "missing": "The plan has no wall heights; tell me the height to price the paint."})
+    built, stats, _ = await ask(d, [[("finish", {"set": "none", "answer": "count"})], reply],
+                                question="cost to paint the walls of room 3.04 at 4 €/m²")
+    body = validated(built, stats)
+    assert body["answer"]["kind"] == "abstain" and body["answer"]["reason"] == "not_answerable"
+    answer = next(n for n in body["trace"] if n["id"] == "answer")
+    assert "wall heights" in answer["body"] and answer["detail"]["source"] == "reasoned"
+
+
+async def test_a_users_number_no_tool_used_goes_to_the_reasoning_step(d):
+    """'kitchens at 2.5 $/m²': the area of the kitchens is not the answer; 2.5 still has to be used."""
+    reply = reasoning_reply(answer="35 $", working="14 m² × 2.5 = 35", number=35, unit="$")
+    built, stats, _ = await ask(d, [[("list_rooms", {"room_type": "kitchen", "finish_as": "area"})], reply],
+                                question="price of wood floor for the kitchens at 2.5$ per m²")
+    body = validated(built, stats)
+    assert body["method"] == "agent_estimate" and body["answer"]["number"] == 35
+    plain, st2, _ = await ask(d, [[("list_rooms", {"room_type": "bedroom", "min_area_m2": 12.01,
+                                                   "finish_as": "count"})]],
+                              question="how many bedrooms are larger than 12 m²")
+    assert validated(plain, st2)["method"] == "cad_geometry" and st2["meter"].calls == 1
+
+
+def test_unused_numbers(d):
+    sess = steps.Session(steps.Toolbox(d))
+    rs = sess.run("list_rooms", {"min_area_m2": 12})
+    assert steps.unused_numbers("rooms larger than 12 m² at 30 € le m²", sess, rs) == ["30"]
+    assert steps.unused_numbers("area of room 3.04", sess, rs) == []
+    assert steps.unused_numbers("paint the living rooms at 4 €/m²", sess, rs) == ["4"]  # not inside '3.04'
