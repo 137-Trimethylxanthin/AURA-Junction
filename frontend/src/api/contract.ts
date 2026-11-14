@@ -705,6 +705,9 @@ const isOneOf = <T extends string>(v: unknown, set: readonly T[]): v is T =>
   typeof v === 'string' && (set as readonly string[]).includes(v)
 const isPair = (v: unknown): v is [number, number] =>
   Array.isArray(v) && v.length === 2 && isNum(v[0]) && isNum(v[1])
+const isPct = (v: unknown): v is Pct => isNum(v) && v >= 0 && v <= 100
+const isPctPair = (v: unknown): v is [Pct, Pct] =>
+  Array.isArray(v) && v.length === 2 && isPct(v[0]) && isPct(v[1])
 
 const isRect = (v: unknown): v is PctRect & Obj =>
   isObj(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h)
@@ -755,7 +758,9 @@ export function isEvidenceGroup(v: unknown): v is EvidenceGroup {
   return (
     isObj(v) &&
     isStr(v.id) &&
+    v.id.length > 0 &&
     isStr(v.label) &&
+    v.label.length > 0 &&
     isOneOf(v.color, GROUP_COLORS) &&
     (v.target_drawing_id === undefined || isStr(v.target_drawing_id))
   )
@@ -765,9 +770,10 @@ export function isEvidenceLink(v: unknown): v is EvidenceLink {
   return (
     isObj(v) &&
     isStr(v.id) &&
-    isPair(v.from_pos) &&
-    isPair(v.to_pos) &&
-    (v.waypoints === undefined || (Array.isArray(v.waypoints) && v.waypoints.every(isPair))) &&
+    v.id.length > 0 &&
+    isPctPair(v.from_pos) &&
+    isPctPair(v.to_pos) &&
+    (v.waypoints === undefined || (Array.isArray(v.waypoints) && v.waypoints.every(isPctPair))) &&
     (v.group_id === undefined || isStr(v.group_id)) &&
     (v.label === undefined || isStr(v.label)) &&
     (v.drawing_id === undefined || isStr(v.drawing_id)) &&

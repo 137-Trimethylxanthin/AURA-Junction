@@ -363,6 +363,162 @@ describe('store', () => {
     expect(s().crossPlanScope).toBe(false)
     expect(s().focusedGroupId).toBeNull()
   })
+
+  it('keeps an active SSE stream running across mid-stream floor switches and resets compare when target lacks original', async () => {
+    const floorEg: Drawing = {
+      ...bundledDrawing,
+      id: 'stream-eg',
+      title: 'Haus · EG',
+      images: { rebuilt: '/eg.svg', original: '/eg-orig.png' },
+    }
+    const floorOg: Drawing = {
+      ...bundledDrawing,
+      id: 'stream-og',
+      title: 'Haus · 1. OG',
+      images: { rebuilt: '/og.svg' },
+    }
+    const base = createSource({ baseUrl: null })
+    const baseResp = (await base.ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })).response
+    let finishStream!: () => void
+    const src: Source = {
+      ...base,
+      hasApi: () => true,
+      status: () => ({ kind: 'api', state: 'ready' }),
+      drawing: async (id) => (id === 'stream-og' ? floorOg : floorEg),
+      async chat(_req, onEvent, signal) {
+        onEvent({ event: 'turn', data: { conversation_id: 'conv-stream-1', turn_id: 't-1' } })
+        onEvent({
+          event: 'tool_result',
+          data: {
+            node_id: 'n1',
+            summary: 'Stairs on EG',
+            evidence: {
+              boxes: [
+                { id: 'box-eg', subject: 'door', x: 10, y: 10, w: 5, h: 5, drawing_id: 'stream-eg', group_id: 'g-1' },
+                { id: 'box-og', subject: 'door', x: 20, y: 20, w: 5, h: 5, drawing_id: 'stream-og', group_id: 'g-1' },
+              ],
+              rooms: [],
+              groups: [{ id: 'g-1', label: 'Stair S1', color: 'c1', target_drawing_id: 'stream-og' }],
+            },
+          },
+        })
+        await new Promise<void>((r) => {
+          finishStream = r
+        })
+        if (signal?.aborted) throw new DOMException('Stopped', 'AbortError')
+        const finalResp = {
+          ...baseResp,
+          evidence: {
+            boxes: [
+              { id: 'box-eg', subject: 'door' as const, x: 10, y: 10, w: 5, h: 5, drawing_id: 'stream-eg', group_id: 'g-1' },
+              { id: 'box-og', subject: 'door' as const, x: 20, y: 20, w: 5, h: 5, drawing_id: 'stream-og', group_id: 'g-1' },
+            ],
+            rooms: [],
+            groups: [{ id: 'g-1', label: 'Stair S1', color: 'c1' as const, target_drawing_id: 'stream-og' }],
+          },
+        }
+        onEvent({ event: 'answer', data: { response: finalResp } })
+        return { response: finalResp, fellBack: false }
+      },
+    }
+
+    const bundle: ProjectBundle = {
+      id: 'proj-stream',
+      title: 'Stream House',
+      floors: [
+        { drawing_id: 'stream-eg', label: 'EG', order: 0 },
+        { drawing_id: 'stream-og', label: '1. OG', order: 1 },
+      ],
+    }
+    const store = createAppStore({ source: src, drawing: floorEg })
+    const s = store.getState
+    s().setActiveProject(bundle)
+    s().setCompare({ on: true })
+    expect(s().ui.compare.on).toBe(true)
+
+    const askPromise = s().ask('Show all stairs and where they lead to')
+    // Switch to 1. OG mid-stream BEFORE `finishStream()` resolves
+    await s().loadDrawing('stream-og')
+    expect(s().session.drawing.id).toBe('stream-og')
+    // Compare resets cleanly because `stream-og` has no `images.original`
+    expect(s().ui.compare.on).toBe(false)
+
+    finishStream()
+    const turnId = await askPromise
+    expect(agentTurn(store, turnId).status).toBe('done')
+    expect(s().session.conversationId).toBe('conv-stream-1')
+
+    // stepEvidence on `stream-og` cycles only `box-og` (current floor) instead of jumping to `box-eg`
+    expect(s().stepEvidence(1)).toBe('box-og')
+    expect(s().stepEvidence(1)).toBe('box-og')
+  })
+
+  it('restores project conversation on async setActiveProject hydration, clears all floor keys on newConversation, and cancels slow non-SSE turns', async () => {
+    const floorEg: Drawing = { ...bundledDrawing, id: 'hyd-eg', title: 'Haus · EG' }
+    const floorOg: Drawing = { ...bundledDrawing, id: 'hyd-og', title: 'Haus · 1. OG' }
+    const base = createSource({ baseUrl: null })
+    const baseResp = (await base.ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })).response
+    let resolveSlowChat!: () => void
+    const src: Source = {
+      ...base,
+      hasApi: () => true,
+      status: () => ({ kind: 'api', state: 'ready' }),
+      drawing: async (id) => (id === 'hyd-og' ? floorOg : floorEg),
+      conversation: async (id) =>
+        id === 'conv-proj-saved'
+          ? {
+              contract_version: '1.2',
+              id: 'conv-proj-saved',
+              drawing_id: 'hyd-eg',
+              turns: [{ turn_id: 't-saved-1', message: 'Saved project turn', response: baseResp }],
+            }
+          : null,
+      async chat() {
+        await new Promise<void>((r) => {
+          resolveSlowChat = r
+        })
+        return { response: baseResp, fellBack: false }
+      },
+    }
+
+    const bundle: ProjectBundle = {
+      id: 'proj-hyd',
+      title: 'Hydration House',
+      floors: [
+        { drawing_id: 'hyd-eg', label: 'EG', order: 0 },
+        { drawing_id: 'hyd-og', label: '1. OG', order: 1 },
+      ],
+    }
+
+    // Seed both a project conversation and an older single-floor fallback key on `hyd-eg`
+    localStorage.setItem(CONVERSATION_KEY('hyd-eg', 'proj-hyd'), 'conv-proj-saved')
+    localStorage.setItem(CONVERSATION_KEY('hyd-eg'), 'conv-stale-eg')
+    localStorage.removeItem(CONVERSATION_KEY('hyd-og'))
+
+    // Open sibling `hyd-og`: initial restoreConversation runs before setActiveProject hydrates
+    const store = createAppStore({ source: src, drawing: floorOg })
+    const s = store.getState
+    await s().restoreConversation()
+    expect(s().turns).toHaveLength(0)
+
+    // Async project hydration arrives and restores `conv-proj-saved`
+    s().setActiveProject(bundle)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(s().session.conversationId).toBe('conv-proj-saved')
+    expect(s().turns).toHaveLength(2)
+
+    // Clearing conversation on `hyd-og` also removes `hyd-eg`'s stale single-floor key
+    s().newConversation()
+    expect(localStorage.getItem(CONVERSATION_KEY('hyd-og', 'proj-hyd'))).toBeNull()
+    expect(localStorage.getItem(CONVERSATION_KEY('hyd-eg'))).toBeNull()
+
+    // Starting a slow non-SSE fallback turn and clicking Stop (`cancel()`) keeps it `'cancelled'` even after resolution
+    const slowPromise = s().ask('Slow fallback question')
+    s().cancel()
+    resolveSlowChat()
+    const slowId = await slowPromise
+    expect(agentTurn(store, slowId)).toMatchObject({ status: 'error', error: { code: 'cancelled' } })
+  })
 })
 
 describe('plan shared helpers & shortcut guards', () => {

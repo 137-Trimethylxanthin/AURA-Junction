@@ -125,7 +125,11 @@ describe('inferFloorOrderAndLabel', () => {
     expect(inferFloorOrderAndLabel('Villa_DG.dxf')).toEqual({ order: 99, label: 'DG' })
     expect(inferFloorOrderAndLabel('Roof plan')).toEqual({ order: 99, label: 'Roof' })
     expect(inferFloorOrderAndLabel('up-a1b2c3-p3')).toEqual({ order: 3, label: 'Page 3' })
+    expect(inferFloorOrderAndLabel('Villa Aurora · up-abc999-p2')).toEqual({ order: 2, label: 'Page 2' })
     expect(inferFloorOrderAndLabel('up-3f')).toEqual({ order: 0, label: 'GF' })
+    expect(inferFloorOrderAndLabel('Villa Nord · up-2f')).toEqual({ order: 0, label: 'GF' })
+    expect(inferFloorOrderAndLabel('Villa Nord · up-b1')).toEqual({ order: 0, label: 'GF' })
+    expect(inferFloorOrderAndLabel('Villa Nord · up-eg')).toEqual({ order: 0, label: 'GF' })
     expect(inferFloorOrderAndLabel('')).toEqual({ order: 0, label: 'GF' })
   })
 })
@@ -225,5 +229,28 @@ describe('autoGroupDrawings & myProjects', () => {
       },
     ])
     expect(myProjects.get('auto-stem-chalet-alpina')).toBeNull()
+  })
+
+  it('does not poison floor order/labels or project titles with random up-<id> tokens like up-2f or up-b1', () => {
+    const drawings: DrawingSummary[] = [
+      mkSummary('up-2f', 'Villa Nord'),
+      mkSummary('up-b1', 'Villa Nord'),
+      mkSummary('up-raw99', 'up-raw99', { kind: 'raster', source_ext: '.pdf' }),
+      mkSummary('up-raw99-p2', 'up-raw99', { kind: 'raster', source_ext: '.pdf' }),
+    ]
+    const groups = autoGroupDrawings(drawings)
+    const villa = groups.find((g) => g.id === 'auto-stem-villa-nord')
+    expect(villa).toBeDefined()
+    expect(villa!.floors.map((f) => [f.drawing_id, f.label, f.order])).toEqual([
+      ['up-2f', 'Page 1', 1],
+      ['up-b1', 'Page 2', 2],
+    ])
+    const rawPdf = groups.find((g) => g.id === 'proj-raw99')
+    expect(rawPdf).toBeDefined()
+    expect(rawPdf!.title).toBe('up-raw99')
+    expect(rawPdf!.floors.map((f) => [f.drawing_id, f.label, f.order])).toEqual([
+      ['up-raw99', 'Page 1', 1],
+      ['up-raw99-p2', 'Page 2', 2],
+    ])
   })
 })

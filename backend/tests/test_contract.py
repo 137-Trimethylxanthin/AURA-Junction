@@ -215,17 +215,46 @@ def test_contract_v1_2_groups_links_and_projects():
     # Empty Evidence still omits optional groups/links when dumped with exclude_none=True
     assert Evidence().model_dump(exclude_none=True) == {"boxes": [], "rooms": []}
 
-    # Reject out-of-palette group color and empty ScopeProject drawing_ids
-    with pytest.raises(ValidationError):
-        EvidenceGroup.model_validate({"id": "g-bad", "label": "Bad", "color": "c7"})
-    with pytest.raises(ValidationError):
-        EvidenceLink.model_validate({"id": "l-bad", "from_pos": [1.0], "to_pos": [2.0, 3.0]})
-    with pytest.raises(ValidationError):
-        AskRequest.model_validate({
-            "drawing_id": "d-eg",
-            "question": "Stairs?",
-            "scope": {"kind": "project", "project_id": "p", "drawing_ids": []},
-        })
+    # Reject out-of-palette group color, empty IDs/labels, out-of-bounds/NaN Pct coords, and empty ScopeProject drawing_ids
+    EvidenceLink.model_validate({
+        "id": "l-bounds",
+        "from_pos": [0.0, 0.0],
+        "to_pos": [100.0, 100.0],
+        "waypoints": [[0.0, 100.0], [100.0, 0.0]],
+    })
+    for bad_group in (
+        {"id": "g-bad", "label": "Bad", "color": "c7"},
+        {"id": "", "label": "Empty ID", "color": "c1"},
+        {"id": "g-empty-lbl", "label": "", "color": "c1"},
+    ):
+        with pytest.raises(ValidationError):
+            EvidenceGroup.model_validate(bad_group)
+    for bad_link in (
+        {"id": "l-bad", "from_pos": [1.0], "to_pos": [2.0, 3.0]},
+        {"id": "", "from_pos": [10.0, 20.0], "to_pos": [30.0, 40.0]},
+        {"id": "l-px", "from_pos": [640.0, 480.0], "to_pos": [30.0, 40.0]},
+        {"id": "l-neg", "from_pos": [-0.1, 20.0], "to_pos": [30.0, 40.0]},
+        {"id": "l-wp", "from_pos": [10.0, 20.0], "to_pos": [30.0, 40.0], "waypoints": [[101.0, 50.0]]},
+        {"id": "l-nan", "from_pos": [float("nan"), 20.0], "to_pos": [30.0, 40.0]},
+    ):
+        with pytest.raises(ValidationError):
+            EvidenceLink.model_validate(bad_link)
+    for bad_ids in ([], [""]):
+        with pytest.raises(ValidationError):
+            AskRequest.model_validate({
+                "drawing_id": "d-eg",
+                "question": "Stairs?",
+                "scope": {"kind": "project", "project_id": "p", "drawing_ids": bad_ids},
+            })
+
+    # > 6 groups cycle cleanly across GROUP_COLORS (c1..c6)
+    from aura.contract import GROUP_COLORS
+
+    eight_groups = [
+        EvidenceGroup(id=f"apt-{i}", label=f"Apartment {i}", color=GROUP_COLORS[i % len(GROUP_COLORS)])
+        for i in range(8)
+    ]
+    assert [g.color for g in eight_groups] == ["c1", "c2", "c3", "c4", "c5", "c6", "c1", "c2"]
 
     # ToolResult accepts groups/links or None cleanly
     tr = ToolResult.model_validate({

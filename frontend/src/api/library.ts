@@ -148,9 +148,11 @@ export function inferFloorOrderAndLabel(titleOrFilename: string): { order: numbe
   const raw = titleOrFilename.trim()
   if (!raw) return { order: 0, label: 'GF' }
 
-  // Strip file extension and random `up-<hex>` prefix (preserving `-p2` page suffix if present).
+  // Strip file extension and random `up-<id>` tokens anywhere in the text (converting `-pN` suffixes to `Page N`).
   const withoutExt = raw.replace(/\.(?:dxf|ifc|pdf|png|jpe?g|webp)$/i, '')
-  const strippedUpload = withoutExt.replace(/^up-[a-z0-9]+(?=-p\d+$|$)/i, '')
+  const strippedUpload = withoutExt
+    .replace(/\bup-[a-z0-9]+-p([1-9]\d?)\b/gi, 'Page $1')
+    .replace(/\bup-[a-z0-9]+\b/gi, '')
   const norm = strippedUpload.replace(/--|_/g, ' ').trim()
 
   // 1. Numbered basements: `2. UG`, `2UG`, `B2`, `Basement 2`, `2e sous-sol`
@@ -277,6 +279,7 @@ function cleanBuildingStem(text: string): { slug: string; title: string } | null
   let s = text
     .trim()
     .replace(/\.(?:dxf|ifc|pdf|png|jpe?g|webp)$/i, '')
+    .replace(/\bup-[a-z0-9]+(?:-p\d+)?\b/gi, ' ')
     .replace(/\b(?:grundriss|floor\s*plan|floorplan|pohjapiirros|plan|pianta)\b/gi, ' ')
     .replace(/\b[1-9]\d?\s*\.?\s*(?:ug|untergeschoss|kg|keller|kellergeschoss|og|obergeschoss|kerros|krs|level)\b/gi, ' ')
     .replace(/\b[1-9]\d?\s*(?:er|ère|ere|e|ème|eme)?\s*[eé]tage\b/gi, ' ')

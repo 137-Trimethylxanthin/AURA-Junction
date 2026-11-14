@@ -158,16 +158,49 @@ describe('contract 1.2 (additive)', () => {
     }
     expect(isAskResponse(multiFloorResp)).toBe(true)
 
+    // Boundary Pct [0, 0]..[100, 100] and >6 cyclic GROUP_COLORS pass; out-of-range pixel/negative coords & empty IDs salvage cleanly
+    const eightGroups = Array.from({ length: 8 }, (_, i) => ({
+      id: `apt-${i + 1}`,
+      label: `Apartment ${i + 1}`,
+      color: GROUP_COLORS[i % GROUP_COLORS.length],
+    }))
+    expect(eightGroups.every(isEvidenceGroup)).toBe(true)
+    expect(
+      isEvidenceLink({
+        id: 'lnk-edge',
+        from_pos: [0, 0],
+        to_pos: [100, 100],
+        waypoints: [
+          [0, 100],
+          [100, 0],
+        ],
+      }),
+    ).toBe(true)
+    expect(isEvidenceGroup({ id: '', label: 'Bad', color: 'c1' })).toBe(false)
+    expect(isEvidenceGroup({ id: 'g1', label: '', color: 'c1' })).toBe(false)
+    expect(isEvidenceLink({ id: '', from_pos: [10, 10], to_pos: [20, 20] })).toBe(false)
+    expect(isEvidenceLink({ id: 'lnk-px', from_pos: [640, 480], to_pos: [20, 20] })).toBe(false)
+    expect(isEvidenceLink({ id: 'lnk-neg', from_pos: [-1, 20], to_pos: [20, 20] })).toBe(false)
+    expect(isEvidenceLink({ id: 'lnk-wp', from_pos: [10, 20], to_pos: [20, 20], waypoints: [[10, 105]] })).toBe(false)
+
     // salvageAskResponse drops invalid group/link items while preserving valid ones
     const salvaged = salvageAskResponse({
       ...multiFloorResp,
       evidence: {
         ...multiFloorResp.evidence,
-        groups: [...multiFloorResp.evidence.groups, { id: 'bad', label: 'Bad', color: 'c99' }],
-        links: [...multiFloorResp.evidence.links, { id: 'bad-link', from_pos: [1] }],
+        groups: [
+          ...multiFloorResp.evidence.groups,
+          { id: 'bad', label: 'Bad', color: 'c99' },
+          { id: 'empty-lbl', label: '', color: 'c2' },
+        ],
+        links: [
+          ...multiFloorResp.evidence.links,
+          { id: 'bad-link', from_pos: [1] },
+          { id: 'px-link', from_pos: [640, 480], to_pos: [20, 20] },
+        ],
       },
     }) as typeof multiFloorResp & { dropped_items?: number }
-    expect(salvaged.dropped_items).toBe(2)
+    expect(salvaged.dropped_items).toBe(4)
     expect(isAskResponse(salvaged)).toBe(true)
 
     expect(isDrawing({ ...DRAWING, project_id: 'proj-1', floor_label: '3e', floor_order: 3 })).toBe(true)

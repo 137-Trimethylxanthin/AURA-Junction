@@ -67,6 +67,11 @@ class _Open(BaseModel):
 
 # ---- shared -----------------------------------------------------------------------------
 
+Pct = Annotated[float, Field(allow_inf_nan=False, ge=0.0, le=100.0)]
+PctPoint = tuple[Pct, Pct]
+NonEmptyId = Annotated[str, Field(min_length=1, max_length=200)]
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
 
 class PctRect(_M):
     x: float
@@ -125,8 +130,8 @@ class ScopeProject(_M):
     """1.2: multi-plan house/project bundle scope across multiple floor drawings."""
 
     kind: Literal["project"] = "project"
-    project_id: str = Field(min_length=1, max_length=200)
-    drawing_ids: list[str] = Field(min_length=1, max_length=50)
+    project_id: NonEmptyId
+    drawing_ids: list[NonEmptyId] = Field(min_length=1, max_length=50)
 
 
 Scope = Annotated[
@@ -233,8 +238,8 @@ class EvidenceRow(_M):
 class EvidenceGroup(_M):
     """1.2: categorical color-coded evidence group (e.g. Apartment A, Stair S1 -> 1. OG)."""
 
-    id: str
-    label: str
+    id: NonEmptyId
+    label: Annotated[str, Field(min_length=1, max_length=200)]
     color: GroupColor
     target_drawing_id: str | None = None
 
@@ -242,10 +247,10 @@ class EvidenceGroup(_M):
 class EvidenceLink(_M):
     """1.2: directional vector on a plan (e.g. stair/ramp/circulation lead-to route)."""
 
-    id: str
-    from_pos: tuple[float, float]
-    to_pos: tuple[float, float]
-    waypoints: list[tuple[float, float]] | None = None
+    id: NonEmptyId
+    from_pos: PctPoint
+    to_pos: PctPoint
+    waypoints: list[PctPoint] | None = None
     group_id: str | None = None
     label: str | None = None
     drawing_id: str | None = None
@@ -432,7 +437,7 @@ class Drawing(_Open):
     source_ext: str | None = None
     project_id: str | None = None
     floor_label: str | None = None
-    floor_order: int | float | None = None
+    floor_order: int | FiniteFloat | None = None
 
 
 class DrawingSummary(_M):
@@ -452,13 +457,13 @@ class DrawingSummary(_M):
     source_ext: str | None = None
     project_id: str | None = None
     floor_label: str | None = None
-    floor_order: int | float | None = None
+    floor_order: int | FiniteFloat | None = None
 
 
 class ProjectFloor(_M):
     drawing_id: str = Field(min_length=1, max_length=200)
     label: str = Field(min_length=1, max_length=100)
-    order: int | float
+    order: int | FiniteFloat
 
 
 class ProjectBundle(_M):
