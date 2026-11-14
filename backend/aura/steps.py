@@ -242,6 +242,8 @@ def _box_m(b: Box, mx: float, my: float):
 def _box_pad(d, subject: str) -> float | None:
     """Metres the solver added around each object's footprint to draw its box (so the clear width
     is the box's long side minus twice this). None: widths are not measured (model-detected boxes)."""
+    if getattr(d, "store_library", False) is True:  # the store's own boxes: not drawn with our solvers' pads
+        return None
     if (d.drawing.get("evidence_method") or {}).get(subject) not in (None, "cad_geometry", "pdf_vector"):
         return None
     if d.drawing.get("kind") == "ifc":
@@ -1604,7 +1606,9 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
     decl = [{"functionDeclarations": decls}]
     system = SYSTEM
     if sql_scope is not None:
-        system += SQL_SYSTEM + ("" if store_sql.store_owns_things(d) else SQL_OWNER_NOTE) + store_sql.store_md()
+        system += (SQL_SYSTEM + ("" if store_sql.store_owns_things(d) else SQL_OWNER_NOTE)
+                   + (note if isinstance(note := getattr(d, "sql_note", ""), str) else "")  # a store storey view
+                   + store_sql.store_md())
     trace = trace if trace is not None else []
     trace += [A.question_node(question, lang),
               A.intent_node(f"tool steps · {model} plans, code counts"

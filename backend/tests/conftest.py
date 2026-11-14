@@ -12,8 +12,12 @@ BACKEND = REPO / "backend"
 FIXTURES = Path(__file__).parent / "fixtures"
 FRONTEND_DRAWING = REPO / "frontend" / "src" / "data" / "drawing.swiss-46639.json"
 
-# Never let a test see the real key or a stray kill switch from the shell.
-for _k in ("GEMINI_API_KEY", "AURA_MODELS", "AURA_PRESENTER_TOKEN", "DATA_DIR", "AURA_BUILD_DIR"):
+# Never let a test see the real key or a stray kill switch from the shell; and never the deployment's
+# drawing store (a shell that sourced its env file would start the store, its sweeper and the store
+# library against the live database).
+for _k in ("GEMINI_API_KEY", "AURA_MODELS", "AURA_PRESENTER_TOKEN", "DATA_DIR", "AURA_BUILD_DIR",
+           "AURA_STORE_DSN", "AURA_STORE_READER_PASSWORD", "AURA_STORE_DATA_DIR", "AURA_STORE_WORKERS",
+           "AURA_STORE_SWEEP", "AURA_STORE_LIBRARY", "AURA_STORE_LIBRARY_EXCLUDE", "AURA_STORE_RENDER_DIRS"):
     os.environ.pop(_k, None)
 
 

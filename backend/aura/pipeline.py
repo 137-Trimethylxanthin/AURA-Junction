@@ -952,6 +952,10 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     turn_deadline = deadline_s if deadline_s is not None else float(svc.settings.turn_deadline_s)
     t0 = time.perf_counter()
     ensure_ready(svc, req.drawing_id)
+    lib = svc.registry.store_library
+    if lib is not None and req.drawing_id.startswith("st-"):
+        # a store-library drawing and its sibling storeys are built off the event loop (also for MCP)
+        await asyncio.to_thread(lib.warm, req.drawing_id)
     d = svc.registry.get(req.drawing_id)
     if d is None:
         raise PipelineError("unknown_drawing", f"Unknown drawing '{req.drawing_id}'", 404)
@@ -1229,7 +1233,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
         # 4b. Tool-step answerer: fixed read-only tools over the indexed drawing, a few model calls, no generated code.
         #     Returns None when it cannot answer; only then does the turn go to the sidecar agent.
-        if svc.models_usable() and d.drawing.get("rooms") and not is_project and not is_deictic_region:
+        # A store-library drawing without rooms (a DWG, an uninterpreted scan) still has the sql tool.
+        if (svc.models_usable() and (d.drawing.get("rooms") or getattr(d, "store_owned", False) is True)
+                and not is_project and not is_deictic_region):
             gate_node = stats.get("decision_node")
             tools_built: A.Built | None = None
             try:

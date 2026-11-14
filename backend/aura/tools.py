@@ -132,7 +132,8 @@ class BundleEngine:
         self.methods: dict[str, str] = data.get("evidence_method") or {}
 
     def _method(self, family: str) -> dict:
-        """method/estimate fields for a result; nothing from the store is ever cad_geometry."""
+        """method/estimate fields for a result. An upload indexed by the store is never cad_geometry;
+        a store-library subject is, when every entity behind it has a CAD or IFC source."""
         m = self.methods.get("room" if family in ("room", "apartment", "area") else family)
         if not m:
             return {}
@@ -204,6 +205,8 @@ class BundleEngine:
             doubles = sum(1 for b in layer if b.get("note")) // 2
             how = self.methods.get(family)
             summary = (f"{len(layer)} {noun(family, len(layer))} on the DXF {family} layer." if not how else
+                       f"{len(layer)} {noun(family, len(layer))} read from the file's own geometry by the "
+                       "drawing store." if how == "cad_geometry" else
                        f"{len(layer)} {noun(family, len(layer))} found by the drawing store's symbol "
                        "detection (a model estimate)." if how == "vision" else
                        f"{len(layer)} {noun(family, len(layer))} read from the PDF's vectors.")
@@ -479,6 +482,9 @@ class Registry:
         self._cache: dict[str, LoadedDrawing] = dict(extra or {})
         self.skipped: set[str] = set()  # unreadable entries (count shown in /health)
         self._loaded_at: dict[str, float | None] = {}  # drawing.json mtime when each cached entry was read
+        #: aura.store_library.StoreLibrary when AURA_STORE_LIBRARY is on: `st-…` ids are its drawings (built
+        #: lazily, cached there). They are listed by GET /drawings, not by library_ids().
+        self.store_library: Any = None
 
     def evict(self, drawing_id: str) -> None:
         self._cache.pop(drawing_id, None)
@@ -509,6 +515,8 @@ class Registry:
         return [i for i in seen if not i.startswith("up-")]
 
     def get(self, drawing_id: str) -> LoadedDrawing | None:
+        if self.store_library is not None and drawing_id.startswith("st-"):
+            return self.store_library.get(drawing_id, self)
         if drawing_id in self._cache:
             cached = self._cache[drawing_id]
             # A drawing re-imported on disk (scripts/import_building.py, preprocess) is read again, not served stale.

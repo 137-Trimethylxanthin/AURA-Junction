@@ -200,6 +200,7 @@ class DrawingStore:
         self.following: set[str] = set()  # drawing ids with a follow task running (reindex guard)
         self.ctx: dict[str, dict] = {}  # drawing id -> the uploader's budget context (presenter, ip)
         self.ok = False
+        self.library: Any = None  # aura.store_library.StoreLibrary: its drawings are permanent
         self.ingestor: Any = None
         self.jsettings: Any = None
         self.tasks: set[asyncio.Task] = set()
@@ -287,6 +288,8 @@ class DrawingStore:
                     with contextlib_suppress(OSError, ValueError, KeyError, AttributeError):
                         for v in json.loads(cand.read_text(encoding="utf-8")).values():
                             out |= {f["sha256_16"] for f in v.get("files") or [] if f.get("sha256_16")}
+        if self.library is not None:  # the store library shows every dataset file: none may go with an upload
+            out |= self.library.permanent_file_ids()
         return out
 
     def live_file_ids(self) -> set[str]:
@@ -311,7 +314,7 @@ class DrawingStore:
         if not locked:
             async with self.register_lock:
                 return await self.forget(file_ids, locked=True)
-        keep = self.live_file_ids() | self.permanent_file_ids()
+        keep = self.live_file_ids() | await asyncio.to_thread(self.permanent_file_ids)
         await self.delete([f for f in file_ids if f and f not in keep])
 
     async def tombstone(self, drawing_id: str, file_id: str | None) -> None:
@@ -330,7 +333,7 @@ class DrawingStore:
 
             orphans = await asyncio.to_thread(self._upload_projects)
             gone = [r["file_id"] for r in tomb if r["file_id"]] + orphans
-            keep = self.live_file_ids() | self.permanent_file_ids()
+            keep = self.live_file_ids() | await asyncio.to_thread(self.permanent_file_ids)
             doomed = sorted({f for f in gone if f not in keep})
             await self.delete(doomed)
         for r in tomb:

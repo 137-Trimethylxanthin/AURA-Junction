@@ -88,6 +88,19 @@ class Settings(BaseSettings):
     store_reader_password: SecretStr | None = Field(default=None, alias="AURA_STORE_READER_PASSWORD")
     store_data_dir: Path = Field(default=BACKEND_DIR / ".data" / "store", alias="AURA_STORE_DATA_DIR")
     store_workers: int = Field(default=2, alias="AURA_STORE_WORKERS")
+    # Off for a second backend on the same store (a test instance): the sweep drops every upload project
+    # this instance's own database does not know, which would be the other instance's uploads.
+    store_sweep: bool = Field(default=True, alias="AURA_STORE_SWEEP")
+    # Store library (aura.store_library): every drawing already in the store that is not an upload and
+    # not covered by a bundle is a shared, permanent library drawing. Off = bundles only, as before.
+    store_library: bool = Field(default=False, alias="AURA_STORE_LIBRARY")
+    # Drawing keys (or glob patterns) never listed, comma-separated. Default: the two CC BY-ND models
+    # of the dataset; its notes ask not to render them (a redrawn plan is an adaptation).
+    store_library_exclude: str = Field(default="duplex_arc,bsc-clinic_clinic-plumbing",
+                                       alias="AURA_STORE_LIBRARY_EXCLUDE")
+    # Extra read-only roots searched for page renders (`renders/<file_id>/pN.png`) after
+    # AURA_STORE_DATA_DIR, comma-separated: renders made earlier by another store instance.
+    store_render_dirs: str = Field(default="", alias="AURA_STORE_RENDER_DIRS")
     sidecar_url: str | None = Field(default=None, alias="AURA_SIDECAR_URL")
     sidecar_token_file: Path | None = Field(default=None, alias="AURA_SIDECAR_TOKEN_FILE")
     sidecar_model: str = Field(default="gemini-3.8-flash", alias="AURA_SIDECAR_MODEL")
@@ -132,6 +145,11 @@ class Settings(BaseSettings):
     @property
     def logs_dir(self) -> Path:
         return self.data_dir / "logs"
+
+    @property
+    def store_library_dir(self) -> Path:
+        """Generated documents, plan.svg and thumbnails of store-library drawings (a cache)."""
+        return self.data_dir / "store-library"
 
     def drawing_dirs(self) -> list[Path]:
         return [self.data_dir / "drawings", self.build_dir]

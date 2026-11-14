@@ -100,6 +100,10 @@ Generated from `backend/aura/config.py` by `backend/scripts/env_table.py --write
 | `AURA_STORE_READER_PASSWORD` | backend env (`scripts/dev.sh` sets it) | `None` | Password of the read-only `jreader` role used by the sql tool |
 | `AURA_STORE_DATA_DIR` | backend env | `backend/.data/store` | Where the drawing store keeps upload copies and page renders |
 | `AURA_STORE_WORKERS` | backend env | `2` | Worker processes that ingest uploads into the drawing store |
+| `AURA_STORE_SWEEP` | backend env | `True` | Periodic removal of upload projects in the store that this backend does not know; turn off for a second backend on the same store |
+| `AURA_STORE_LIBRARY` | backend env | `False` | List every drawing already in the drawing store (not uploads, not ones a bundle covers) as a shared, permanent library drawing |
+| `AURA_STORE_LIBRARY_EXCLUDE` | backend env | `duplex_arc,bsc-clinic_clinic-plumbing` | Drawing keys or glob patterns the store library never lists, comma-separated (default: the two CC BY-ND models) |
+| `AURA_STORE_RENDER_DIRS` | backend env | `` | Extra read-only directories searched for page renders after `AURA_STORE_DATA_DIR`, comma-separated |
 | `AURA_SIDECAR_URL` | backend env |  | Base URL of the isolated deep-agent sidecar (`agent-service`) |
 | `AURA_SIDECAR_TOKEN_FILE` | backend env |  | Path to the shared bearer token file for `agent-service` |
 | `AURA_SIDECAR_MODEL` | backend env | `gemini-3.8-flash` | Sidecar model used for cost booking until the run reports its own (match JUNCTION_MODEL) |

@@ -224,6 +224,16 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
         except ValidationError:
             continue
 
+    lib = s.registry.store_library
+    for raw in lib.projects() if lib is not None else []:  # the storeys of one store IFC model
+        if raw["id"] in seen_ids or any(f["drawing_id"] in claimed_drawings for f in raw["floors"]):
+            continue
+        try:
+            bundles.append(ProjectBundle.model_validate(raw))
+            seen_ids.add(raw["id"])
+        except ValidationError:
+            continue
+
     return bundles
 
 
@@ -388,6 +398,18 @@ def create_app(
         if settings.store_dsn is not None:  # unset = quick mode; jstore is never imported
             await drawing_store.start()
         app.state.drawing_store = drawing_store
+        if settings.store_library and drawing_store.available():
+            # Every drawing already in the store as a shared library drawing; nothing is built here
+            # (the listing on the first GET /drawings, each document on its first open).
+            from aura.store_library import StoreLibrary
+
+            registry.store_library = drawing_store.library = StoreLibrary(settings, registry=registry)
+            # The listing (one grouped query) is read now, off the event loop, so no request waits for it.
+            n = await asyncio.to_thread(registry.store_library.count)
+            log.info("store library on: %d drawing(s) listed from the store", n)
+        elif settings.store_library:
+            log.warning("AURA_STORE_LIBRARY is set but the drawing store is not available: "
+                        "the store library stays off until a restart")
         jobs = Jobs(writer, **(job_options or {}))
         jobs.on_done = registry.evict
         jobs.on_ready = drawing_store.on_parsed
@@ -426,7 +448,8 @@ def create_app(
         # re-followed now, never read as "not pending" by a status poll.
         if drawing_store.available():
             await drawing_store.resume_all(store.upload_rows())
-            drawing_store.start_sweeper()
+            if settings.store_sweep:
+                drawing_store.start_sweeper()
         cleanup = asyncio.create_task(_cleanup_loop(app.state.svc, drawing_store), name="aura-cleanup")
         try:
             async with mcp_app.router.lifespan_context(mcp_app):
@@ -489,6 +512,8 @@ def create_app(
         budget = s.budget.snapshot()
         ids = s.registry.library_ids()
         drawings = sum(1 for i in ids if s.registry.get(i) is not None)
+        if s.registry.store_library is not None:
+            drawings += await asyncio.to_thread(s.registry.store_library.count)
         skipped = len(s.registry.skipped & set(ids))
         ok = db_ok and data_ok
         body: dict[str, Any] = {
@@ -540,11 +565,14 @@ def create_app(
             except ValueError:  # a malformed entry is skipped, never a 500 for everyone
                 s.registry.skipped.add(did)
                 log.warning("skipped a drawing with an invalid summary")
+        if s.registry.store_library is not None:  # validated summaries, cached until the store changes
+            out += await asyncio.to_thread(s.registry.store_library.summaries)
         return {"contract_version": CONTRACT_VERSION, "drawings": out}
 
     @app.get("/projects")
     async def list_projects(request: Request) -> dict:
         s = svc(request)
+        await warm(request)
         hashes = {r["id"]: r.get("token_hash") for r in (s.store.project_rows() if s.store else [])}
         # Bundles with an upload floor are private to whoever holds that upload's delete token or
         # the project's owner token; library-only bundles are public.
@@ -583,6 +611,10 @@ def create_app(
             new_token = uploads.new_delete_token()
             token_hash = uploads.hash_token(new_token)
         raw_floors = raw.get("floors")
+        for did in [*(raw.get("drawing_ids") if isinstance(raw.get("drawing_ids"), list) else []),
+                    *(f.get("drawing_id") for f in (raw_floors if isinstance(raw_floors, list) else [])
+                      if isinstance(f, dict))][:50]:
+            await warm(request, did)
         if raw_floors is None and isinstance(raw.get("drawing_ids"), list):
             raw_floors = []
             for idx, did in enumerate(raw["drawing_ids"], 1):
@@ -664,6 +696,18 @@ def create_app(
             await s.writer.execute("DELETE FROM projects WHERE id=?", (project_id,))
         return Response(status_code=204)
 
+    async def warm(request: Request, drawing_id: Any = None) -> None:
+        """A store-library drawing (and the other storeys of its building) is built, or re-validated
+        against the store, off the event loop; the registry lookups that follow in this request then
+        only read its cache. Without an id: the listing is brought up to date."""
+        lib = svc(request).registry.store_library
+        if lib is None:
+            return
+        if drawing_id is None:
+            await asyncio.to_thread(lib.summaries)
+        elif isinstance(drawing_id, str) and drawing_id.startswith("st-"):
+            await asyncio.to_thread(lib.warm, drawing_id)
+
     def upload_row(request: Request, drawing_id: str) -> dict | None:
         st = svc(request).store
         return st.drawing_row(drawing_id) if st and drawing_id.startswith("up-") else None
@@ -678,6 +722,7 @@ def create_app(
             if row["error"]:
                 body["error"] = row["error"]
             return body | await _store_status(svc(request), request.app.state.drawing_store, row)
+        await warm(request, drawing_id)
         d = svc(request).registry.get(drawing_id)
         if d is None:
             return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
@@ -738,6 +783,7 @@ def create_app(
         if row is not None and row["status"] != "ready":
             why = row["error"] if row["status"] == "failed" else None
             return _err("processing", why or f"Drawing '{drawing_id}' is {row['status']}.", 409)
+        await warm(request, drawing_id)
         d = svc(request).registry.get(drawing_id)
         if d is None:
             return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
@@ -755,6 +801,7 @@ def create_app(
     async def delete_drawing(drawing_id: str, request: Request):
         row = upload_row(request, drawing_id)
         if row is None:
+            await warm(request, drawing_id)
             if svc(request).registry.get(drawing_id) is not None:
                 return _err("bad_request", "Only uploads can be deleted.", 403)
             return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
@@ -880,8 +927,10 @@ def create_app(
                 return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
             if row["status"] != "ready":
                 return _err("processing", f"Drawing '{drawing_id}' is {row['status']}.", 409)
+        await warm(request, drawing_id)
         d = svc(request).registry.get(drawing_id)
-        p = d.file(name) if d is not None else None
+        # off the event loop: a store-library image may be generated on its first request
+        p = await asyncio.to_thread(d.file, name) if d is not None else None
         if p is None:
             return _err("not_found", "No such file.", 404)
         cache = NO_STORE if is_upload or d.source == "upload" else LIBRARY_CACHE
@@ -904,6 +953,7 @@ def create_app(
     async def post_ask(body: AskRequest, request: Request):
         if (r := not_ready(request, body.drawing_id)) is not None:
             return r
+        await warm(request, body.drawing_id)
         if (r := _scope_refused(svc(request), request, body.drawing_id, body.scope)) is not None:
             return r
         meters = {"answer": Meter(), "check": Meter()}
@@ -919,6 +969,7 @@ def create_app(
     async def post_chat(body: ChatRequest, request: Request):
         if (r := not_ready(request, body.drawing_id)) is not None:
             return r
+        await warm(request, body.drawing_id)
         s = svc(request)
         if s.registry.get(body.drawing_id) is None:
             return _err("unknown_drawing", f"Unknown drawing '{body.drawing_id}'", 404)
@@ -926,6 +977,8 @@ def create_app(
             return r
         if body.conversation_id:
             conv = s.store.conversation(body.conversation_id) if s.store else None
+            if conv is not None:
+                await warm(request, conv["drawing_id"])
             if conv is not None and not _same_project(s, conv["drawing_id"], body.drawing_id):
                 return _err("bad_request", "That conversation belongs to another drawing.", 400)
         gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s,
@@ -965,6 +1018,7 @@ def create_app(
 
         s = svc(request)
         ensure_ready(s, body.drawing_id)
+        await warm(request, body.drawing_id)
         d = s.registry.get(body.drawing_id)
         if d is None:
             return _err("unknown_drawing", f"Unknown drawing '{body.drawing_id}'", 404)
@@ -1002,6 +1056,7 @@ def create_app(
         if resp is None:
             return _err("not_found", "Unknown answer.", 404)
         drawing_id = s.store.answer_drawing(answer_id) if s.store else None
+        await warm(request, drawing_id)
         d = s.registry.get(drawing_id) if drawing_id else None
         rooms = {r["room_id"]: r for r in (d.drawing.get("rooms", []) if d else [])}
         return Response(evidence_csv(resp, rooms), media_type="text/csv; charset=utf-8",

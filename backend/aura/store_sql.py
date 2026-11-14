@@ -44,7 +44,8 @@ VIEW_KINDS = {"rooms": ("room",), "apartments": ("apartment", "room"), "doors": 
               "windows": ("window",), "fixtures": ("toilet", "washbasin", "sink", "bathtub", "shower")}
 STORE_OWNED_EXT = frozenset({".pdf", ".png", ".jpg", ".jpeg"})
 # A source method found by a model or a detector (not read from CAD/IFC/PDF text): an estimate.
-MODEL_METHOD = re.compile(r"gemini|vision|detect|llm|model|raster_rooms|raster_detection", re.IGNORECASE)
+# `region` (entity_sources.ref_table): a room outline traced on the page pixels of a scan or PDF render.
+MODEL_METHOD = re.compile(r"gemini|vision|detect|llm|model|raster_rooms|raster_detection|^region$", re.IGNORECASE)
 OCR_METHOD = re.compile(r"ocr|raster_word", re.IGNORECASE)
 ESTIMATE_VIEWS = {"detections": "vision", "ocr_words": "ocr"}
 EXACT_METHOD = "store_sql" if "store_sql" in get_args(Method) else "cad_geometry"
@@ -132,7 +133,11 @@ def _store_map(base: Path | None) -> dict:
 
 def store_owns_things(d) -> bool:
     """Uploaded PDF / image plans are materialised from the store: it owns their rooms and items.
+    So do store-library drawings (aura.store_library), whose whole document is the store's; one
+    storey of a multi-storey model is the exception there (the views have no storey scope).
     Bundled drawings and uploaded DXF/IFC keep our solvers for those."""
+    if getattr(d, "store_owned", False) is True:  # a StoreDrawing property, never a field of the file
+        return True
     ext = str(d.drawing.get("source_ext") or "").lower()
     return d.source == "upload" and (ext in STORE_OWNED_EXT or d.drawing.get("kind") == "raster")
 
