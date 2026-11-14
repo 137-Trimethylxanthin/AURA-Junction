@@ -1,9 +1,9 @@
-import { expect, test, type Page, type Route } from '@playwright/test'
-import { randomUUID } from 'node:crypto'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { expect, test, type Page, type Route } from "@playwright/test"
+import { randomUUID } from "node:crypto"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 /**
  * WP6, mandatory: the merged upload flow on the running local stack (frontend :5173, backend :8000 in full mode).
@@ -17,15 +17,19 @@ import { fileURLToPath } from 'node:url'
  * A second test covers quick mode with /health and the status mocked.
  */
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const DATASET = path.join(REPO, 'data/junction-dataset')
-const STEM = process.env.AURA_E2E_STEM ?? 'site1004_bldg2086_floor9400' // not one of the 17 bundled drawings
-const API = process.env.AURA_E2E_API_BASE ?? 'http://localhost:8000'
-const TABLE = '/tmp/claude-1000/-home-maki-Projects-junction-project/28275861-3944-4e09-a80f-567dee08a16e/scratchpad/e2e-upload-table.md'
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const DATASET = path.join(REPO, "data/junction-dataset")
+const STEM = process.env.AURA_E2E_STEM ?? "site1004_bldg2086_floor9400" // not one of the 17 bundled drawings
+const API = process.env.AURA_E2E_API_BASE ?? "http://localhost:8000"
+/** "full" (store on: indexed, SQL) or "quick" (store off: ready_unindexed, model estimates). */
+const MODE = (process.env.AURA_E2E_MODE ?? "full") as "full" | "quick"
+const TABLE = `/tmp/claude-1000/-home-maki-Projects-junction-project/28275861-3944-4e09-a80f-567dee08a16e/scratchpad/e2e-upload-table${MODE === "quick" ? "-quick" : ""}.md`
 const INDEX_TIMEOUT_MS = 5 * 60_000
 const ANSWER_TIMEOUT_MS = 150_000
 /** Door/window estimates: the error budget measured for this source by worker-backend; unknown yet → "unjudged". */
-const ESTIMATE_TOLERANCE: number | null = process.env.AURA_E2E_ESTIMATE_TOL ? Number(process.env.AURA_E2E_ESTIMATE_TOL) : null
+const ESTIMATE_TOLERANCE: number | null = process.env.AURA_E2E_ESTIMATE_TOL
+  ? Number(process.env.AURA_E2E_ESTIMATE_TOL)
+  : null
 
 interface Truth {
   question: string
@@ -35,11 +39,16 @@ interface Truth {
 }
 
 function truthRows(): Truth[] {
-  const lines = fs.readFileSync(path.join(DATASET, 'questions.jsonl'), 'utf8').split('\n')
+  const lines = fs
+    .readFileSync(path.join(DATASET, "questions.jsonl"), "utf8")
+    .split("\n")
   return lines
     .filter((l) => l.includes(`swiss_dwellings/${STEM}.`))
     .map((l) => JSON.parse(l) as Truth & { path: string })
-    .filter((r) => /^[\x20-\x7e’'«»²]+$/.test(r.question) && /^(How|What)/.test(r.question)) // English rows
+    .filter(
+      (r) =>
+        /^[\x20-\x7e’'«»²]+$/.test(r.question) && /^(How|What)/.test(r.question)
+    ) // English rows
 }
 
 const findTruth = (rows: Truth[], prefix: string) => {
@@ -50,10 +59,16 @@ const findTruth = (rows: Truth[], prefix: string) => {
 
 /** A temp copy of the PDF with a unique trailing comment: new bytes, new hash, same drawing. */
 function freshPdf(): string {
-  const src = path.join(DATASET, 'data/swiss_dwellings', `${STEM}.pdf`)
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aura-e2e-'))
+  const src = path.join(DATASET, "data/swiss_dwellings", `${STEM}.pdf`)
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-e2e-"))
   const out = path.join(dir, `${STEM}-e2e-${Date.now()}.pdf`)
-  fs.writeFileSync(out, Buffer.concat([fs.readFileSync(src), Buffer.from(`\n%aura-e2e ${randomUUID()}\n`)]))
+  fs.writeFileSync(
+    out,
+    Buffer.concat([
+      fs.readFileSync(src),
+      Buffer.from(`\n%aura-e2e ${randomUUID()}\n`),
+    ])
+  )
   return out
 }
 
@@ -72,7 +87,7 @@ async function backendUp(page: Page): Promise<{ store?: string } | null> {
 
 /** Drops a file on the drop zone the way a browser does (DataTransfer + drop event). */
 async function dropFile(page: Page, file: string) {
-  const b64 = fs.readFileSync(file).toString('base64')
+  const b64 = fs.readFileSync(file).toString("base64")
   const name = path.basename(file)
   await page.evaluate(
     ({ b64, name }) => {
@@ -80,12 +95,24 @@ async function dropFile(page: Page, file: string) {
       const bytes = new Uint8Array(bin.length)
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
       const dt = new DataTransfer()
-      dt.items.add(new File([bytes], name, { type: 'application/pdf' }))
-      const zone = document.querySelector('[data-dropzone]')!
-      zone.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }))
-      zone.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+      dt.items.add(new File([bytes], name, { type: "application/pdf" }))
+      const zone = document.querySelector("[data-dropzone]")!
+      zone.dispatchEvent(
+        new DragEvent("dragover", {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+      zone.dispatchEvent(
+        new DragEvent("drop", {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        })
+      )
     },
-    { b64, name },
+    { b64, name }
   )
 }
 
@@ -103,32 +130,44 @@ interface Answered {
 /** Records the `answer` event of every /chat stream (buffered: the test reads the final answer, not the stream). */
 function recordAnswers(page: Page) {
   const seen: Record<string, unknown>[] = []
-  void page.route('**/chat', async (route: Route) => {
+  void page.route("**/chat", async (route: Route) => {
     const res = await route.fetch({ timeout: ANSWER_TIMEOUT_MS })
     const body = await res.text()
-    for (const block of body.split('\n\n')) {
+    for (const block of body.split("\n\n")) {
       const ev = /^event: (.+)$/m.exec(block)?.[1]
       const data = /^data: (.+)$/m.exec(block)?.[1]
-      if (ev === 'answer' && data) seen.push(JSON.parse(data) as Record<string, unknown>)
+      if (ev === "answer" && data)
+        seen.push(JSON.parse(data) as Record<string, unknown>)
     }
     await route.fulfill({ response: res, body })
   })
   return seen
 }
 
-async function askLive(page: Page, seen: Record<string, unknown>[], question: string): Promise<Answered> {
-  const box = page.getByRole('textbox', { name: 'Ask about this drawing' })
+async function askLive(
+  page: Page,
+  seen: Record<string, unknown>[],
+  question: string
+): Promise<Answered> {
+  const box = page.getByRole("textbox", { name: "Ask about this drawing" })
   const before = seen.length
-  const cards = await page.locator('article[data-turn]').count()
+  const cards = await page.locator("article[data-turn]").count()
   const t0 = Date.now()
   await box.fill(question)
-  await box.press('Enter')
-  await expect(page.locator('article[data-turn]')).toHaveCount(cards + 1)
-  await expect.poll(() => seen.length, { timeout: ANSWER_TIMEOUT_MS }).toBeGreaterThan(before)
-  await expect(page.locator('article[data-turn]').last().locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 30_000 })
+  await box.press("Enter")
+  await expect(page.locator("article[data-turn]")).toHaveCount(cards + 1)
+  await expect
+    .poll(() => seen.length, { timeout: ANSWER_TIMEOUT_MS })
+    .toBeGreaterThan(before)
+  await expect(
+    page.locator("article[data-turn]").last().locator('[aria-busy="true"]')
+  ).toHaveCount(0, { timeout: 30_000 })
   // The SSE `answer` event carries { response: AskResponse } (contract.ts ChatEvent).
   const last = seen.at(-1)! as { response?: unknown }
-  fs.appendFileSync(TABLE.replace(/\.md$/, '.answers.jsonl'), JSON.stringify({ question, response: last.response ?? last }) + '\n')
+  fs.appendFileSync(
+    TABLE.replace(/\.md$/, ".answers.jsonl"),
+    JSON.stringify({ question, response: last.response ?? last }) + "\n"
+  )
   const a = (last.response ?? last) as {
     route?: string
     calls?: number
@@ -136,30 +175,39 @@ async function askLive(page: Page, seen: Record<string, unknown>[], question: st
     answer?: { kind?: string; value?: unknown; number?: unknown }
     estimate?: unknown
   }
-  const raw = a.answer?.kind === 'note' ? a.answer.number : a.answer?.value
+  const raw = a.answer?.kind === "note" ? a.answer.number : a.answer?.value
   return {
     question,
     route: a.route,
     calls: a.calls,
     method: a.method,
     kind: a.answer?.kind,
-    value: typeof raw === 'number' ? raw : undefined,
-    estimate: a.method === 'agent_estimate' || a.method === 'vision' || a.estimate !== undefined,
+    value: typeof raw === "number" ? raw : undefined,
+    estimate:
+      a.method === "agent_estimate" ||
+      a.method === "vision" ||
+      a.estimate !== undefined,
     seconds: Math.round((Date.now() - t0) / 100) / 10,
   }
 }
 
-test.describe('merged upload flow (live stack)', () => {
-  test('fresh Swiss PDF: upload, stages, indexed, four answers vs truth, delete', async ({ page }) => {
+test.describe("merged upload flow (live stack)", () => {
+  test("fresh Swiss PDF: upload, stages, indexed, four answers vs truth, delete", async ({
+    page,
+  }) => {
     const health = await backendUp(page)
-    test.skip(!health, `backend ${API} not reachable`)
-    expect(health!.store, 'the backend must run in full mode (store on)').toBe('on')
+    expect(health, `backend ${API} not reachable`).not.toBeNull()
+    expect(health!.store, `the backend must run in ${MODE} mode`).toBe(
+      MODE === "full" ? "on" : "off"
+    )
 
     const truth = truthRows()
-    const qDoors = findTruth(truth, 'How many doors')
+    const qDoors = findTruth(truth, "How many doors")
     const qZimmer = findTruth(truth, "How many rooms labelled 'Zimmer'")
-    const qApt = findTruth(truth, 'What is the net floor area of apartment A')
-    const qSql = 'How many text labels are printed on this drawing? Use the drawing store.'
+    const qApt = findTruth(truth, "What is the net floor area of apartment A")
+    const qWindows = findTruth(truth, "How many windows")
+    const qSql =
+      "How many text labels are printed on this drawing? Use the drawing store."
 
     const file = freshPdf()
     const name = path.basename(file)
@@ -169,143 +217,298 @@ test.describe('merged upload flow (live stack)', () => {
     try {
       // ---- 1. upload and watch the stages ------------------------------------------------------------------
       await page.addInitScript(() => {
-        const w = window as unknown as { __aura: { stages: string[]; openNow: boolean } }
+        const w = window as unknown as {
+          __aura: { stages: string[]; openNow: boolean }
+        }
         w.__aura = { stages: [], openNow: false }
         new MutationObserver(() => {
-          for (const el of document.querySelectorAll('[data-slot="card"][data-outcome] > [data-stage]')) {
-            const v = el.getAttribute('data-stage') ?? ''
+          for (const el of document.querySelectorAll(
+            '[data-slot="card"][data-outcome] > [data-stage]'
+          )) {
+            const v = el.getAttribute("data-stage") ?? ""
             if (v && w.__aura.stages.at(-1) !== v) w.__aura.stages.push(v)
           }
-          if ([...document.querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Open now')) w.__aura.openNow = true
-        }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true })
+          if (
+            [...document.querySelectorAll("a")].some(
+              (a) => a.textContent?.trim() === "Open now"
+            )
+          )
+            w.__aura.openNow = true
+        }).observe(document, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          characterData: true,
+        })
       })
-      await page.goto('/upload')
-      await expect(page.getByRole('heading', { name: 'Upload drawings' })).toBeVisible()
-      await expect(page.locator('[data-mode="full"]')).toBeVisible()
+      await page.goto("/upload")
+      await expect(
+        page.getByRole("heading", { name: "Upload drawings" })
+      ).toBeVisible()
+      await expect(page.locator(`[data-mode="${MODE}"]`)).toBeVisible()
       await dropFile(page, file)
 
-      const card = page.locator('[data-slot="card"][data-outcome]').filter({ has: page.getByRole('heading', { name }) })
+      const card = page
+        .locator('[data-slot="card"][data-outcome]')
+        .filter({ has: page.getByRole("heading", { name }) })
       await expect(card).toBeVisible({ timeout: 30_000 })
       const stages = new Set<string>()
       let openNowSeen = false
-      let final = ''
+      let final = ""
       const deadline = Date.now() + INDEX_TIMEOUT_MS
       while (Date.now() < deadline) {
-        const stage = await card.locator('> [data-stage]').getAttribute('data-stage').catch(() => null)
-        const outcome = (await card.getAttribute('data-outcome').catch(() => null)) ?? ''
-        if (outcome && outcome !== 'working') {
+        const stage = await card
+          .locator("> [data-stage]")
+          .getAttribute("data-stage")
+          .catch(() => null)
+        const outcome =
+          (await card.getAttribute("data-outcome").catch(() => null)) ?? ""
+        if (outcome && outcome !== "working") {
           final = `${stage}/${outcome}`
           break
         }
         await page.waitForTimeout(1000)
       }
-      const seenInPage = await page.evaluate(() => (window as unknown as { __aura: { stages: string[]; openNow: boolean } }).__aura)
+      const seenInPage = await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __aura: { stages: string[]; openNow: boolean }
+            }
+          ).__aura
+      )
       for (const st of seenInPage.stages) stages.add(st)
       openNowSeen = seenInPage.openNow
-      const note = await card.locator('p').allTextContents().catch(() => [])
-      test.info().annotations.push({ type: 'stages', description: `${[...stages].join(' → ')} ⇒ ${final || 'timeout'}` })
-      expect(stages.size, `distinct stages seen: ${[...stages].join(', ')}; notes: ${note.join(' | ')}`).toBeGreaterThanOrEqual(4)
-      expect(final, `ended at ${final || 'timeout'}; stages ${[...stages].join(' → ')}`).toBe('indexed/done')
-      expect(openNowSeen, '"Open now" appears while the store is still reading').toBe(true)
+      const note = await card
+        .locator("p")
+        .allTextContents()
+        .catch(() => [])
+      test
+        .info()
+        .annotations.push({
+          type: "stages",
+          description: `${[...stages].join(" → ")} ⇒ ${final || "timeout"}`,
+        })
+      expect(
+        stages.size,
+        `distinct stages seen: ${[...stages].join(", ")}; notes: ${note.join(" | ")}`
+      ).toBeGreaterThanOrEqual(4)
+      // Full: indexed by the store, openable while it still reads. Quick: ready_unindexed (no store stages).
+      expect(
+        final,
+        `ended at ${final || "timeout"}; stages ${[...stages].join(" → ")}`
+      ).toBe(MODE === "full" ? "indexed/done" : "indexed/quick")
+      if (MODE === "full")
+        expect(
+          openNowSeen,
+          '"Open now" appears while the store is still reading'
+        ).toBe(true)
+      else
+        await expect(card.locator('[data-callout="quick"]')).toContainText(
+          "not indexed"
+        )
 
-      const href = await card.getByRole('link', { name: 'Open', exact: true }).getAttribute('href')
-      drawingId = decodeURIComponent(href!.replace(/^\/d\//, ''))
+      const href = await card
+        .getByRole("link", { name: "Open", exact: true })
+        .getAttribute("href")
+      drawingId = decodeURIComponent(href!.replace(/^\/d\//, ""))
 
       // ---- 2. ask in a new conversation --------------------------------------------------------------------
       const seen = recordAnswers(page)
       await page.goto(`/d/${encodeURIComponent(drawingId)}`)
-      const box = page.getByRole('textbox', { name: 'Ask about this drawing' })
+      const box = page.getByRole("textbox", { name: "Ask about this drawing" })
       await expect(box).toBeVisible({ timeout: 60_000 })
-      if ((await page.locator('article[data-turn]').count()) > 0) await page.getByRole('button', { name: 'New conversation' }).first().click()
+      if ((await page.locator("article[data-turn]").count()) > 0)
+        await page
+          .getByRole("button", { name: "New conversation" })
+          .first()
+          .click()
 
-      const rows: { a: Answered; truth?: number; judge: 'match' | 'area1' | 'estimate' | 'none' }[] = []
-      rows.push({ a: await askLive(page, seen, qDoors.question), truth: qDoors.answer, judge: 'estimate' })
-      const doorCard = page.locator('article[data-turn]').last()
-      if (rows[0].a.estimate) await expect(doorCard.locator('[data-chip="method"]')).toContainText(/estimate/i)
-      rows.push({ a: await askLive(page, seen, qZimmer.question), truth: qZimmer.answer, judge: 'match' })
-      rows.push({ a: await askLive(page, seen, qApt.question), truth: qApt.answer, judge: 'area1' })
-      rows.push({ a: await askLive(page, seen, qSql), judge: 'none' })
+      const rows: {
+        a: Answered
+        truth?: number
+        judge: "match" | "area1" | "estimate" | "none"
+      }[] = []
+      rows.push({
+        a: await askLive(page, seen, qDoors.question),
+        truth: qDoors.answer,
+        judge: "estimate",
+      })
+      const doorCard = page.locator("article[data-turn]").last()
+      if (rows[0].a.estimate || MODE === "quick")
+        await expect(doorCard.locator('[data-chip="method"]')).toContainText(
+          /estimate/i
+        )
+      if (MODE === "quick") {
+        // Quick mode: no store, so door and window counts are model estimates, labelled as such.
+        rows.push({
+          a: await askLive(page, seen, qWindows.question),
+          truth: qWindows.answer,
+          judge: "estimate",
+        })
+        await expect(
+          page
+            .locator("article[data-turn]")
+            .last()
+            .locator('[data-chip="method"]')
+        ).toContainText(/estimate/i)
+        for (const r of rows)
+          expect(r.a.estimate, `${r.a.question}: method ${r.a.method}`).toBe(
+            true
+          )
+      } else {
+        rows.push({
+          a: await askLive(page, seen, qZimmer.question),
+          truth: qZimmer.answer,
+          judge: "match",
+        })
+        rows.push({
+          a: await askLive(page, seen, qApt.question),
+          truth: qApt.answer,
+          judge: "area1",
+        })
+        rows.push({ a: await askLive(page, seen, qSql), judge: "none" })
 
-      await page.screenshot({ path: TABLE.replace(/\.md$/, '.png') })
-      // The SQL question: its query must be visible in the reasoning tree.
-      const sqlCard = page.locator('article[data-turn]').last()
-      await sqlCard.getByRole('button', { name: 'Reasoning tree' }).click()
-      const sqlBlock = page.locator('[data-trace-panel] [data-sql]').first()
-      await expect(sqlBlock, 'a SQL block in the reasoning tree').toBeVisible({ timeout: 15_000 })
-      await sqlBlock.locator('summary').click()
-      await expect(sqlBlock.locator('pre')).toContainText(/select/i)
-      await page.getByRole('button', { name: 'Back to chat (Escape)' }).click()
+        await page.screenshot({ path: TABLE.replace(/\.md$/, ".png") })
+        // The SQL question: its query must be visible in the reasoning tree.
+        const sqlCard = page.locator("article[data-turn]").last()
+        await sqlCard.getByRole("button", { name: "Reasoning tree" }).click()
+        const sqlBlock = page.locator("[data-trace-panel] [data-sql]").first()
+        await expect(sqlBlock, "a SQL block in the reasoning tree").toBeVisible(
+          { timeout: 15_000 }
+        )
+        await sqlBlock.locator("summary").click()
+        await expect(sqlBlock.locator("pre")).toContainText(/select/i)
+        await page
+          .getByRole("button", { name: "Back to chat (Escape)" })
+          .click()
+      }
 
       // ---- 3. judge, table ----------------------------------------------------------------------------------
-      table.push('| question | answer | truth | method | route | calls | seconds | result |', '|---|---|---|---|---|---|---|---|')
+      table.push(
+        "| question | answer | truth | method | route | calls | seconds | result |",
+        "|---|---|---|---|---|---|---|---|"
+      )
       const failures: string[] = []
       for (const { a, truth: t, judge } of rows) {
         let result: string
-        if (a.route === 'cache') result = 'FAIL (answer cache)'
-        else if (judge === 'none') result = 'n/a (no truth)'
-        else if (a.value === undefined || t === undefined) result = 'FAIL (no number)'
-        else if (judge === 'match') result = a.value === t ? 'pass' : 'FAIL'
-        else if (judge === 'area1') result = Math.abs(a.value - t) <= 0.01 * t ? 'pass' : 'FAIL'
+        if (a.route === "cache") result = "FAIL (answer cache)"
+        else if (judge === "none") result = "n/a (no truth)"
+        else if (a.value === undefined || t === undefined)
+          result = "FAIL (no number)"
+        else if (judge === "match") result = a.value === t ? "pass" : "FAIL"
+        else if (judge === "area1")
+          result = Math.abs(a.value - t) <= 0.01 * t ? "pass" : "FAIL"
         else {
           const err = Math.abs(a.value - t) / t
-          result = ESTIMATE_TOLERANCE === null ? `unjudged (error ${(err * 100).toFixed(0)} %)` : err <= ESTIMATE_TOLERANCE ? 'pass' : 'FAIL'
+          result =
+            ESTIMATE_TOLERANCE === null
+              ? `unjudged (error ${(err * 100).toFixed(0)} %)`
+              : err <= ESTIMATE_TOLERANCE
+                ? "pass"
+                : "FAIL"
         }
-        if (result.startsWith('FAIL')) failures.push(`${a.question}: ${result}`)
-        table.push(`| ${a.question.slice(0, 70)} | ${a.value ?? a.kind ?? '-'} | ${t ?? '-'} | ${a.method ?? '-'} | ${a.route ?? '-'} | ${a.calls ?? '-'} | ${a.seconds} | ${result} |`)
+        if (result.startsWith("FAIL")) failures.push(`${a.question}: ${result}`)
+        table.push(
+          `| ${a.question.slice(0, 70)} | ${a.value ?? a.kind ?? "-"} | ${t ?? "-"} | ${a.method ?? "-"} | ${a.route ?? "-"} | ${a.calls ?? "-"} | ${a.seconds} | ${result} |`
+        )
       }
-      fs.writeFileSync(TABLE, `# WP6 upload e2e (${new Date().toISOString()}, ${STEM}, drawing ${drawingId})\n\n${table.join('\n')}\n`)
+      fs.writeFileSync(
+        TABLE,
+        `# WP6 upload e2e (${new Date().toISOString()}, ${STEM}, drawing ${drawingId})\n\n${table.join("\n")}\n`
+      )
       expect(failures, `see ${TABLE}`).toEqual([])
     } finally {
       if (table.length === 0)
-        fs.writeFileSync(TABLE, `# WP6 upload e2e (${new Date().toISOString()}, ${STEM}, drawing ${drawingId})\n\nStopped before the answers; see the test output.\n`)
+        fs.writeFileSync(
+          TABLE,
+          `# WP6 upload e2e (${new Date().toISOString()}, ${STEM}, drawing ${drawingId})\n\nStopped before the answers; see the test output.\n`
+        )
       // ---- 4. delete through the page ---------------------------------------------------------------------
-      await page.unrouteAll({ behavior: 'ignoreErrors' })
-      await page.goto('/upload')
-      const mine = page.locator('[data-slot="card"][data-outcome]').filter({ has: page.getByRole('heading', { name }) })
+      await page.unrouteAll({ behavior: "ignoreErrors" })
+      await page.goto("/upload")
+      const mine = page
+        .locator('[data-slot="card"][data-outcome]')
+        .filter({ has: page.getByRole("heading", { name }) })
       if (await mine.count()) {
-        await mine.getByRole('button', { name: `Delete ${name}` }).click().catch(async () => {
-          await mine.locator('button[aria-label^="Delete"]').click()
-        })
-        await page.getByRole('alertdialog').getByRole('button', { name: /^Delete/ }).click()
-        await expect(page.locator('[data-slot="card"][data-outcome]').filter({ has: page.getByRole('heading', { name }) })).toHaveCount(0)
+        await mine
+          .getByRole("button", { name: `Delete ${name}` })
+          .click()
+          .catch(async () => {
+            await mine.locator('button[aria-label^="Delete"]').click()
+          })
+        await page
+          .getByRole("alertdialog")
+          .getByRole("button", { name: /^Delete/ })
+          .click()
+        await expect(
+          page
+            .locator('[data-slot="card"][data-outcome]')
+            .filter({ has: page.getByRole("heading", { name }) })
+        ).toHaveCount(0)
       }
     }
   })
 })
 
-test.describe('quick mode (mocked /health and status)', () => {
-  test('store off: ready, not indexed, estimates labelled', async ({ page }) => {
-    const id = 'up-Qe2e'
-    await page.route('**/health', (r) => r.fulfill({ json: { ok: true, contract_version: '1.2', store: 'off' } }))
-    await page.route('**/projects**', (r) => r.fulfill({ json: { contract_version: '1.2', projects: [] } }))
+test.describe("quick mode (mocked /health and status)", () => {
+  test("store off: ready, not indexed, estimates labelled", async ({
+    page,
+  }) => {
+    const id = "up-Qe2e"
+    await page.route("**/health", (r) =>
+      r.fulfill({ json: { ok: true, contract_version: "1.2", store: "off" } })
+    )
+    await page.route("**/projects**", (r) =>
+      r.fulfill({ json: { contract_version: "1.2", projects: [] } })
+    )
     await page.route(`**/drawings/${id}/status`, (r) =>
       r.fulfill({
         json: {
-          contract_version: '1.2',
+          contract_version: "1.2",
           id,
-          status: 'ready',
-          stage: 'ready_unindexed',
-          mode: 'quick',
-          note: 'Quick mode: no drawing store, so rooms are not indexed for this PDF',
+          status: "ready",
+          stage: "ready_unindexed",
+          mode: "quick",
+          note: "Quick mode: no drawing store, so rooms are not indexed for this PDF",
           counts: { pages: 1, doors: 14, windows: 9 },
-          methods: { doors: 'vision', windows: 'vision' },
+          methods: { doors: "vision", windows: "vision" },
           elapsed_s: 2,
           stage_s: 0,
         },
-      }),
+      })
     )
     await page.addInitScript(
-      (u) => localStorage.setItem('aura.uploads', JSON.stringify(u)),
-      [{ id, name: 'quick-plan.pdf', delete_token: 't', created_at: new Date().toISOString() }],
+      (u) => localStorage.setItem("aura.uploads", JSON.stringify(u)),
+      [
+        {
+          id,
+          name: "quick-plan.pdf",
+          delete_token: "t",
+          created_at: new Date().toISOString(),
+        },
+      ]
     )
-    await page.goto('/upload')
-    await expect(page.locator('[data-mode="quick"]')).toContainText('Quick mode')
+    await page.goto("/upload")
+    await expect(page.locator('[data-mode="quick"]')).toContainText(
+      "Quick mode"
+    )
     const card = page.locator('[data-slot="card"][data-outcome="quick"]')
     await expect(card).toBeVisible()
-    await expect(card.locator('[data-callout="quick"]')).toContainText('not indexed')
-    await expect(card.locator('[data-upload-counts]')).toContainText('Doors (estimate)')
-    await expect(card.locator('[data-upload-counts]')).toContainText('Windows (estimate)')
-    await expect(card.locator('[data-step][data-state="skipped"]')).toHaveCount(3)
-    await expect(card.getByRole('link', { name: 'Open', exact: true })).toBeVisible()
+    await expect(card.locator('[data-callout="quick"]')).toContainText(
+      "not indexed"
+    )
+    await expect(card.locator("[data-upload-counts]")).toContainText(
+      "Doors (estimate)"
+    )
+    await expect(card.locator("[data-upload-counts]")).toContainText(
+      "Windows (estimate)"
+    )
+    await expect(card.locator('[data-step][data-state="skipped"]')).toHaveCount(
+      3
+    )
+    await expect(
+      card.getByRole("link", { name: "Open", exact: true })
+    ).toBeVisible()
   })
 })

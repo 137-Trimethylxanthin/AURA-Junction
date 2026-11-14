@@ -265,3 +265,26 @@ def test_tool_tier_abstain_is_not_answerable_and_router_topics_stay_not_on_drawi
         assert r["answer"] == {"kind": "abstain", "reason": "not_answerable"}
         h = c.post("/ask", json={"drawing_id": SWISS, "question": "what is the ceiling height in the kitchen"}).json()
         assert h["answer"]["reason"] == "not_on_drawing"
+
+
+@pytest.mark.parametrize("q", [
+    "how many distinct IFC property set names are recorded for the doors",
+    "which property sets do the windows have",
+    "how many layers contain walls",
+    "combien de calques contiennent des portes",
+    "welche Eigenschaften haben die Türen",
+    "quali proprietà hanno le porte",
+    "mitkä ominaisuudet ovilla on",
+])
+def test_metadata_of_objects_is_never_an_object_count(q):
+    """Counting properties/layers/classes OF doors is not counting doors (tool steps / sql)."""
+    r = route(q)
+    assert r.intent != "count", (q, r.intent, r.matched)
+
+
+@pytest.mark.parametrize(("q", "subject"), [("how many doors", "door"), ("combien de portes", "door"),
+                                            ("wie viele Türen", "door"), ("show all windows", "window"),
+                                            ("how many rooms are named Bad", "room")])
+def test_plain_counts_stay_exact(q, subject):
+    r = route(q)
+    assert (r.intent, r.subject) == ("count", subject)

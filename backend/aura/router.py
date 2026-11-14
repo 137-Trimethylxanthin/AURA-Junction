@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 8  # 6: length filters to tools; 7: measurements are not room ids; 8: tried-and-empty = not_answerable
+ROUTER_VERSION = 9  # 7: measurements not room ids; 8: tried-and-empty = not_answerable; 9: metadata of objects to tools
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
@@ -499,6 +499,18 @@ WHICH_ARE_THERE = re.compile(
     re.IGNORECASE)
 
 
+# Metadata of drawn objects (EN/FR/DE/FI/IT). Not "named"/"called" (that is a room label).
+METADATA = re.compile(
+    r"\b(?:property|properties|property ?sets?|psets?|attributes?|ifc ?class(?:es)?|classes|"
+    r"layers?|type names?|types?|names?|distinct|guids?|tags?|"
+    r"propriétés?|attributs?|calques?|noms?|types?|"
+    r"eigenschaft\w*|merkmal\w*|attribut\w*|ebenen?|layern?|namen?|klassen?|typen?|"
+    r"ominaisuu\w*|attribuut\w*|tasot?|tasoj\w*|nim(?:i|et|iä)|luok\w*|tyyp\w*|"
+    r"propriet\w*|attribut[oi]|livell[oi]|nom[ei]|class[ei]|tip[oi])\b",
+    re.IGNORECASE)
+LAYER_WORD = re.compile(r"\b(?:layers?|calques?|ebenen?|tasot?|livell[oi]|ifc)\b", re.IGNORECASE)
+
+
 def room_concept(text: str) -> tuple[str | None, list[str]]:
     """('bedroom', its printed label names) when the question names a room type."""
     for concept, rx, printed in LABEL_CONCEPTS:
@@ -568,6 +580,11 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
         return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["deictic_similarity"])
 
     box_subject = next((subj for subj, rx in SUBJECTS if rx.search(s)), None)
+    # "how many distinct property sets are recorded for the doors", "which layers contain the
+    # windows": the thing counted is metadata OF the objects, not the objects. Tool steps (sql).
+    if METADATA.search(s) and (box_subject or ROOM_WORD.search(s) or LAYER_WORD.search(s)):
+        return Routed("unknown", lang, signal, scope=_scope(s, ctx), subject=box_subject,
+                      matched=["metadata", *([box_subject] if box_subject else [])])
     rank = "max" if RANK_MAX.search(s) else "min" if RANK_MIN.search(s) else None
     if rank and box_subject is None and not APARTMENT.search(s) and not COUNT.search(s):
         concept, printed = room_concept(s)
