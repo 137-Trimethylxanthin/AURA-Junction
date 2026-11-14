@@ -127,7 +127,7 @@ export function PlanToolbar() {
         </div>
       ) : null}
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex flex-wrap items-center gap-2">
         <SourceBadge />
         <div className="flex items-center rounded-lg border" role="group" aria-label={tu('tb_zoom')}>
           <Tooltip>

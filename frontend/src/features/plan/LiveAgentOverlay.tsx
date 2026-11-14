@@ -26,10 +26,12 @@ export function LiveAgentReticle({ stageW, aspect }: { stageW: number; aspect: n
   if (!stream || !rect || stageW <= 0) return null
 
   const stageH = stageW / (aspect > 0 ? aspect : 1)
-  const pxX = (rect.x / 100) * stageW
-  const pxY = (rect.y / 100) * stageH
-  const pxW = Math.max(28, (rect.w / 100) * stageW)
-  const pxH = Math.max(28, (rect.h / 100) * stageH)
+  const rawW = Math.max(28, (rect.w / 100) * stageW)
+  const rawH = Math.max(28, (rect.h / 100) * stageH)
+  const pxW = Math.min(stageW, rawW)
+  const pxH = Math.min(stageH, rawH)
+  const pxX = Math.min(Math.max(0, stageW - pxW), Math.max(0, (rect.x / 100) * stageW))
+  const pxY = Math.min(Math.max(0, stageH - pxH), Math.max(0, (rect.y / 100) * stageH))
   const maxRight = Math.max(pxX, pxX + pxW - CORNER_PX)
   const maxBottom = Math.max(pxY, pxY + pxH - CORNER_PX)
 

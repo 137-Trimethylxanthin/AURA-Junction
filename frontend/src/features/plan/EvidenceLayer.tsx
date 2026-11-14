@@ -15,6 +15,7 @@ import {
 import { useInRouterContext, useNavigate, type NavigateFunction } from 'react-router'
 import { ArrowRightIcon, EyeIcon, EyeOffIcon } from 'lucide-react'
 import type { Lang, RoomPoly } from '@/api/contract'
+import { myProjects } from '@/api/library'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId } from '@/lib/answer'
 import { fmtArea } from '@/lib/format'
@@ -32,6 +33,8 @@ import {
   readFocusedGroupId,
   rectsIntersect,
   resolveGroupStyle,
+  resolveProjectForDrawing,
+  writeFocusedGroupId,
   type AgentTelemetry,
   type EvidenceGroupLike,
   type EvidenceLinkLike,
@@ -67,6 +70,9 @@ export interface EvidenceLayerProps {
   /** Controlled focused group id fallback (when lifted into `PlanStage`). */
   focusedGroupId?: string | null
   onSelectGroup?: (groupId: string | null) => void
+  /** Controlled fine-pointer hover preview group id (when lifted into `PlanStage`). */
+  hoveredGroupId?: string | null
+  onHoverGroup?: (groupId: string | null) => void
   /** When true, floating stage controls (`StageEvidenceControls`) are mounted by `PlanStage` outside the zoom wrapper. */
   externalControls?: boolean
   onNavigateFloor?: (drawingId: string) => void
@@ -85,6 +91,8 @@ export function EvidenceLayer({
   onToggleShowDropped,
   focusedGroupId: controlledFocusedGroupId,
   onSelectGroup,
+  hoveredGroupId: controlledHoveredGroupId,
+  onHoverGroup,
   externalControls = false,
   onNavigateFloor,
 }: EvidenceLayerProps) {
@@ -105,6 +113,7 @@ export function EvidenceLayer({
   const turnScopeKey = `${turn?.id ?? 'none'}:${drawing.id}`
   const [localDropped, setLocalDropped] = useState<{ key: string; on: boolean }>({ key: '', on: false })
   const [localGroup, setLocalGroup] = useState<{ key: string; id: string | null }>({ key: '', id: null })
+  const [localHoverGroup, setLocalHoverGroup] = useState<{ key: string; id: string | null }>({ key: '', id: null })
 
   const showDropped =
     controlledShowDropped !== undefined
@@ -129,21 +138,37 @@ export function EvidenceLayer({
       ? controlledFocusedGroupId
       : storeFocusedGroupId ?? (localGroup.key === turnScopeKey ? localGroup.id : null)
 
+  const effectiveHoveredGroupId =
+    controlledHoveredGroupId !== undefined
+      ? controlledHoveredGroupId
+      : localHoverGroup.key === turnScopeKey
+        ? localHoverGroup.id
+        : null
+
+  const activeSpotlightGroupId = effectiveHoveredGroupId ?? effectiveFocusedGroupId
+
   const selectGroup = useCallback(
     (nextId: string | null) => {
       if (onSelectGroup) {
         onSelectGroup(nextId)
         return
       }
-      const storeSetter = (actions() as unknown as { setFocusedGroupId?: (id: string | null) => void })
-        .setFocusedGroupId
-      if (typeof storeSetter === 'function') {
-        storeSetter(nextId)
-      } else {
+      if (!writeFocusedGroupId(nextId)) {
         setLocalGroup({ key: turnScopeKey, id: nextId })
       }
     },
     [onSelectGroup, turnScopeKey],
+  )
+
+  const hoverGroup = useCallback(
+    (nextId: string | null) => {
+      if (onHoverGroup) {
+        onHoverGroup(nextId)
+        return
+      }
+      setLocalHoverGroup({ key: turnScopeKey, id: nextId })
+    },
+    [onHoverGroup, turnScopeKey],
   )
 
   const navigateFloor = useCallback(
@@ -203,7 +228,7 @@ export function EvidenceLayer({
 
   const droppedBoxes = useMemo(
     () =>
-      doneResp && turnStream
+      doneResp && doneResp.answer.kind !== 'abstain' && turnStream
         ? diffDroppedBoxes(
             turnStream.evidence.boxes as GroupedBox[],
             doneResp.evidence.boxes as GroupedBox[],
@@ -220,7 +245,9 @@ export function EvidenceLayer({
     active: boolean
   }>({ key: '', wasPending: false, active: false })
 
-  if (turn && settlePhase.key !== turnScopeKey) {
+  if (!turn && settlePhase.key !== '') {
+    setSettlePhase({ key: '', wasPending: false, active: false })
+  } else if (turn && settlePhase.key !== turnScopeKey) {
     setSettlePhase({
       key: turnScopeKey,
       wasPending: turn.status === 'pending',
@@ -264,16 +291,16 @@ export function EvidenceLayer({
         set.add(hid)
       }
     }
-    if (effectiveFocusedGroupId) {
+    if (activeSpotlightGroupId) {
       for (const b of floorBoxes) {
-        if (b.group_id === effectiveFocusedGroupId) set.add(b.id)
+        if (b.group_id === activeSpotlightGroupId) set.add(b.id)
       }
       for (const r of floorRooms) {
-        if (r.group_id === effectiveFocusedGroupId) set.add(roomEvidenceId(r.room_id))
+        if (r.group_id === activeSpotlightGroupId) set.add(roomEvidenceId(r.room_id))
       }
     }
     return set
-  }, [streaming, floorBoxes, floorRooms, selected, hovered, effectiveFocusedGroupId])
+  }, [streaming, floorBoxes, floorRooms, selected, hovered, activeSpotlightGroupId])
 
   if (!turn || !evidence) return null
 
@@ -281,7 +308,10 @@ export function EvidenceLayer({
   const canToggleBox = !doneResp || doneResp.method !== 'agent_estimate' || doneResp.answer.kind === 'count'
   const canToggleRoom = !doneResp || doneResp.method !== 'agent_estimate'
   const aspect = planAspect(drawing)
-  const spotlightOn = !streaming && focusedIds.size > 0
+  const hasSpotlightLink = Boolean(
+    !streaming && activeSpotlightGroupId && floorLinks.some((l) => l.group_id === activeSpotlightGroupId),
+  )
+  const spotlightOn = !streaming && (focusedIds.size > 0 || hasSpotlightLink)
   const showDroppedGhosts = Boolean(doneResp && droppedBoxes.length > 0 && (settling || showDropped))
 
   return (
@@ -342,7 +372,7 @@ export function EvidenceLayer({
         <LinkLayer
           links={floorLinks}
           groups={groups}
-          focusedGroupId={effectiveFocusedGroupId}
+          focusedGroupId={activeSpotlightGroupId}
           spotlightOn={spotlightOn}
           interactive={interactive}
           stageW={stageW}
@@ -357,6 +387,7 @@ export function EvidenceLayer({
           onToggleShowDropped={toggleShowDropped}
           focusedGroupId={effectiveFocusedGroupId}
           onSelectGroup={selectGroup}
+          onHoverGroup={hoverGroup}
           onNavigateFloor={navigateFloor}
         />
       ) : null}
@@ -371,6 +402,7 @@ export interface StageEvidenceControlsProps {
   onToggleShowDropped: () => void
   focusedGroupId: string | null
   onSelectGroup: (groupId: string | null) => void
+  onHoverGroup?: (groupId: string | null) => void
   onNavigateFloor?: (drawingId: string) => void
 }
 
@@ -379,16 +411,27 @@ export function StageEvidenceControls({
   onToggleShowDropped,
   focusedGroupId,
   onSelectGroup,
+  onHoverGroup,
   onNavigateFloor,
 }: StageEvidenceControlsProps) {
   const turn = useActiveTurn()
   const drawingId = useAppStore((s) => s.session.drawing.id)
-  const project = useAppStore(readActiveProject)
+  const storeProject = useAppStore(readActiveProject)
+  const compareSwipe = useAppStore((s) => s.ui.compare.on && s.ui.compare.mode === 'swipe')
   const lang = useAppStore((s) => s.session.lang)
   const copy = STAGE_COPY[lang]
 
   const inRouter = useInRouterContext()
   const navRef = useRef<NavigateFunction | null>(null)
+  const [projRev, setProjRev] = useState(0)
+  const [hoverPreview, setHoverPreview] = useState<{ hoveredId: string; restoreId: string | null } | null>(null)
+
+  useEffect(() => myProjects.subscribe(() => setProjRev((r) => r + 1)), [])
+
+  const project = useMemo(() => {
+    void projRev
+    return resolveProjectForDrawing(storeProject, drawingId)
+  }, [storeProject, drawingId, projRev])
 
   const doneResp = turn?.status === 'done' ? turn.response : undefined
   const turnStream = turn?.stream
@@ -399,7 +442,7 @@ export function StageEvidenceControls({
 
   const droppedBoxes = useMemo(
     () =>
-      doneResp && turnStream
+      doneResp && doneResp.answer.kind !== 'abstain' && turnStream
         ? diffDroppedBoxes(
             turnStream.evidence.boxes as GroupedBox[],
             doneResp.evidence.boxes as GroupedBox[],
@@ -417,6 +460,9 @@ export function StageEvidenceControls({
     }
     for (const r of doneResp.evidence.rooms as GroupedRoom[]) {
       if (r.group_id && (!r.drawing_id || r.drawing_id === drawingId)) set.add(r.group_id)
+    }
+    for (const l of (doneResp.evidence.links ?? []) as EvidenceLinkLike[]) {
+      if (l.group_id && (!l.drawing_id || l.drawing_id === drawingId)) set.add(l.group_id)
     }
     return set
   }, [doneResp, drawingId])
@@ -447,7 +493,10 @@ export function StageEvidenceControls({
   return (
     <div
       data-stage-controls=""
-      className="pointer-events-auto absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-1.5"
+      className={cn(
+        'pointer-events-auto absolute left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-1.5',
+        compareSwipe ? 'bottom-10' : 'bottom-3',
+      )}
     >
       {inRouter ? <RouterNavSink navRef={navRef} /> : null}
       {groups.length > 0 ? (
@@ -459,6 +508,8 @@ export function StageEvidenceControls({
         >
           {groups.map((g, idx) => {
             const vars = groupVarsOf(g.color, idx)
+            const pinnedGroupId = hoverPreview ? hoverPreview.restoreId : focusedGroupId
+            const isPinned = pinnedGroupId === g.id
             const active = focusedGroupId === g.id
             const targetFloor = g.target_drawing_id && g.target_drawing_id !== drawingId ? g.target_drawing_id : undefined
             const targetLabel = targetFloor ? (floorLabelById.get(targetFloor) ?? targetFloor) : undefined
@@ -468,18 +519,38 @@ export function StageEvidenceControls({
                 <button
                   type="button"
                   data-group-chip={g.id}
-                  aria-pressed={active}
+                  aria-pressed={isPinned}
+                  onPointerEnter={(e) => {
+                    if (e.pointerType === 'mouse' && onCurrentFloor) {
+                      const restoreId = hoverPreview ? hoverPreview.restoreId : focusedGroupId
+                      setHoverPreview({ hoveredId: g.id, restoreId })
+                      onHoverGroup?.(g.id)
+                    }
+                  }}
+                  onPointerLeave={(e) => {
+                    if (e.pointerType === 'mouse') {
+                      setHoverPreview(null)
+                      onHoverGroup?.(null)
+                    }
+                  }}
                   onClick={() => {
                     if (!onCurrentFloor && targetFloor) {
+                      setHoverPreview(null)
+                      onHoverGroup?.(null)
                       jumpFloor(targetFloor)
                       return
                     }
-                    onSelectGroup(active ? null : g.id)
+                    const nextPinned = isPinned ? null : g.id
+                    setHoverPreview(null)
+                    onHoverGroup?.(null)
+                    onSelectGroup(nextPinned)
                   }}
                   className={cn(
                     'flex h-10 min-h-10 min-w-10 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap transition-colors outline-none',
                     'focus-visible:ring-3 focus-visible:ring-ring/60',
-                    active ? 'border-foreground/30 bg-muted text-foreground shadow-xs' : 'border-transparent text-foreground hover:bg-muted/70',
+                    isPinned || active
+                      ? 'border-foreground/30 bg-muted text-foreground shadow-xs'
+                      : 'border-transparent text-foreground hover:bg-muted/70',
                   )}
                 >
                   <span
@@ -588,10 +659,10 @@ const SpotlightVeil = memo(function SpotlightVeil({
           })}
           {boxes.map((b) => {
             if (!focusedIds.has(b.id)) return null
-            const cw = Math.max(b.w, minWPct)
-            const ch = Math.max(b.h, minHPct)
-            const cx = b.x - (cw - b.w) / 2
-            const cy = b.y - (ch - b.h) / 2
+            const cw = Math.min(100, Math.max(b.w, minWPct))
+            const ch = Math.min(100, Math.max(b.h, minHPct))
+            const cx = Math.min(100 - cw, Math.max(0, b.x))
+            const cy = Math.min(100 - ch, Math.max(0, b.y))
             return <rect key={b.id} x={cx} y={cy} width={cw} height={ch} rx={0.35} fill="black" />
           })}
         </mask>
@@ -734,6 +805,7 @@ const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
         const isDropped = agentState === 'dropped'
         const isInspecting = agentState === 'inspecting'
         const isCandidate = agentState === 'candidate'
+        const isKept = Boolean(p.streaming && p.telemetry?.keptIds.has(b.id))
         const dimmed = p.spotlightOn && !isFocused
 
         const boxStyle: CSSProperties = {
@@ -773,14 +845,16 @@ const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
               'before:absolute before:top-1/2 before:left-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-1/2',
               'focus-visible:ring-3 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background',
               isDropped
-                ? 'border-dashed border-muted-foreground/70 bg-muted/15 opacity-30'
+                ? 'z-[1] border-dashed border-muted-foreground/70 bg-muted/15 opacity-30'
                 : rejected
-                  ? 'border-dashed border-warning bg-warning/10'
+                  ? 'z-[2] border-dashed border-warning bg-warning/10'
                   : isCandidate
-                    ? 'plan-candidate-pulse border-dashed border-info bg-info/15'
+                    ? isKept
+                      ? 'z-[2] border-info bg-info/20'
+                      : 'plan-candidate-pulse z-[2] border-dashed border-info bg-info/15'
                     : isInspecting
                       ? 'z-[3] border-info bg-info/30 ring-4 ring-info/35'
-                      : 'border-info bg-info/15 hover:bg-info/30',
+                      : 'z-[2] border-info bg-info/15 hover:bg-info/30',
               !isDropped &&
                 hot &&
                 (rejected
@@ -820,7 +894,7 @@ const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
         const at = badgeAt.get(b.id) ?? { x: b.x, y: b.y, dx: 0, dy: 0 }
         const dimmed = p.spotlightOn && !isFocused
         const badgeStyle: CSSProperties | undefined =
-          !rejected && grp ? { backgroundColor: grp.main, color: '#ffffff' } : undefined
+          !rejected && grp ? { backgroundColor: grp.main, color: 'var(--primary-foreground)' } : undefined
 
         return (
           <span
@@ -1084,7 +1158,7 @@ const LinkLayer = memo(function LinkLayer({
           const pxPts = rawPts.map(toPx)
           const ptsAttr = pxPts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
           const [x0, y0] = pxPts[0]
-          const dimmed = spotlightOn && Boolean(focusedGroupId && l.group_id && l.group_id !== focusedGroupId)
+          const dimmed = spotlightOn && Boolean(focusedGroupId && l.group_id !== focusedGroupId)
 
           return (
             <g
@@ -1120,8 +1194,10 @@ const LinkLayer = memo(function LinkLayer({
         if (!l.label && !l.target_drawing_id) return null
         const grp = resolveGroupStyle(l.group_id, groups)
         const color = grp ? grp.main : 'var(--info)'
-        const dimmed = spotlightOn && Boolean(focusedGroupId && l.group_id && l.group_id !== focusedGroupId)
+        const dimmed = spotlightOn && Boolean(focusedGroupId && l.group_id !== focusedGroupId)
         const pillText = l.label ?? l.target_drawing_id ?? ''
+        const clampedLeft = Math.min(96, Math.max(4, l.to_pos[0]))
+        const placeBelow = l.to_pos[1] < 8
 
         if (l.target_drawing_id && interactive) {
           const targetId = l.target_drawing_id
@@ -1136,19 +1212,20 @@ const LinkLayer = memo(function LinkLayer({
                 onNavigateFloor(targetId)
               }}
               style={{
-                left: `${l.to_pos[0]}%`,
+                left: `${clampedLeft}%`,
                 top: `${l.to_pos[1]}%`,
-                backgroundColor: color,
-                color: '#ffffff',
               }}
               className={cn(
-                'pointer-events-auto absolute -translate-x-1/2 -translate-y-full cursor-pointer rounded-full px-2 py-0.5 text-xs leading-tight font-semibold whitespace-nowrap ring-2 ring-background shadow-xs outline-none',
-                'before:absolute before:top-1/2 before:left-1/2 before:min-h-11 before:min-w-11 before:-translate-1/2',
+                'pointer-events-auto absolute -translate-x-1/2 inline-flex min-h-10 min-w-10 cursor-pointer items-center justify-center rounded-lg bg-transparent p-1 outline-none',
+                placeBelow ? 'translate-y-0' : '-translate-y-full',
                 'focus-visible:ring-3 focus-visible:ring-ring/60',
                 dimmed && 'opacity-35',
               )}
             >
-              <span className="inline-flex items-center gap-0.5">
+              <span
+                style={{ backgroundColor: color, color: 'var(--primary-foreground)' }}
+                className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs leading-tight font-semibold whitespace-nowrap ring-2 ring-background shadow-xs"
+              >
                 {!pillText.includes('→') ? <ArrowRightIcon aria-hidden="true" className="size-3" /> : null}
                 <span>{pillText}</span>
               </span>
@@ -1162,13 +1239,14 @@ const LinkLayer = memo(function LinkLayer({
             aria-hidden="true"
             data-link-label={l.id}
             style={{
-              left: `${l.to_pos[0]}%`,
+              left: `${clampedLeft}%`,
               top: `${l.to_pos[1]}%`,
               backgroundColor: color,
-              color: '#ffffff',
+              color: 'var(--primary-foreground)',
             }}
             className={cn(
-              'pointer-events-none absolute -translate-x-1/2 -translate-y-full rounded-full px-2 py-0.5 text-xs leading-tight font-semibold whitespace-nowrap ring-2 ring-background shadow-xs',
+              'pointer-events-none absolute -translate-x-1/2 rounded-full px-2 py-0.5 text-xs leading-tight font-semibold whitespace-nowrap ring-2 ring-background shadow-xs',
+              placeBelow ? 'translate-y-0' : '-translate-y-full',
               dimmed && 'opacity-35',
             )}
           >

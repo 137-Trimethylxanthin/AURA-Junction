@@ -1,5 +1,16 @@
-import type { Box, EvidenceRoom, Lang, PctRect } from '@/api/contract'
-import type { AppState, StreamState } from '@/store'
+import type {
+  Box,
+  EvidenceGroup,
+  EvidenceLink,
+  EvidenceRoom,
+  GroupColor,
+  Lang,
+  PctRect,
+  ProjectBundle,
+  ProjectFloor,
+} from '@/api/contract'
+import { myProjects } from '@/api/library'
+import { actions, type AppState, type StreamState } from '@/store'
 import { bboxOf, clampRect } from '@/lib/geometry'
 
 /** Badge diameter plus a 2 px gap, in px. */
@@ -92,49 +103,13 @@ export function placeBadges(
 
 // ---- categorical groups, links & multi-floor bundle types -------------------
 
-export type GroupColor = 'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c6'
-
-export interface EvidenceGroupLike {
-  id: string
-  label: string
-  color: GroupColor
-  target_drawing_id?: string
-}
-
-export interface EvidenceLinkLike {
-  id: string
-  from_pos: [number, number]
-  to_pos: [number, number]
-  waypoints?: [number, number][]
-  group_id?: string
-  label?: string
-  drawing_id?: string
-  target_drawing_id?: string
-}
-
-export type GroupedBox = Box & {
-  group_id?: string
-  drawing_id?: string
-}
-
-export type GroupedRoom = EvidenceRoom & {
-  group_id?: string
-  drawing_id?: string
-}
-
-export interface ProjectFloorLike {
-  drawing_id: string
-  label: string
-  order: number
-}
-
-export interface ProjectBundleLike {
-  id: string
-  title: string
-  floors: ProjectFloorLike[]
-  auto_matched?: boolean
-  created_at?: string
-}
+export type { GroupColor }
+export type EvidenceGroupLike = EvidenceGroup
+export type EvidenceLinkLike = EvidenceLink
+export type GroupedBox = Box
+export type GroupedRoom = EvidenceRoom
+export type ProjectFloorLike = ProjectFloor
+export type ProjectBundleLike = ProjectBundle
 
 export const GROUP_VARS: Record<GroupColor, { main: string; surface: string }> = {
   c1: { main: 'var(--group-1)', surface: 'var(--group-1-surface)' },
@@ -252,6 +227,62 @@ function asPctRect(v: unknown): PctRect | null {
   return null
 }
 
+function asCropPctRect(cropPx: unknown, imagePx: unknown): PctRect | null {
+  if (!Array.isArray(cropPx) || cropPx.length < 4 || !Array.isArray(imagePx) || imagePx.length < 2) return null
+  const [x0, y0, x1, y1] = cropPx
+  const [imgW, imgH] = imagePx
+  if (
+    typeof x0 !== 'number' ||
+    typeof y0 !== 'number' ||
+    typeof x1 !== 'number' ||
+    typeof y1 !== 'number' ||
+    typeof imgW !== 'number' ||
+    typeof imgH !== 'number' ||
+    !Number.isFinite(x0) ||
+    !Number.isFinite(y0) ||
+    !Number.isFinite(x1) ||
+    !Number.isFinite(y1) ||
+    !Number.isFinite(imgW) ||
+    !Number.isFinite(imgH) ||
+    imgW <= 0 ||
+    imgH <= 0
+  ) {
+    return null
+  }
+  const left = Math.min(x0, x1)
+  const top = Math.min(y0, y1)
+  const width = Math.abs(x1 - x0)
+  const height = Math.abs(y1 - y0)
+  return clampRect({
+    x: (left / imgW) * 100,
+    y: (top / imgH) * 100,
+    w: (width / imgW) * 100,
+    h: (height / imgH) * 100,
+  })
+}
+
+const MACHINE_STEP_SLUGS = new Set([
+  'view_image',
+  'shell',
+  'scan-candidates',
+  'scan_candidates',
+  'crop',
+  'deep_agent',
+  'count_objects',
+  'room_areas',
+  'list_rooms',
+  'locate',
+  'scope_to_region',
+  'compare_with_original',
+  'check_boxes_with_decisions',
+  'what_if',
+  'find_text',
+])
+
+function isMachineStepSlug(s: string): boolean {
+  return MACHINE_STEP_SLUGS.has(s.toLowerCase())
+}
+
 function asStringList(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
 }
@@ -304,7 +335,8 @@ export function extractAgentTelemetry(stream: StreamState | undefined, drawingId
       droppedIds.delete(id)
     }
     if (!nodeDrawing || nodeDrawing === drawingId) {
-      const explicitRect = asPctRect(args.focus_rect ?? args.crop_rect ?? args.rect)
+      const explicitRect =
+        asPctRect(args.focus_rect ?? args.crop_rect ?? args.rect) ?? asCropPctRect(args.crop_px, args.image_px)
       if (explicitRect && (explicitRect.w > 0 || explicitRect.h > 0)) {
         focusRect = explicitRect
       } else if (node.evidence_ids && node.evidence_ids.length > 0) {
@@ -320,8 +352,16 @@ export function extractAgentTelemetry(stream: StreamState | undefined, drawingId
       }
     }
     const argStep = typeof args.step === 'string' ? args.step.trim() : ''
-    if (argStep) stepLabel = argStep
-    else if (node.title?.trim()) stepLabel = node.title.trim()
+    const titleStep = node.title?.trim() ?? ''
+    if (argStep && !isMachineStepSlug(argStep)) {
+      stepLabel = argStep
+    } else if (titleStep && !isMachineStepSlug(titleStep)) {
+      stepLabel = titleStep
+    } else if (argStep) {
+      stepLabel = STAGE_COPY[lang].toolStep(argStep.toLowerCase())
+    } else if (titleStep) {
+      stepLabel = STAGE_COPY[lang].toolStep(titleStep.toLowerCase())
+    }
   }
 
   if (!stepLabel) {
@@ -347,7 +387,7 @@ export function extractAgentTelemetry(stream: StreamState | undefined, drawingId
   }
 }
 
-// ---- Wave 0.5 store readers/writers (compatible before & after Wave 0.5) ----
+// ---- Wave 0.5 store readers/writers -----------------------------------------
 
 type AnyRecord = Record<string, unknown>
 
@@ -358,6 +398,20 @@ export function readActiveProject(s: AppState): ProjectBundleLike | null {
   const cand = (top ?? ses ?? ui ?? null) as ProjectBundleLike | null
   if (cand && Array.isArray(cand.floors)) return cand
   return null
+}
+
+/**
+ * Resolve the active multi-floor `ProjectBundle` for `drawingId` from store state first
+ * (verifying membership), falling back to saved `myProjects.forDrawing(drawingId)`.
+ */
+export function resolveProjectForDrawing(
+  storeProject: ProjectBundleLike | null,
+  drawingId: string,
+): ProjectBundleLike | null {
+  if (storeProject && storeProject.floors.some((f) => f && f.drawing_id === drawingId)) {
+    return storeProject
+  }
+  return myProjects.forDrawing(drawingId)
 }
 
 export function readCrossPlanScope(s: AppState): boolean {
@@ -374,10 +428,28 @@ export function readFocusedGroupId(s: AppState): string | null {
   return typeof v === 'string' ? v : null
 }
 
+/**
+ * Update `focusedGroupId` in `appStore` via Wave 0.5's `setFocusedGroup` (or legacy `setFocusedGroupId` alias).
+ * Returns `true` when handled by the store, `false` when no store setter is present.
+ */
+export function writeFocusedGroupId(nextId: string | null): boolean {
+  const act = actions() as unknown as {
+    setFocusedGroup?: (id: string | null) => void
+    setFocusedGroupId?: (id: string | null) => void
+  }
+  const fn = act.setFocusedGroup ?? act.setFocusedGroupId
+  if (typeof fn === 'function') {
+    fn(nextId)
+    return true
+  }
+  return false
+}
+
 // ---- 4-locale stage micro-copy (EN / FR / FI / DE) --------------------------
 
 interface StageCopyEntry {
   phase: (p: StreamState['phase']) => string
+  toolStep: (slug: string) => string
   queue: (n: number) => string
   step: (n: number, label: string) => string
   marked: (n: number) => string
@@ -400,6 +472,14 @@ export const STAGE_COPY: Record<Lang, StageCopyEntry> = {
           : p === 'understood'
             ? 'Scanning candidates'
             : 'Reading question',
+    toolStep: (slug) =>
+      slug === 'view_image' || slug === 'crop'
+        ? 'Inspecting crop'
+        : slug === 'scan-candidates' || slug === 'scan_candidates'
+          ? 'Scanning candidates'
+          : slug === 'check_boxes_with_decisions'
+            ? 'Checking boxes'
+            : 'Inspecting drawing',
     queue: (n) => `In queue (#${n})…`,
     step: (n, label) => (n > 0 ? `Step ${n} · ${label}` : label),
     marked: (n) => `${n} marked`,
@@ -420,6 +500,14 @@ export const STAGE_COPY: Record<Lang, StageCopyEntry> = {
           : p === 'understood'
             ? 'Repérage des candidats'
             : 'Lecture de la question',
+    toolStep: (slug) =>
+      slug === 'view_image' || slug === 'crop'
+        ? 'Inspection d’un extrait'
+        : slug === 'scan-candidates' || slug === 'scan_candidates'
+          ? 'Repérage des candidats'
+          : slug === 'check_boxes_with_decisions'
+            ? 'Contrôle des zones'
+            : 'Inspection du plan',
     queue: (n) => `En file d’attente (n° ${n})…`,
     step: (n, label) => (n > 0 ? `Étape ${n} · ${label}` : label),
     marked: (n) => `${n} marqués`,
@@ -440,6 +528,14 @@ export const STAGE_COPY: Record<Lang, StageCopyEntry> = {
           : p === 'understood'
             ? 'Etsitään ehdokkaita'
             : 'Luetaan kysymystä',
+    toolStep: (slug) =>
+      slug === 'view_image' || slug === 'crop'
+        ? 'Tutkitaan osa-aluetta'
+        : slug === 'scan-candidates' || slug === 'scan_candidates'
+          ? 'Etsitään ehdokkaita'
+          : slug === 'check_boxes_with_decisions'
+            ? 'Tarkistetaan kohteita'
+            : 'Tutkitaan piirustusta',
     queue: (n) => `Jonossa (#${n})…`,
     step: (n, label) => (n > 0 ? `Vaihe ${n} · ${label}` : label),
     marked: (n) => `${n} merkitty`,
@@ -460,6 +556,14 @@ export const STAGE_COPY: Record<Lang, StageCopyEntry> = {
           : p === 'understood'
             ? 'Kandidaten werden markiert'
             : 'Frage wird gelesen',
+    toolStep: (slug) =>
+      slug === 'view_image' || slug === 'crop'
+        ? 'Ausschnitt wird geprüft'
+        : slug === 'scan-candidates' || slug === 'scan_candidates'
+          ? 'Kandidaten werden markiert'
+          : slug === 'check_boxes_with_decisions'
+            ? 'Objekte werden geprüft'
+            : 'Plan wird untersucht',
     queue: (n) => `In Warteschlange (Nr. ${n})…`,
     step: (n, label) => (n > 0 ? `Schritt ${n} · ${label}` : label),
     marked: (n) => `${n} markiert`,

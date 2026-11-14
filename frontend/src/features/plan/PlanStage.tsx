@@ -13,6 +13,7 @@ import { AnimatePresence, motion } from "motion/react"
 import { ImageOffIcon, MousePointerClickIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
+import { myProjects } from "@/api/library"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { cn } from "@/lib/utils"
 import { ZOOM_MAX, ZOOM_MIN, actions, selectZoom, useActiveTurn, useAppStore } from "@/store"
@@ -25,6 +26,8 @@ import {
   parseSpotHash,
   readActiveProject,
   readFocusedGroupId,
+  resolveProjectForDrawing,
+  writeFocusedGroupId,
 } from "./badges"
 import { isEditable, overlayOpen, pctPoint, planAspect } from "./shared"
 import { useEver } from "@/hooks/use-ever"
@@ -124,6 +127,13 @@ export function PlanStage() {
     key: "",
     id: null,
   })
+  const [hoveredGroupState, setHoveredGroupState] = useState<{ key: string; id: string | null }>({
+    key: "",
+    id: null,
+  })
+  const [projRev, setProjRev] = useState(0)
+
+  useEffect(() => myProjects.subscribe(() => setProjRev((r) => r + 1)), [])
 
   const showDropped = droppedState.key === turnScopeKey ? droppedState.on : false
   const toggleShowDropped = useCallback(() => {
@@ -136,29 +146,40 @@ export function PlanStage() {
   const effectiveFocusedGroupId =
     storeFocusedGroupId ?? (localGroupState.key === turnScopeKey ? localGroupState.id : null)
 
+  const hoveredGroupId = hoveredGroupState.key === turnScopeKey ? hoveredGroupState.id : null
+
   const selectGroup = useCallback(
     (nextId: string | null) => {
-      const storeSetter = (actions() as unknown as { setFocusedGroupId?: (id: string | null) => void })
-        .setFocusedGroupId
-      if (typeof storeSetter === "function") {
-        storeSetter(nextId)
-      } else {
+      if (!writeFocusedGroupId(nextId)) {
         setLocalGroupState({ key: turnScopeKey, id: nextId })
       }
     },
     [turnScopeKey],
   )
 
-  const hasMultiFloorProject = useMemo(
-    () => Boolean(storeProject && storeProject.floors.length >= 2),
-    [storeProject],
+  const hoverGroup = useCallback(
+    (nextId: string | null) => {
+      setHoveredGroupState({ key: turnScopeKey, id: nextId })
+    },
+    [turnScopeKey],
   )
+
+  const hasMultiFloorProject = useMemo(() => {
+    void projRev
+    const resolved = resolveProjectForDrawing(storeProject, drawing.id)
+    return Boolean(resolved && resolved.floors.length >= 2)
+  }, [storeProject, drawing.id, projRev])
 
   // Keep the view centred on the same spot of the drawing when zooming via toolbar, or anchored to cursor on wheel/pinch.
   const centre = useRef<[number, number]>([0.5, 0.5])
+  const fitRef = useRef<number>(fit)
   const zoomFloatRef = useRef<number>(zoom)
   const zoomAnchorRef = useRef<ZoomAnchor | null>(null)
   const appliedSpotRef = useRef<string | null>(null)
+
+  useLayoutEffect(() => {
+    fitRef.current = fit
+  }, [fit])
 
   const scrollToStageFraction = useCallback(
     (el: HTMLDivElement, st: HTMLDivElement | null, anchor: ZoomAnchor, stageW: number) => {
@@ -217,7 +238,7 @@ export function PlanStage() {
     el.scrollTop = cy * el.scrollHeight - el.clientHeight / 2
   }, [width, scrollToStageFraction])
 
-  // Cursor-centered Ctrl/Cmd + Wheel zoom & two-finger touch pinch zoom up to 450%.
+  // Cursor-centered Ctrl/Cmd + Wheel zoom & two-finger touch pinch+pan zoom up to 450%.
   useEffect(() => {
     const sc = scrollRef.current
     if (!sc) return
@@ -225,13 +246,17 @@ export function PlanStage() {
     const captureAnchorAtClient = (clientX: number, clientY: number): ZoomAnchor => {
       const scRect = sc.getBoundingClientRect()
       const stRect = stageRef.current?.getBoundingClientRect()
-      const vx = scRect.width > 0 ? clientX - scRect.left : sc.clientWidth / 2
-      const vy = scRect.height > 0 ? clientY - scRect.top : sc.clientHeight / 2
       if (stRect && stRect.width > 0 && stRect.height > 0) {
-        const fx = Math.min(1, Math.max(0, (clientX - stRect.left) / stRect.width))
-        const fy = Math.min(1, Math.max(0, (clientY - stRect.top) / stRect.height))
+        const clampedX = Math.min(stRect.right, Math.max(stRect.left, clientX))
+        const clampedY = Math.min(stRect.bottom, Math.max(stRect.top, clientY))
+        const fx = Math.min(1, Math.max(0, (clampedX - stRect.left) / stRect.width))
+        const fy = Math.min(1, Math.max(0, (clampedY - stRect.top) / stRect.height))
+        const vx = scRect.width > 0 ? clampedX - scRect.left : sc.clientWidth / 2
+        const vy = scRect.height > 0 ? clampedY - scRect.top : sc.clientHeight / 2
         return { fx, fy, vx, vy }
       }
+      const vx = scRect.width > 0 ? clientX - scRect.left : sc.clientWidth / 2
+      const vy = scRect.height > 0 ? clientY - scRect.top : sc.clientHeight / 2
       return { fx: centre.current[0], fy: centre.current[1], vx, vy }
     }
 
@@ -257,37 +282,61 @@ export function PlanStage() {
 
     let pinchStartDist = 0
     let pinchStartZoom = ZOOM_MIN
+    let pinchFx = 0.5
+    let pinchFy = 0.5
 
     const touchDist = (t0: Touch, t1: Touch) =>
       Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY)
 
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 2 || actions().ui.tool !== "select") return
-      const d = touchDist(e.touches[0], e.touches[1])
-      if (d <= 0) return
+    const beginPinch = (t0: Touch, t1: Touch) => {
+      const d = touchDist(t0, t1)
+      if (d <= 0) return false
       pinchStartDist = d
       const curZoom = actions().ui.zoom
       if (Math.abs(zoomFloatRef.current - curZoom) >= 1) {
         zoomFloatRef.current = curZoom
       }
       pinchStartZoom = zoomFloatRef.current
+      const startMidX = (t0.clientX + t1.clientX) / 2
+      const startMidY = (t0.clientY + t1.clientY) / 2
+      const startAnchor = captureAnchorAtClient(startMidX, startMidY)
+      pinchFx = startAnchor.fx
+      pinchFy = startAnchor.fy
+      return true
+    }
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || actions().ui.tool !== "select") return
+      beginPinch(e.touches[0], e.touches[1])
     }
 
     const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 2 || pinchStartDist <= 0 || actions().ui.tool !== "select") return
+      if (e.touches.length !== 2 || actions().ui.tool !== "select") return
+      if (pinchStartDist <= 0 && !beginPinch(e.touches[0], e.touches[1])) return
       e.preventDefault()
       const d = touchDist(e.touches[0], e.touches[1])
       if (d <= 0) return
       const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2
       const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2
+      const scRect = sc.getBoundingClientRect()
+      const anchor: ZoomAnchor = {
+        fx: pinchFx,
+        fy: pinchFy,
+        vx: scRect.width > 0 ? midX - scRect.left : sc.clientWidth / 2,
+        vy: scRect.height > 0 ? midY - scRect.top : sc.clientHeight / 2,
+      }
       const nextFloat = Math.min(
         ZOOM_MAX,
         Math.max(ZOOM_MIN, pinchStartZoom * (d / pinchStartDist)),
       )
       zoomFloatRef.current = nextFloat
       const nextZoom = Math.round(nextFloat)
-      if (nextZoom === actions().ui.zoom) return
-      zoomAnchorRef.current = captureAnchorAtClient(midX, midY)
+      if (nextZoom === actions().ui.zoom) {
+        const curWidth = Math.round((fitRef.current * nextZoom) / 100)
+        if (curWidth > 0) scrollToStageFraction(sc, stageRef.current, anchor, curWidth)
+        return
+      }
+      zoomAnchorRef.current = anchor
       actions().setZoom(nextZoom)
     }
 
@@ -307,7 +356,7 @@ export function PlanStage() {
       sc.removeEventListener("touchend", onTouchEnd)
       sc.removeEventListener("touchcancel", onTouchEnd)
     }
-  }, [])
+  }, [scrollToStageFraction])
 
   // Parse `#spot=x,y` on hashchange and pan/zoom to centre `(x%, y%)` once `fit > 0`.
   useEffect(() => {
@@ -368,7 +417,7 @@ export function PlanStage() {
     })
   }, [selected, reduce])
 
-  // Escape peels one layer: what-if, else the selection, else focused group spotlight.
+  // Escape peels one layer: what-if, else the selection, else focused group spotlight, else #spot target ring.
   // Never when something else already handled it (an open menu or dialog, an input, the Mark tool).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -395,11 +444,16 @@ export function PlanStage() {
       if (effectiveFocusedGroupId) {
         e.preventDefault()
         selectGroup(null)
+        return
+      }
+      if (spotTarget) {
+        e.preventDefault()
+        setSpotTarget(null)
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [effectiveFocusedGroupId, selectGroup])
+  }, [effectiveFocusedGroupId, selectGroup, spotTarget])
 
   const recordPoint = useCallback(
     (e: React.PointerEvent | React.MouseEvent) => {
@@ -500,6 +554,8 @@ export function PlanStage() {
         s.select(s.ui.activeTurnId, null)
       } else if (effectiveFocusedGroupId) {
         selectGroup(null)
+      } else if (spotTarget) {
+        setSpotTarget(null)
       }
     }
   }
@@ -584,6 +640,8 @@ export function PlanStage() {
                           onToggleShowDropped={toggleShowDropped}
                           focusedGroupId={effectiveFocusedGroupId}
                           onSelectGroup={selectGroup}
+                          hoveredGroupId={hoveredGroupId}
+                          onHoverGroup={hoverGroup}
                           externalControls
                         />
                       }
@@ -597,6 +655,8 @@ export function PlanStage() {
                       onToggleShowDropped={toggleShowDropped}
                       focusedGroupId={effectiveFocusedGroupId}
                       onSelectGroup={selectGroup}
+                      hoveredGroupId={hoveredGroupId}
+                      onHoverGroup={hoverGroup}
                       externalControls
                     />
                   )}
@@ -606,8 +666,13 @@ export function PlanStage() {
                       aria-hidden="true"
                       data-spot-ring=""
                       style={{ left: `${spotTarget[0]}%`, top: `${spotTarget[1]}%` }}
-                      className="plan-pulse pointer-events-none absolute z-[14] size-8 -translate-1/2 rounded-full border-2 border-user shadow-[0_0_0_2px_var(--background)] ring-4 ring-user/20"
-                    />
+                      className="pointer-events-none absolute z-[14] size-8 -translate-1/2 rounded-full border-2 border-user bg-user/10 opacity-90 shadow-[0_0_0_2px_var(--background)] ring-4 ring-user/20"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="plan-pulse absolute -inset-1.5 rounded-full border-2 border-user"
+                      />
+                    </span>
                   ) : null}
                   <MarksLayer />
                   {whatIfUsed ? (
@@ -635,6 +700,7 @@ export function PlanStage() {
         onToggleShowDropped={toggleShowDropped}
         focusedGroupId={effectiveFocusedGroupId}
         onSelectGroup={selectGroup}
+        onHoverGroup={hoverGroup}
       />
 
       <AnimatePresence>

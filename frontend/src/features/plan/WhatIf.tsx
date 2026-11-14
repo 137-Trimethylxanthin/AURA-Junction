@@ -1,9 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRightIcon, XIcon } from 'lucide-react'
 import type { RoomPoly } from '@/api/contract'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { fmtArea } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { actions, useAppStore, useAppStoreShallow } from '@/store'
@@ -254,7 +255,7 @@ export function WhatIfEditor({
   const { tu } = useUi()
   const tool = useAppStore((s) => s.ui.tool)
   const room = useWhatIfRoom()
-  const reduce = useReducedMotion()
+  const reduce = useMediaQuery('(prefers-reduced-motion: reduce)')
   const show = tool === 'whatif'
   const cardRef = useRef<HTMLDivElement>(null)
   const corner = useEditorCorner(scrollRef, stageRef, cardRef, room, show)

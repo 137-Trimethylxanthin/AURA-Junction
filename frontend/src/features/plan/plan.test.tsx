@@ -576,7 +576,7 @@ describe('Spotlight /30 mask, halo badges, categorical groups, LinkLayer & Floor
 })
 
 describe('PlanStage 450% cursor zoom, #spot=x,y deep-link & PlanToolbar controls', () => {
-  it('zooms smoothly with Ctrl+Wheel up to 450%, ignores plain wheel, and activates #spot=x,y ring', () => {
+  it('zooms smoothly with Ctrl+Wheel up to 450%, ignores plain wheel, and activates #spot=x,y ring', async () => {
     window.location.hash = '#spot=30,70'
     renderUi(
       <TooltipProvider>
@@ -639,14 +639,245 @@ describe('PlanStage 450% cursor zoom, #spot=x,y deep-link & PlanToolbar controls
 
     const whatIfBtn = container.querySelector<HTMLButtonElement>('button[aria-label="What-if sizes"]')
     expect(whatIfBtn).not.toBeNull()
-    act(() => {
+    await act(async () => {
       appStore.getState().setTool('whatif')
+      await import('./WhatIf')
     })
     expect(appStore.getState().ui.tool).toBe('whatif')
-    act(() => {
+    await act(async () => {
       appStore.getState().setAnswererMode('agent')
     })
     expect(container.querySelector('button[aria-label="What-if sizes"]')).toBeNull()
     expect(appStore.getState().ui.tool).toBe('select')
+  })
+
+  it('keeps #spot=x,y target ring visible under reduced motion and past 700ms, and peels on Escape', () => {
+    vi.useFakeTimers()
+    reducedMotionFlag = true
+    window.location.hash = '#spot=42,58'
+
+    renderUi(<PlanStage />)
+
+    const spotRing = container.querySelector<HTMLElement>('[data-spot-ring]')!
+    expect(spotRing).not.toBeNull()
+    // Root ring itself must NOT carry .plan-pulse (which has base opacity: 0); inner halo carries .plan-pulse.
+    expect(spotRing.classList.contains('plan-pulse')).toBe(false)
+    expect(spotRing.className).toContain('opacity-90')
+    expect(spotRing.querySelector('.plan-pulse')).not.toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+    expect(container.querySelector('[data-spot-ring]')).not.toBeNull()
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    expect(container.querySelector('[data-spot-ring]')).toBeNull()
+  })
+
+  it('zooms and pans smoothly on two-finger touch pinch gestures clamped to [100, 450]', () => {
+    renderUi(<PlanStage />)
+    const scroller = container.querySelector<HTMLElement>('[data-plan-scroller]')!
+
+    const mkTouch = (clientX: number, clientY: number) => ({ clientX, clientY }) as Touch
+    const startEvt = new Event('touchstart', { bubbles: true, cancelable: true }) as TouchEvent
+    Object.defineProperty(startEvt, 'touches', { value: [mkTouch(200, 200), mkTouch(300, 200)] })
+    act(() => {
+      scroller.dispatchEvent(startEvt)
+    })
+
+    // Spread fingers 2.5x apart while panning midpoint right by +40px -> zoom = 250%
+    const moveEvt = new Event('touchmove', { bubbles: true, cancelable: true }) as TouchEvent
+    Object.defineProperty(moveEvt, 'touches', { value: [mkTouch(165, 220), mkTouch(415, 220)] })
+    act(() => {
+      scroller.dispatchEvent(moveEvt)
+    })
+    expect(moveEvt.defaultPrevented).toBe(true)
+    expect(appStore.getState().ui.zoom).toBe(250)
+
+    // Extreme spread clamps at 450%
+    const maxEvt = new Event('touchmove', { bubbles: true, cancelable: true }) as TouchEvent
+    Object.defineProperty(maxEvt, 'touches', { value: [mkTouch(0, 220), mkTouch(900, 220)] })
+    act(() => {
+      scroller.dispatchEvent(maxEvt)
+    })
+    expect(appStore.getState().ui.zoom).toBe(450)
+  })
+})
+
+describe('Reviewer regression coverage: Wave 0.5 sync, crop_px telemetry, abstain guardrail & FloorSwitcher warmDrawing', () => {
+  it('syncs group spotlight bidirectionally with Wave 0.5 setFocusedGroup, previews on mouse hover, and clears via Escape', () => {
+    const room0 = bundledDrawing.rooms[0]
+    const groups: EvidenceGroupLike[] = [
+      { id: 'apt-a', label: 'Apartment A', color: 'c1' },
+      { id: 'apt-b', label: 'Apartment B', color: 'c2' },
+    ]
+    const boxes: GroupedBox[] = [
+      makeWindowBox(1, 20, 25, { id: 'win-a', group_id: 'apt-a' }),
+      makeWindowBox(2, 60, 45, { id: 'win-b', group_id: 'apt-b' }),
+    ]
+    const rooms: GroupedRoom[] = [
+      { room_id: room0.room_id, area_m2: room0.area_m2, included: true, group_id: 'apt-a' },
+    ]
+    const turn: AgentTurn = {
+      id: 'turn-w05-sync',
+      role: 'agent',
+      replyTo: 'u-sync',
+      status: 'done',
+      response: makeCountResponse(boxes, { rooms, groups }),
+      toggles: emptyToggles(),
+      listOpen: false,
+      showCanonical: false,
+      feedback: null,
+    }
+    appStore.setState((s) => ({
+      ...s,
+      turns: [turn],
+      ui: { ...s.ui, activeTurnId: 'turn-w05-sync' },
+    }))
+
+    renderUi(<PlanStage />)
+
+    const chipA = container.querySelector<HTMLButtonElement>('[data-group-chip="apt-a"]')!
+    const chipB = container.querySelector<HTMLButtonElement>('[data-group-chip="apt-b"]')!
+
+    // Fine-pointer hover previews spotlight without pinning store.focusedGroupId
+    // (React 19 delegates onPointerEnter/Leave via bubbling pointerover/pointerout)
+    act(() => {
+      const enter = new MouseEvent('pointerover', { bubbles: true, relatedTarget: document.body })
+      Object.defineProperty(enter, 'pointerType', { value: 'mouse' })
+      chipA.dispatchEvent(enter)
+    })
+    expect(container.querySelector('[data-layer="spotlight"]')).not.toBeNull()
+    expect(appStore.getState().focusedGroupId).toBeNull()
+
+    act(() => {
+      const leave = new MouseEvent('pointerout', { bubbles: true, relatedTarget: document.body })
+      Object.defineProperty(leave, 'pointerType', { value: 'mouse' })
+      chipA.dispatchEvent(leave)
+    })
+    expect(container.querySelector('[data-layer="spotlight"]')).toBeNull()
+
+    // Clicking chipA writes to appStore.focusedGroupId & ui.focusedGroupId
+    act(() => {
+      chipA.click()
+    })
+    expect(appStore.getState().focusedGroupId).toBe('apt-a')
+    expect(appStore.getState().ui.focusedGroupId).toBe('apt-a')
+
+    // Simulating AgentCard calling setFocusedGroup('apt-b'), then clearing via chipB click and Escape
+    act(() => {
+      appStore.getState().setFocusedGroup('apt-b')
+    })
+    expect(chipB.getAttribute('aria-pressed')).toBe('true')
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().focusedGroupId).toBeNull()
+    expect(container.querySelector('[data-layer="spotlight"]')).toBeNull()
+  })
+
+  it('converts sidecar crop_px + image_px into PctRect and normalizes machine tool slugs in extractAgentTelemetry', () => {
+    const stream: StreamState = {
+      phase: 'working',
+      nodes: [
+        {
+          id: 'n-crop',
+          title: '',
+          tag: 'tool',
+          body: '',
+          kind: 'model',
+          tool: {
+            name: 'deep_agent',
+            args: {
+              seq: 2,
+              step: 'view_image',
+              crop_px: [200, 100, 600, 500],
+              image_px: [1000, 1000],
+            },
+            result_id: 'r-crop',
+            ms: 15,
+          },
+        },
+      ],
+      resolved: [],
+      evidence: { boxes: [], rooms: [] },
+    }
+
+    const enTel = extractAgentTelemetry(stream, bundledDrawing.id, 'en')
+    expect(enTel.focusRect).toEqual({ x: 20, y: 10, w: 40, h: 40 })
+    expect(enTel.stepIndex).toBe(2)
+    expect(enTel.stepLabel).toBe('Inspecting crop')
+
+    const deTel = extractAgentTelemetry(stream, bundledDrawing.id, 'de')
+    expect(deTel.stepLabel).toBe('Ausschnitt wird geprüft')
+  })
+
+  it('suppresses dropped candidate ghosts and filtered-out toggle when final answer abstains', () => {
+    const candidates = [makeWindowBox(1, 15, 20), makeWindowBox(2, 45, 20), makeWindowBox(3, 75, 20)]
+    const abstainResp: AskResponse = {
+      ...makeCountResponse([]),
+      answer: { kind: 'abstain', reason: 'low_confidence' },
+      evidence: { boxes: [], rooms: [] },
+    }
+    const turn: AgentTurn = {
+      id: 'turn-abstain',
+      role: 'agent',
+      replyTo: 'u-abs',
+      status: 'done',
+      stream: {
+        phase: 'checking',
+        nodes: [],
+        resolved: [],
+        evidence: { boxes: candidates, rooms: [] },
+      },
+      response: abstainResp,
+      toggles: emptyToggles(),
+      listOpen: false,
+      showCanonical: false,
+      feedback: null,
+    }
+    appStore.setState((s) => ({
+      ...s,
+      turns: [turn],
+      ui: { ...s.ui, activeTurnId: 'turn-abstain' },
+    }))
+
+    renderUi(<PlanStage />)
+
+    expect(container.querySelectorAll('[data-dropped-id]')).toHaveLength(0)
+    expect(container.querySelector('[data-toggle-dropped]')).toBeNull()
+  })
+
+  it('pre-warms sibling floors via appStore.warmDrawing even on same-origin empty VITE_API_URL', async () => {
+    vi.useFakeTimers()
+    const siblingDrawing = { ...bundledDrawing, id: 'floor-og1', images: { rebuilt: '/api/drawings/floor-og1/rebuilt.png' } }
+    const warmSpy = vi.spyOn(appStore.getState(), 'warmDrawing').mockResolvedValue(siblingDrawing)
+
+    const project: ProjectBundleLike = {
+      id: 'proj-warm',
+      title: 'Villa Warm',
+      floors: [
+        { drawing_id: bundledDrawing.id, label: 'EG', order: 0 },
+        { drawing_id: 'floor-og1', label: '1. OG', order: 1 },
+      ],
+    }
+    appStore.setState((s) => ({
+      ...s,
+      activeProject: project,
+      session: { ...s.session, source: { kind: 'api', state: 'ready' } },
+    }))
+
+    renderUi(<PlanStage />)
+
+    await act(async () => {
+      vi.advanceTimersByTime(60)
+      await Promise.resolve()
+    })
+
+    expect(warmSpy).toHaveBeenCalledWith('floor-og1')
+    expect(document.head.querySelector('link[data-aura-prefetch="floor-og1"]')).not.toBeNull()
+    warmSpy.mockRestore()
   })
 })

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useInRouterContext, useNavigate, type NavigateFunction } from 'react-router'
 import { LayersIcon } from 'lucide-react'
 import { getDrawing } from '@/api/client'
-import { safeUrl } from '@/api/contract'
+import type { Drawing } from '@/api/contract'
+import { apiUrl, myProjects } from '@/api/library'
 import { isBoxRejected, isRoomIncluded } from '@/lib/answer'
 import { cn } from '@/lib/utils'
 import { useUi } from '@/i18n/uiLang'
@@ -11,12 +12,11 @@ import {
   STAGE_COPY,
   readActiveProject,
   readCrossPlanScope,
+  resolveProjectForDrawing,
   type GroupedBox,
   type GroupedRoom,
   type ProjectBundleLike,
 } from './badges'
-
-const prefetchedFloorIds = new Set<string>()
 
 function RouterNavSink({ navRef }: { navRef: React.RefObject<NavigateFunction | null> }) {
   const nav = useNavigate()
@@ -29,38 +29,13 @@ function RouterNavSink({ navRef }: { navRef: React.RefObject<NavigateFunction | 
   return null
 }
 
-function readStoredProjectForDrawing(drawingId: string): ProjectBundleLike | null {
-  try {
-    const raw = globalThis.localStorage?.getItem('aura.projects')
-    if (!raw) return null
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return null
-    for (const p of parsed) {
-      if (
-        p &&
-        typeof p === 'object' &&
-        typeof (p as ProjectBundleLike).id === 'string' &&
-        Array.isArray((p as ProjectBundleLike).floors) &&
-        (p as ProjectBundleLike).floors.some((f) => f && f.drawing_id === drawingId)
-      ) {
-        return p as ProjectBundleLike
-      }
-    }
-  } catch {
-    /* ignore storage parse failures */
-  }
-  return null
-}
-
-function ensureImagePrefetchLink(href: string, floorDrawingId: string) {
-  if (typeof document === 'undefined') return
-  const safe = safeUrl(href)
-  if (!safe) return
+function ensureImagePrefetchLink(href: string | null, floorDrawingId: string) {
+  if (typeof document === 'undefined' || !href) return
   if (document.head.querySelector(`link[data-aura-prefetch="${CSS.escape(floorDrawingId)}"]`)) return
   const link = document.createElement('link')
   link.rel = 'prefetch'
   link.as = 'image'
-  link.href = safe
+  link.href = href
   link.setAttribute('data-aura-prefetch', floorDrawingId)
   document.head.appendChild(link)
 }
@@ -87,12 +62,16 @@ export function FloorSwitcher({ project: projectProp, onNavigateFloor }: FloorSw
 
   const inRouter = useInRouterContext()
   const navRef = useRef<NavigateFunction | null>(null)
+  const prefetchedRef = useRef(new Set<string>())
   const [localCrossScope, setLocalCrossScope] = useState(false)
+  const [projRev, setProjRev] = useState(0)
 
-  const project = useMemo(
-    () => (projectProp !== undefined ? projectProp : storeProject ?? readStoredProjectForDrawing(drawingId)),
-    [projectProp, storeProject, drawingId],
-  )
+  useEffect(() => myProjects.subscribe(() => setProjRev((r) => r + 1)), [])
+
+  const project = useMemo(() => {
+    void projRev
+    return projectProp !== undefined ? projectProp : resolveProjectForDrawing(storeProject, drawingId)
+  }, [projectProp, storeProject, drawingId, projRev])
 
   const floors = useMemo(
     () => (project && project.floors.length >= 2 ? [...project.floors].sort((a, b) => a.order - b.order) : []),
@@ -102,29 +81,39 @@ export function FloorSwitcher({ project: projectProp, onNavigateFloor }: FloorSw
   const hasStoreCrossAction = typeof (actions() as unknown as { setCrossPlanScope?: unknown }).setCrossPlanScope === 'function'
   const crossPlanScope = hasStoreCrossAction ? storeCrossScope : storeCrossScope || localCrossScope
 
-  // Pre-warm sibling floor Drawing JSON + `<link rel="prefetch" as="image">` in the background.
+  // Pre-warm sibling floor Drawing JSON into `appStore.drawingById` + `<link rel="prefetch" as="image">`.
   useEffect(() => {
     if (floors.length < 2) return
     const baseUrl = ((import.meta.env?.VITE_API_URL as string | undefined) ?? '').trim()
-    if (!baseUrl && sourceKind !== 'api') return
     const apiBase = baseUrl.replace(/\/+$/, '')
+    const warmFn = (actions() as unknown as { warmDrawing?: (id: string) => Promise<Drawing | null> }).warmDrawing
+    if (sourceKind !== 'api' && !apiBase && typeof warmFn !== 'function') return
     let cancelled = false
 
     const warm = () => {
       for (const floor of floors) {
-        if (floor.drawing_id === drawingId || prefetchedFloorIds.has(floor.drawing_id)) continue
-        prefetchedFloorIds.add(floor.drawing_id)
-        if (!apiBase) continue
-        void getDrawing({ baseUrl: apiBase }, floor.drawing_id)
+        const fid = floor.drawing_id
+        if (fid === drawingId || prefetchedRef.current.has(fid)) continue
+        prefetchedRef.current.add(fid)
+
+        const task: Promise<Drawing | null> =
+          typeof warmFn === 'function'
+            ? warmFn(fid)
+            : sourceKind === 'api' || Boolean(apiBase)
+              ? getDrawing({ baseUrl: apiBase }, fid)
+              : Promise.resolve(null)
+
+        void task
           .then((d) => {
+            if (!d) {
+              prefetchedRef.current.delete(fid)
+              return
+            }
             if (cancelled) return
-            const rawImg = safeUrl(d.images.rebuilt)
-            if (!rawImg) return
-            const resolved = rawImg.startsWith('/') ? `${apiBase}${rawImg}` : rawImg
-            ensureImagePrefetchLink(resolved, floor.drawing_id)
+            ensureImagePrefetchLink(apiUrl(d.images.rebuilt, apiBase || null), fid)
           })
           .catch(() => {
-            prefetchedFloorIds.delete(floor.drawing_id)
+            prefetchedRef.current.delete(fid)
           })
       }
     }
