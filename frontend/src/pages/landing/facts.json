@@ -61,32 +61,32 @@
   {
    "id": "cubicasa-door-exact",
    "label": "Doors counted exactly on scanned plans (model estimate)",
-   "value": "60.0 %",
-   "numerator": 18,
-   "denominator": 30,
-   "n": 30,
+   "value": "57.1 %",
+   "numerator": 40,
+   "denominator": 70,
+   "n": 70,
    "n_unit": "images",
    "model_calls": 1,
-   "cost_usd": 0.033,
-   "scope": "30 held-out CubiCasa5k plans, 10 per drawing style",
+   "cost_usd": 0.047,
+   "scope": "70 held-out CubiCasa5k plans in two samples: 30 (10 per drawing style) and 40 (in the dataset's style mix, 75 % architectural sheets)",
    "method": "One Gemini detection call per image; count = boxes returned",
    "measured": "2026-11-14",
-   "caveat": "Wilson 95 % interval 42–75 %; within ±1: 25/30; 48.6 % when reweighted to the dataset's style mix."
+   "caveat": "Wilson 95 % interval 45.5–68.1 %; within ±1: 56/70 (80 %). By sample: 18/30 and 22/40. $0.047 per image and 18.5 s median (n=40 run). Few-shot example crops were tested on the n=40 set and did not help."
   },
   {
    "id": "cubicasa-window-exact",
    "label": "Windows counted exactly on scanned plans (model estimate)",
-   "value": "56.6 %",
-   "numerator": 17,
-   "denominator": 30,
-   "n": 30,
+   "value": "47.1 %",
+   "numerator": 33,
+   "denominator": 70,
+   "n": 70,
    "n_unit": "images",
    "model_calls": 1,
-   "cost_usd": 0.033,
-   "scope": "30 held-out CubiCasa5k plans, 10 per drawing style",
+   "cost_usd": 0.047,
+   "scope": "70 held-out CubiCasa5k plans in two samples: 30 (10 per drawing style) and 40 (in the dataset's style mix, 75 % architectural sheets)",
    "method": "One Gemini detection call per image; count = boxes returned",
    "measured": "2026-11-14",
-   "caveat": "Wilson 95 % interval 39–73 %; within ±1: 23/30; 44.0 % when reweighted to the dataset's style mix."
+   "caveat": "Wilson 95 % interval 35.9–58.7 %; within ±1: 48/70 (68 %). By sample: 17/30 and 16/40. $0.047 per image and 18.5 s median (n=40 run). Few-shot example crops were tested on the n=40 set and did not help."
   },
   {
    "id": "cubicasa-score-confident",
@@ -101,7 +101,7 @@
    "scope": "115 room and fixture questions on 15 held-out CubiCasa5k plans",
    "method": "Gemini Decisions score per family; answer only at confidence 0.6 or higher",
    "measured": "2026-11-14",
-   "caveat": "Answers 74 of 115 (64 %); the rest say 'not sure'."
+   "caveat": "Answers 74 of 115 (64 %); the rest say 'not sure'. Wilson 95 % interval 83–96 %. Served in the app for image-only uploads (presenter), always labelled as a model estimate with its confidence; never used for doors or windows."
   }
  ]
 }

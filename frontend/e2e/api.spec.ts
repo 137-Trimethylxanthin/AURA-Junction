@@ -67,6 +67,44 @@ test('a healthy API shows the Live API badge and renders its answer', async ({ p
   expect(calls.ask).toBe(1)
 })
 
+test('a confident raster estimate is labelled a model estimate: no exact chip, no boxes', async ({ page }) => {
+  await fakeApi(page, {
+    ask: (r) =>
+      json(r, 200, askResponse({
+        answer: { kind: 'count', value: 1, subject: 'sauna' },
+        evidence: { boxes: [], rooms: [] },
+        method: 'vision',
+        gold: undefined,
+        estimate: { confidence: 0.894, measured: { correct: 68, n: 74, source: 'held-out' } },
+      })),
+  })
+  await open(page)
+  await ask(page, Q.windows)
+  expect(await answerValue(page)).toBe('1')
+  await expect(lastCard(page).locator('[data-estimate]')).toContainText('89 % sure')
+  await expect(lastCard(page).locator('[data-estimate]')).toContainText('68 of 74')
+  await expect(lastCard(page)).not.toContainText('Exact')
+  await expect(planBoxes(page)).toHaveCount(0)
+})
+
+test('a low-confidence estimate states no count and shows the probabilities as bars', async ({ page }) => {
+  await fakeApi(page, {
+    ask: (r) =>
+      json(r, 200, askResponse({
+        answer: { kind: 'abstain', reason: 'low_confidence' },
+        evidence: { boxes: [], rooms: [] },
+        method: 'vision',
+        gold: undefined,
+        estimate: { confidence: 0.41, probabilities: { '0': 0.3, '1': 0.41, '2': 0.29 } },
+      })),
+  })
+  await open(page)
+  await ask(page, Q.windows)
+  await expect(lastCard(page).locator('[data-abstain="low_confidence"]')).toBeVisible()
+  await expect(lastCard(page).locator('[data-answer-value]')).toHaveCount(0)
+  await expect(lastCard(page).locator('[data-estimate-probabilities] li')).toHaveCount(3)
+})
+
 test('a 422 with a FastAPI detail shows an error card, no number and no fallback', async ({ page }) => {
   const calls = await fakeApi(page, { ask: (r) => json(r, 422, { detail: [{ loc: ['body', 'question'], msg: 'field required' }] }) })
   await open(page)

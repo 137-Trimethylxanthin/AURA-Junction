@@ -154,3 +154,16 @@ describe('rooms with no printed area', () => {
     expect(deriveAnswer(resp, t).value).toBe(deriveAnswer(base, t).value)
   })
 })
+
+import { countPhrase, noun } from '@/lib/format'
+
+describe('nouns for the raster subjects', () => {
+  it('have singular and plural forms in every language', () => {
+    expect(noun('sauna', 1, 'en')).toBe('sauna')
+    expect(noun('balcony', 2, 'en')).toBe('balconies')
+    expect(noun('kitchen', 2, 'de')).toBe('Küchen')
+    expect(noun('bathroom', 2, 'fr')).toBe('salles de bains')
+    expect(noun('bedroom', 3, 'fi')).toBe('makuuhuonetta')
+    expect(countPhrase('storey', 1, 'fi')).toBe('1 kerros')
+  })
+})
