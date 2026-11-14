@@ -409,6 +409,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
           drawingById: nextMap,
           ui: {
             ...cur.ui,
+            compare: d.images.original ? cur.ui.compare : { ...cur.ui.compare, on: false },
             hoveredEvidenceIds: [],
             marks: [],
             attachedMarkId: null,
@@ -482,6 +483,19 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
           activeProject: normalized,
           crossPlanScope: normalized && normalized.floors.length >= 2 ? s.crossPlanScope : false,
         }))
+        const after = get()
+        const projId = projectIdForDrawing(normalized, after.session.drawing.id)
+        if (!projId) return
+        if (after.session.conversationId) {
+          writeConversation(after.session.drawing.id, after.session.conversationId, projId)
+        } else if (
+          after.turns.length === 0 &&
+          after.session.load.state === 'ready' &&
+          source.status().kind === 'api' &&
+          readConversation(after.session.drawing.id, projId)
+        ) {
+          void after.restoreConversation()
+        }
       },
       setCrossPlanScope(on) {
         set({ crossPlanScope: Boolean(on) })
@@ -622,10 +636,13 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         const ctrl = new AbortController()
         inflight = ctrl
         const drawingId = get().session.drawing.id
+        let streamAnswered = false
+        const currentProjId = () => projectIdForDrawing(get().activeProject, drawingId) ?? activeProjId
         const stillInContext = () => {
           const cur = get()
           if (cur.session.drawing.id === drawingId) return true
-          return Boolean(activeProjId && projectIdForDrawing(cur.activeProject, cur.session.drawing.id) === activeProjId)
+          const pid = currentProjId()
+          return Boolean(pid && projectIdForDrawing(cur.activeProject, cur.session.drawing.id) === pid)
         }
         try {
           const { response, fellBack } = await source.chat(
@@ -638,9 +655,10 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
               lang_hint: get().session.lang,
             },
             (e) => {
+              if (e.event === 'answer') streamAnswered = true
               if (ctrl.signal.aborted) return
               if (e.event === 'turn') {
-                const projNow = projectIdForDrawing(get().activeProject, drawingId) ?? activeProjId
+                const projNow = currentProjId()
                 writeConversation(drawingId, e.data.conversation_id, projNow)
                 if (!stillInContext()) return
                 set((st) => ({ session: { ...st.session, conversationId: e.data.conversation_id } }))
@@ -652,10 +670,14 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
             },
             ctrl.signal,
           )
-          // Stopped after the answer arrived: keep the answer (it is complete); Stop only ends a pending one.
-          if (ctrl.signal.aborted && !stillInContext()) throw new DOMException('Stopped', 'AbortError')
+          // Stopped after the SSE `answer` event arrived: keep the answer (it is complete); Stop ends pending/non-SSE turns.
+          if (ctrl.signal.aborted && (!stillInContext() || !streamAnswered)) {
+            throw new DOMException('Stopped', 'AbortError')
+          }
           patchAgent(pending.id, () => ({ status: 'done', response, ...(fellBack ? { fellBack: true } : {}) }))
-          set((st) => ({ session: { ...st.session, lang: response.detected_lang } }))
+          if (stillInContext() && agent(pending.id)) {
+            set((st) => ({ session: { ...st.session, lang: response.detected_lang } }))
+          }
         } catch (e) {
           if (inflight === ctrl) inflight = null
           const spent = spentOf(e)
@@ -765,7 +787,11 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         inflight?.abort()
         inflight = null
         writeConversation(cur.session.drawing.id, null, projId)
-        if (projId) writeConversation(cur.session.drawing.id, null, null)
+        if (projId && cur.activeProject) {
+          for (const f of cur.activeProject.floors) {
+            writeConversation(f.drawing_id, null, null)
+          }
+        }
         set((st) => ({
           focusedGroupId: null,
           turns: [],
@@ -836,7 +862,13 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         })
         if (!target) return null
         const ev = (target.response?.evidence ?? target.stream?.evidence)!
-        const ids = [...ev.boxes.map((b) => b.id), ...ev.rooms.map((r) => roomEvidenceId(r.room_id))]
+        const curDrawingId = s.session.drawing.id
+        const floorIds = [
+          ...ev.boxes.filter((b) => !b.drawing_id || b.drawing_id === curDrawingId).map((b) => b.id),
+          ...ev.rooms.filter((r) => !r.drawing_id || r.drawing_id === curDrawingId).map((r) => roomEvidenceId(r.room_id)),
+        ]
+        const allIds = [...ev.boxes.map((b) => b.id), ...ev.rooms.map((r) => roomEvidenceId(r.room_id))]
+        const ids = floorIds.length > 0 ? floorIds : allIds
         if (ids.length === 0) return null
         const cur = s.ui.activeTurnId === target.id ? s.ui.selectedEvidenceId : null
         const curIdx = cur ? ids.indexOf(cur) : -1
