@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
 import { ChevronsLeftRightIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore, useAppStoreShallow } from '@/store'
@@ -18,21 +18,25 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
   const divRef = useRef<HTMLDivElement>(null)
   const dragId = useRef<number | null>(null)
 
-  const apply = (v: number) => {
-    swipeSplit.current = clampSplit(v)
-    const s = swipeSplit.current
-    if (imgRef.current && mode === 'swipe') imgRef.current.style.clipPath = `inset(0 ${100 - s}% 0 0)`
-    if (divRef.current) {
-      divRef.current.style.left = `${s}%`
-      divRef.current.setAttribute('aria-valuenow', String(Math.round(s)))
-    }
-  }
+  const apply = useCallback(
+    (v: number) => {
+      swipeSplit.current = clampSplit(v)
+      const s = swipeSplit.current
+      if (imgRef.current && mode === 'swipe') imgRef.current.style.clipPath = `inset(0 ${100 - s}% 0 0)`
+      if (divRef.current) {
+        const rounded = Math.round(s)
+        divRef.current.style.left = `${s}%`
+        divRef.current.setAttribute('aria-valuenow', String(rounded))
+        divRef.current.setAttribute('aria-valuetext', tu('cmp_pct', { n: rounded }))
+      }
+    },
+    [mode, tu],
+  )
 
   // Re-apply the stored split after mounting or switching back to swipe.
   useEffect(() => {
     if (on) apply(swipeSplit.current)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [on, mode])
+  }, [on, apply])
 
   if (!on || !src) return null
   const swipe = mode === 'swipe'
