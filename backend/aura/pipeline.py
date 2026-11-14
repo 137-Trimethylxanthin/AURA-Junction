@@ -515,6 +515,13 @@ async def _execute_exact_intent(
             return A.unclear(question, lang, d, scope, intent_tag=tag, look=tr.summary), False
         return A.room_rank(question, lang, d, tr, scope, matched, intent_tag=tag), True
 
+    if intent == "dimension":
+        tr = await asyncio.to_thread(tools.printed_dimension, d, subject or "overall")
+        if tr.kind == "none":
+            return A.abstain(question, lang, scope, "not_on_drawing", question, tr.summary,
+                             intent_tag=tag, results=[tr]), False
+        return A.dimension(question, lang, d, tr, matched, intent_tag=tag), True
+
     if intent == "rooms_by_count":
         op, n, measure = (pattern or "gt|1|list").split("|")
         tr = await asyncio.to_thread(tools.rooms_by_count, d, subject or "door", op, int(n), measure)
@@ -1090,7 +1097,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             eff_scope = eff_scope | {"within": r.scope}  # kept per floor; never in the response scope
         if mode == "hybrid" and (not is_project or exact_project) and not has_followup_semantics:
             if (indexed and r.intent in (
-                    "count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count")) or (
+                    "count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count",
+                    "dimension")) or r.intent == "dimension" or (
                     # Detected image/PDF page: door/window counts (and show/list variants) come from
                     # raster.json at 0 calls, as a model estimate; never the sidecar.
                     isinstance(d.engine, tools.RasterEngine) and r.intent == "count"

@@ -211,6 +211,7 @@ class Model:
     page_files: set = field(default_factory=set)          # and the files that show it on every page; None: any page
     linework: tuple[str, int | str, Affine] | None = None  # (file_id, page or space, file coords -> percent)
     frames: dict[tuple[str, int], Affine] = field(default_factory=dict)   # pages in the drawing's shared frame
+    dimensions: list[dict] = field(default_factory=list)  # printed dimensions read on a scan, in percent (dimensions_of)
 
     def on_page(self, file_id: str, page_no: int, box: list[float] | None) -> dict | None:
         """A box in the coordinates of one of the drawing's files as a rectangle in percent of the page shown:
@@ -735,7 +736,37 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
     for a in m.apartments:
         m.by_entity[a["entity_id"]] = dict(kind="apartment", entity_id=a["entity_id"], unit=a["apartment"], label=a["label"])
     m.linework = None if m.synthetic else _linework(db, m)
+    m.dimensions = dimensions_of(db, m)
     return m
+
+
+def dimensions_of(db: DB, m: Model) -> list[dict]:
+    """The printed dimensions read on the scans of the drawing (raster_detection class 'dimension', written by
+    raster_rooms): text, metres, the measured span p0 -> p1 and the box of the text, in percent of the page shown.
+    Only those on the page shown (or on a page placed in its shared frame)."""
+    b = m.base
+    if b is None:
+        return []
+    files = [f["file_id"] for f in m.files if f["format"] in ("png", "jpg")]
+    if not files:
+        return []
+    out = []
+    for r in db.run("""select id, file_id, page_no, x0, y0, x1, y1, attrs from jstore.raster_detection
+                       where file_id = any(cast(:f as text[])) and class = 'dimension' order by id""", f=files):
+        a = r["attrs"] or {}
+        rect = m.on_page(r["file_id"], r["page_no"], [r["x0"], r["y0"], r["x1"], r["y1"]])
+        if rect is None or a.get("metres") is None or not a.get("p0") or not a.get("p1"):
+            continue
+        if (r["file_id"], r["page_no"]) == (b.file_id, b.page_no):
+            t = b.to_pct
+        else:
+            t = mul(mul(b.to_pct, inv(b.frame)), m.frames[(r["file_id"], r["page_no"])])
+        p0, p1 = apply(t, *a["p0"][:2]), apply(t, *a["p1"][:2])
+        out.append(_clean(dict(id=f"dim-{len(out) + 1:02d}", text=a.get("text"), metres=float(a["metres"]),
+                        p0_pct=[_r(p0[0]), _r(p0[1])], p1_pct=[_r(p1[0]), _r(p1[1])], box=rect,
+                        orientation=a.get("orientation"), read=a.get("read"), used_for_scale=bool(a.get("used")),
+                        chain=a.get("chain"), note=a.get("note"))))
+    return out
 
 
 def _linework(db: DB, m: Model) -> tuple[str, int | str, Affine] | None:
@@ -917,7 +948,7 @@ def drawing_doc(m: Model, project_meta: dict | None = None) -> dict:
                                         storey_note(m.storey)) if x),
         frame=dict(dxf_min=lo, dxf_max=hi, margin_m=0, m_per_unit=m_per_unit, y_flip=True, px=[w, h]),
         m_per_pct_x=mx, m_per_pct_y=my, images=images,
-        rooms=[room_poly(r) for r in m.rooms], units=units, credit=credit,
+        rooms=[room_poly(r) for r in m.rooms], dimensions=m.dimensions or None, units=units, credit=credit,
         kind=kind_of(formats), status=m.status, capabilities=capabilities(m),
         source="upload" if m.upload else "library",
         thumbnail=None if base is None else f"/drawings/{did}/thumb.png" if base.image or m.synthetic

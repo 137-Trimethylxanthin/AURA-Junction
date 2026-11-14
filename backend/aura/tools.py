@@ -427,6 +427,7 @@ class LoadedDrawing:
             room_ids=[r["room_id"] for r in rooms],
             units=[u["id"] for u in self.drawing.get("units", [])],
             kind=self.drawing.get("kind", "cad_dxf"),
+            has_dimensions=bool(self.drawing.get("dimensions")),
         )
 
     def public_drawing(self) -> dict:
@@ -1061,6 +1062,56 @@ def find_text(d: LoadedDrawing, pattern: str, subject: str = "label") -> ToolRes
     raw = d.engine.find_text(pattern)
     return _to_result(d, "find_text", {"pattern": pattern, "subject": subject}, raw, _ms(t0),
                       "text", subject)
+
+
+def printed_dimension(d: LoadedDrawing, subject: str) -> ToolResult:
+    """A printed dimension of a scan (drawing.dimensions, read by the drawing store from the dimension strings
+    on the plan): 'wall:N' = the dimension printed with "Wall #N"; 'width' / 'depth' = the longest horizontal /
+    vertical dimension of the page; 'length' = the longest one; 'overall' = the longest of both directions.
+    Evidence = the boxes of the dimension texts.  0 model calls."""
+    t0 = time.perf_counter()
+    args = {"subject": subject}
+    dims = [x for x in d.drawing.get("dimensions") or [] if isinstance(x, dict) and x.get("metres")]
+    picked: list[dict] = []
+    if subject.startswith("wall:"):
+        n = subject.split(":", 1)[1]
+        rx = re.compile(rf"(?<![\w])wall\s*(?:#|no\.?)?\s*{re.escape(n)}(?!\d)", re.IGNORECASE)
+        picked = [x for x in dims if rx.search(str(x.get("note") or ""))][:1]
+    else:
+        def longest(o: str | None) -> dict | None:
+            c = [x for x in dims if (o is None or x.get("orientation") == o) and x.get("used_for_scale", True)]
+            return max(c, key=lambda x: float(x["metres"])) if c else None
+        if subject == "overall":
+            picked = [x for x in (longest("h"), longest("v")) if x]
+        else:
+            x = longest({"width": "h", "depth": "v"}.get(subject))
+            picked = [x] if x else []
+    if not picked:
+        what = f"wall #{subject.split(':')[1]}" if subject.startswith("wall:") else "the building"
+        return ToolResult(result_id=_rid(d.id, "find_text", args), tool="find_text", args=args, kind="none",
+                          subject="dimension", ms=_ms(t0), method="ocr",
+                          summary=f"No printed dimension of {what} was read on this drawing "
+                                  f"({len(dims)} dimension strings were read).")
+    boxes = []
+    for x in picked:
+        b = x.get("box") or {}
+        if all(k in b for k in ("x", "y", "w", "h")):
+            boxes.append(Box(id=str(x.get("id") or f"dim-{len(boxes) + 1:02d}"), x=b["x"], y=b["y"], w=b["w"],
+                             h=b["h"], subject="label", note=str(x.get("text") or "")))
+    parts = [f"{x.get('text')} = {float(x['metres']):.2f} m" for x in picked]
+    if subject == "overall" and len(picked) == 2:
+        text = (f"{float(picked[0]['metres']):.2f} m × {float(picked[1]['metres']):.2f} m "
+                f"(printed {picked[0].get('text')} × {picked[1].get('text')})")
+    else:
+        x = picked[0]
+        note = f" ({x['note']})" if x.get("note") else ""
+        text = f"{float(x['metres']):.2f} m (printed {x.get('text')}{note})"
+    return ToolResult(
+        result_id=_rid(d.id, "find_text", args), tool="find_text", args=args, kind="note", subject="dimension",
+        value=round(float(picked[0]["metres"]), 3), text=text,
+        numbers=[round(float(x["metres"]), 3) for x in picked] + [round(float(x["metres"]), 2) for x in picked],
+        boxes=boxes, method="ocr", ms=_ms(t0), meta={"unit": "m", "dimensions": picked},
+        summary=f"Read the printed dimension strings of the drawing ({len(dims)} read): " + "; ".join(parts) + ".")
 
 
 def _ms(t0: float) -> int:
