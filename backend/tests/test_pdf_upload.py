@@ -147,7 +147,9 @@ def test_multipage_pdf_auto_bundles_floors_splits_single_page_pdfs_and_cascades_
                 doc.close()
 
         # GET /projects returns the auto-bundled project sorted vertically: UG (-1) -> EG (0) -> 1. OG (1)
-        projects = c.get("/projects").json()["projects"]
+        # Upload-backed bundles are private: listed only with that upload's delete token.
+        assert expected_proj_id not in [p["id"] for p in c.get("/projects").json()["projects"]]
+        projects = c.get("/projects", headers={"x-delete-token": body["delete_token"]}).json()["projects"]
         proj = next(p for p in projects if p["id"] == expected_proj_id)
         assert proj["title"] == "Villa_Alpen"
         assert proj["auto_matched"] is True
@@ -160,7 +162,8 @@ def test_multipage_pdf_auto_bundles_floors_splits_single_page_pdfs_and_cascades_
         for fid in (did, p2_id, p3_id):
             assert c.get(f"/drawings/{fid}/status").status_code == 404
             assert not (tmp_path / "data" / "uploads" / fid).exists()
-        remaining = [p["id"] for p in c.get("/projects").json()["projects"]]
+        remaining = [p["id"] for p in c.get("/projects", headers={
+            "x-delete-token": body["delete_token"]}).json()["projects"]]
         assert expected_proj_id not in remaining
 
 
@@ -187,10 +190,19 @@ def test_manual_project_crud_and_validation(tmp_path):
         assert pb["id"] == "proj-manual-1"
         assert pb["auto_matched"] is False
         assert [f["drawing_id"] for f in pb["floors"]] == [d_lower, d_upper]
+        owner = {"x-project-token": pb["project_token"]}  # shown once, only its hash is stored
+
+        # Someone without the owner token can neither overwrite nor delete it.
+        hijack = {"id": "proj-manual-1", "title": "Mine now", "drawing_ids": [d_upper, d_lower]}
+        assert c.post("/projects", json=hijack).status_code == 403
+        assert c.post("/projects", json=hijack, headers={"x-project-token": "guess"}).status_code == 403
+        assert c.delete("/projects/proj-manual-1").status_code == 403
+        assert c.post("/projects", json=hijack, headers={"origin": "https://evil.example"}).status_code == 403
 
         # Also accepts explicit contract ProjectBundle payload with custom labels/orders
         updated = c.post(
             "/projects",
+            headers=owner,
             json={
                 "id": "proj-manual-1",
                 "title": "Duplex House Updated",
@@ -203,12 +215,15 @@ def test_manual_project_crud_and_validation(tmp_path):
         assert updated.status_code == 200
         assert [f["label"] for f in updated.json()["floors"]] == ["Cellar", "Penthouse"]
 
-        listed = [p for p in c.get("/projects").json()["projects"] if p["id"] == "proj-manual-1"]
+        assert "project_token" not in updated.json()  # never re-issued
+
+        assert [p for p in c.get("/projects").json()["projects"] if p["id"] == "proj-manual-1"] == []
+        listed = [p for p in c.get("/projects", headers=owner).json()["projects"] if p["id"] == "proj-manual-1"]
         assert len(listed) == 1 and listed[0]["title"] == "Duplex House Updated"
 
         # Ungroup / delete returns 204, then 404 on repeat
-        assert c.delete("/projects/proj-manual-1").status_code == 204
-        assert c.delete("/projects/proj-manual-1").status_code == 404
+        assert c.delete("/projects/proj-manual-1", headers=owner).status_code == 204
+        assert c.delete("/projects/proj-manual-1", headers=owner).status_code == 404
 
 
 def test_corrupt_pdf_fails_cleanly_and_ten_page_pdf_caps_at_eight(tmp_path):
@@ -218,10 +233,12 @@ def test_corrupt_pdf_fails_cleanly_and_ten_page_pdf_caps_at_eight(tmp_path):
         assert st["status"] == "failed" and st.get("error")
         assert c.get("/health").status_code == 200
 
-        ten = upload_pdf(c, make_pdf([f"Level {i}" for i in range(1, 11)]), "tower.pdf").json()["drawing_id"]
+        ten_up = upload_pdf(c, make_pdf([f"Level {i}" for i in range(1, 11)]), "tower.pdf").json()
+        ten = ten_up["drawing_id"]
         assert wait_status(c, ten)["status"] == "ready"
         proj_id = f"proj-{ten.removeprefix('up-')}"
-        proj = next(p for p in c.get("/projects").json()["projects"] if p["id"] == proj_id)
+        proj = next(p for p in c.get("/projects", headers={"x-delete-token": ten_up["delete_token"]})
+                    .json()["projects"] if p["id"] == proj_id)
         assert len(proj["floors"]) == 8
         assert c.get(f"/drawings/{ten}-p8/status").json()["status"] == "ready"
         assert c.get(f"/drawings/{ten}-p9/status").status_code == 404

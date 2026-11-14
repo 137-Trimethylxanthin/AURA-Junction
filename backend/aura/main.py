@@ -219,14 +219,55 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
     return bundles
 
 
-def _same_project(s: Services, did_a: str, did_b: str, scope: Any) -> bool:
-    """Allow a multi-floor project conversation thread to switch floors without 400."""
+def _tokens(request: Request, header: str) -> list[str]:
+    """One or more tokens in a header (comma-separated, e.g. every project the browser owns)."""
+    return [t.strip() for t in (request.headers.get(header) or "").split(",") if t.strip()][:50]
+
+
+def _project_access(s: Services, request: Request, floor_ids: list[str], token_hash: str | None) -> bool:
+    """The request owns the project: its owner token (`x-project-token`), or for a bundle built
+    from an upload (multi-page PDF), the delete token of one of its upload floors (`x-delete-token`)."""
+    if token_hash and any(uploads.token_ok(t, token_hash) for t in _tokens(request, "x-project-token")):
+        return True
+    given = _tokens(request, "x-delete-token")
+    if given and s.store is not None:
+        for did in floor_ids:
+            row = s.store.drawing_row(did) if did.startswith("up-") else None
+            if row and any(uploads.token_ok(t, row["delete_token_hash"]) for t in given):
+                return True
+    return False
+
+
+def _ownerless(row: dict) -> bool:
+    """A row saved before project tokens existed, over library drawings only (nothing private)."""
+    return not row.get("token_hash") and not any(
+        str(f.get("drawing_id", "")).startswith("up-") for f in row.get("floors") or [])
+
+
+def _project_of(s: Services, project_id: str) -> ProjectBundle | None:
+    return next((p for p in _synthesize_projects(s) if p.id == project_id), None)
+
+
+def _scope_refused(s: Services, drawing_id: str, scope: Any) -> JSONResponse | None:
+    """A project scope is used only as the server stored it: every drawing it names (and the
+    drawing asked about) must be a floor of that stored bundle."""
+    if scope is None or getattr(scope, "kind", None) != "project":
+        return None
+    proj = _project_of(s, scope.project_id)
+    if proj is None:
+        return _err("not_found", f"Unknown project '{scope.project_id}'.", 404)
+    members = {f.drawing_id for f in proj.floors}
+    outside = [d for d in [drawing_id, *scope.drawing_ids] if d not in members]
+    if outside:
+        return _err("bad_request", f"Not floors of project '{proj.id}': {', '.join(outside[:5])}.", 400)
+    return None
+
+
+def _same_project(s: Services, did_a: str, did_b: str) -> bool:
+    """A conversation may switch floors only within one server-side project (persisted bundle,
+    server-set `project_id`, or an auto-detected IFC storey group). Never from client input."""
     if did_a == did_b:
         return True
-    if scope is not None and getattr(scope, "kind", None) == "project":
-        dids = set(getattr(scope, "drawing_ids", None) or [])
-        if did_a in dids and did_b in dids:
-            return True
     da, db = s.registry.get(did_a), s.registry.get(did_b)
     if da is not None and db is not None:
         pa, pb = da.drawing.get("project_id"), db.drawing.get("project_id")
@@ -349,7 +390,8 @@ def create_app(
         allow_origins=settings.allowed_origins,
         allow_origin_regex=settings.allowed_origin_regex or None,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["content-type", "x-aura-presenter", "x-delete-token", "x-aura-client"],
+        allow_headers=["content-type", "x-aura-presenter", "x-delete-token", "x-aura-client",
+                       "x-project-token"],
         max_age=600,
     )
     app.include_router(sessions_router)
@@ -436,7 +478,12 @@ def create_app(
     @app.get("/projects")
     async def list_projects(request: Request) -> dict:
         s = svc(request)
-        projects = _synthesize_projects(s)
+        hashes = {r["id"]: r.get("token_hash") for r in (s.store.project_rows() if s.store else [])}
+        # Bundles with an upload floor are private to whoever holds that upload's delete token or
+        # the project's owner token; library-only bundles are public.
+        projects = [p for p in _synthesize_projects(s)
+                    if not any(f.drawing_id.startswith("up-") for f in p.floors)
+                    or _project_access(s, request, [f.drawing_id for f in p.floors], hashes.get(p.id))]
         return ProjectList(projects=projects).model_dump(exclude_none=True)
 
     @app.post("/projects")
@@ -448,8 +495,26 @@ def create_app(
             return _err("bad_request", "Invalid JSON body.", 400)
         if not isinstance(raw, dict):
             return _err("bad_request", "Expected a JSON object.", 400)
+        if (refused := origin_refused(request)) is not None:
+            return refused
         now = time.time()
         pid = str(raw.get("id") or f"proj-{uuid.uuid4().hex[:12]}").strip()
+        existing = s.store.project_row(pid) if s.store else None
+        token_hash: str | None = existing.get("token_hash") if existing else None
+        new_token: str | None = None
+        if existing is not None and _ownerless(existing):
+            new_token = uploads.new_delete_token()  # a pre-ownership row: the first saver claims it
+            token_hash = uploads.hash_token(new_token)
+        elif existing is not None:
+            if not _project_access(s, request, [f.get("drawing_id", "") for f in existing["floors"]],
+                                   token_hash):
+                return _err("bad_request", "This project belongs to someone else (send its "
+                                           "x-project-token).", 403)
+        elif _project_of(s, pid) is not None:
+            return _err("bad_request", f"Project id '{pid}' is taken.", 409)
+        else:
+            new_token = uploads.new_delete_token()
+            token_hash = uploads.hash_token(new_token)
         raw_floors = raw.get("floors")
         if raw_floors is None and isinstance(raw.get("drawing_ids"), list):
             raw_floors = []
@@ -488,8 +553,8 @@ def create_app(
         dumped = pb.model_dump(exclude_none=True)
         if s.writer is not None:
             await s.writer.execute(
-                "INSERT OR REPLACE INTO projects(id, t, title, floors, auto_matched, body) "
-                "VALUES (?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO projects(id, t, title, floors, auto_matched, body, token_hash) "
+                "VALUES (?,?,?,?,?,?,?)",
                 (
                     pb.id,
                     now,
@@ -497,16 +562,24 @@ def create_app(
                     json.dumps([f.model_dump() for f in pb.floors], ensure_ascii=False),
                     1 if pb.auto_matched else 0,
                     json.dumps(dumped, ensure_ascii=False),
+                    token_hash,
                 ),
             )
-        return dumped
+        # The owner token is shown once, on create; only its hash is stored.
+        return dumped | ({"project_token": new_token} if new_token else {})
 
     @app.delete("/projects/{project_id}")
     async def delete_project(project_id: str, request: Request):
         s = svc(request)
+        if (refused := origin_refused(request)) is not None:
+            return refused
         row = s.store.project_row(project_id) if s.store else None
         if row is None:
             return _err("not_found", f"Unknown project '{project_id}'.", 404)
+        if not _ownerless(row) and not _project_access(
+                s, request, [f.get("drawing_id", "") for f in row["floors"]], row.get("token_hash")):
+            return _err("bad_request", "This project belongs to someone else (send its "
+                                       "x-project-token).", 403)
         if s.writer is not None:
             await s.writer.execute("DELETE FROM projects WHERE id=?", (project_id,))
         return Response(status_code=204)
@@ -566,13 +639,18 @@ def create_app(
 
     origin_rx = re.compile(settings.allowed_origin_regex) if settings.allowed_origin_regex else None
 
-    def upload_refused(request: Request, presenter: bool) -> JSONResponse | None:
-        """H1: per-IP, queue and storage limits, checked BEFORE the body is read. M2: a
-        multipart POST needs no CORS preflight, so a foreign Origin is refused here."""
+    def origin_refused(request: Request) -> JSONResponse | None:
+        """M2: a simple POST/DELETE needs no CORS preflight, so a foreign Origin is refused here."""
         origin = request.headers.get("origin")
         if origin and origin not in settings.allowed_origins and not (
                 origin_rx and origin_rx.fullmatch(origin)):
-            return _err("bad_request", "Uploads are only accepted from the AURA app.", 403)
+            return _err("bad_request", "Only accepted from the AURA app.", 403)
+        return None
+
+    def upload_refused(request: Request, presenter: bool) -> JSONResponse | None:
+        """H1: per-IP, queue and storage limits, checked BEFORE the body is read."""
+        if (refused := origin_refused(request)) is not None:
+            return refused
         jobs = request.app.state.jobs
         if 0 < settings.max_queued_uploads <= len(jobs.tasks):
             return _err("rate_limited", "Uploads are busy; try again in a few minutes.", 429)
@@ -674,6 +752,8 @@ def create_app(
     async def post_ask(body: AskRequest, request: Request):
         if (r := not_ready(request, body.drawing_id)) is not None:
             return r
+        if (r := _scope_refused(svc(request), body.drawing_id, body.scope)) is not None:
+            return r
         meters = {"answer": Meter(), "check": Meter()}
         try:
             async with asyncio.timeout(settings.turn_deadline_s):
@@ -688,9 +768,11 @@ def create_app(
         s = svc(request)
         if s.registry.get(body.drawing_id) is None:
             return _err("unknown_drawing", f"Unknown drawing '{body.drawing_id}'", 404)
+        if (r := _scope_refused(s, body.drawing_id, body.scope)) is not None:
+            return r
         if body.conversation_id:
             conv = s.store.conversation(body.conversation_id) if s.store else None
-            if conv is not None and not _same_project(s, conv["drawing_id"], body.drawing_id, body.scope):
+            if conv is not None and not _same_project(s, conv["drawing_id"], body.drawing_id):
                 return _err("bad_request", "That conversation belongs to another drawing.", 400)
         gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s)
         return StreamingResponse(_sse(gen), media_type="text/event-stream",

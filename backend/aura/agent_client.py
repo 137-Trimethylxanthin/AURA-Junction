@@ -51,6 +51,8 @@ from aura.gemini.understand import pick_agent_subject
 from aura.router import DEICTIC_SIMILARITY, route
 
 log = logging.getLogger("aura.agent_client")
+SIDECAR_QUESTION_MAX = 24000  # agent-service/service/app.py `Question` max_length
+MAX_PROJECT_FILES = 10  # agent-service/service/app.py `file_ids` max_length
 
 MAX_AGENT_SLOTS = 40
 MAX_CONCURRENT_RUNS = 2
@@ -305,6 +307,26 @@ def lexical_subject_of(question: str) -> str | None:
     return hits[0] if hits else None
 
 
+# Short verbs for the HUD; the raw command stays in the trace node body only.
+_STEP_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"junction-areas|area_m2|polygon|shapely", re.IGNORECASE), "Measuring rooms"),
+    (re.compile(r"_precomputed|candidates|\.json\b", re.IGNORECASE), "Reading the indexed candidates"),
+    (re.compile(r"\barcs?\b|swing", re.IGNORECASE), "Checking door swings"),
+    (re.compile(r"pdfplumber|pdftotext|extract_text|words|TEXT|MTEXT|ocr", re.IGNORECASE), "Reading text"),
+    (re.compile(r"matplotlib|savefig|render|\bconvert\b|crop|PIL|Image\.", re.IGNORECASE), "Rendering a view"),
+    (re.compile(r"ezdxf|readfile|modelspace|ifcopenshell|layers?", re.IGNORECASE), "Reading the CAD layers"),
+    (re.compile(r"\b(?:grep|rg|find)\b", re.IGNORECASE), "Searching the files"),
+    (re.compile(r"^\s*(?:ls|cat|head|tail|wc|file)\b", re.IGNORECASE), "Looking at the files"),
+)
+
+
+def shell_step_label(command: str) -> str:
+    for rx, label in _STEP_RULES:
+        if rx.search(command or ""):
+            return label
+    return "Analysing the drawing"
+
+
 class AgentClient:
     """Async client bridging AURA turns to `agent-service`."""
 
@@ -332,6 +354,7 @@ class AgentClient:
         self._health_cache: tuple[float, bool] | None = None
         self._file_lock = asyncio.Lock()
         self._sha_cache: dict[tuple[str, int, int], str] = {}
+        self._pdf_pt_cache: dict[str, tuple[float, float] | None] = {}
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -362,6 +385,26 @@ class AgentClient:
             ok = False
         self._health_cache = (now, ok)
         return ok
+
+    def pdf_page_points(self, d: tools.LoadedDrawing) -> tuple[float, float] | None:
+        """(width, height) in PDF points of the page this drawing was rendered from."""
+        if d.id in self._pdf_pt_cache:
+            return self._pdf_pt_cache[d.id]
+        size: tuple[float, float] | None = None
+        src, _ = self.resolve_drawing_source(d)
+        if src is not None and src.suffix.lower() == ".pdf":
+            import pypdfium2 as pdfium
+            try:
+                pdf = pdfium.PdfDocument(str(src))
+                try:
+                    w, h = pdf[0].get_size()  # each floor's source.pdf is its single page
+                    size = (float(w), float(h))
+                finally:
+                    pdf.close()
+            except Exception:  # noqa: BLE001 - pdfium raises assorted errors on broken files
+                log.warning("could not read PDF page size for %s", d.id)
+        self._pdf_pt_cache[d.id] = size
+        return size
 
     # ---- Modular file resolution & ingestion hooks ----
 
@@ -481,7 +524,7 @@ class AgentClient:
     async def _ensure_file_id(self, d: tools.LoadedDrawing, *, force: bool = False) -> str:
         src_path, pre_dir = await asyncio.to_thread(self.resolve_drawing_source, d)
         if src_path is None or not src_path.is_file():
-            raise GeminiError(f"No source file available for drawing '{d.id}'.")
+            raise GeminiError(404, f"No source file available for drawing '{d.id}'.")
         async with self._file_lock:
             return await self._upload_or_register_locked(d.id, src_path, pre_dir, force=force)
 
@@ -528,7 +571,7 @@ class AgentClient:
                 files={"file": (src_path.name, data, "application/octet-stream")},
             )
             if up.status_code != 200:
-                raise GeminiError(f"Sidecar file upload failed (HTTP {up.status_code}).")
+                raise GeminiError(up.status_code, "Sidecar file upload failed.")
             fid = up.json()["file_id"]
 
         mapping[drawing_id] = {"file_id": fid, "sha256": sha, "precomputed": pre_key}
@@ -603,6 +646,44 @@ class AgentClient:
                 + json.dumps(compact_rooms, ensure_ascii=False)
             )
 
+        # 2b. Stage-1 grab of indexed objects (doors, windows, fixtures with their room), so a
+        #     filter question ("double doors", "doors of the kitchen") is a filter over these
+        #     candidates, not a re-derivation of the geometry over many shell turns.
+        ev_all = d.drawing.get("evidence") if isinstance(d.drawing.get("evidence"), dict) else {}
+        mx = float(d.drawing.get("m_per_pct_x") or 0)
+        my = float(d.drawing.get("m_per_pct_y") or mx)
+        cands: dict[str, list[dict]] = {}
+        if ev_all and not project_drawings:
+            for subj, boxes in ev_all.items():
+                rows = []
+                for b in (boxes or [])[:60]:
+                    if not isinstance(b, dict) or "x" not in b:
+                        continue
+                    row: dict[str, Any] = {"id": b.get("id"),
+                                           "pos_pct": [round(b["x"] + b["w"] / 2, 2), round(b["y"] + b["h"] / 2, 2)]}
+                    if mx:
+                        row["size_m"] = [round(b["w"] * mx, 2), round(b["h"] * my, 2)]
+                    for k in ("room_id", "unit", "note"):
+                        if b.get(k):
+                            row[k] = b[k]
+                    rows.append(row)
+                if rows:
+                    cands[subj] = rows
+        if cands:
+            parts.append(
+                "Pre-indexed objects from the CAD layers (the complete set; pos_pct = box centre, "
+                "size_m = box width/height in metres, room_id = the room the symbol sits in):\n"
+                + json.dumps(cands, ensure_ascii=False)
+            )
+        if raw_rooms or cands:
+            parts.append(
+                "WORK ORDER: these indexed rooms/objects are the candidates. First decide whether the "
+                "question can be answered by filtering them (by name, unit, area, size, position, room). "
+                "If yes, answer directly from them with at most 1-2 tool calls (e.g. one crop to confirm a "
+                "symbol). Only re-derive geometry from the drawing file when the candidates lack what the "
+                "question needs, and then batch the work into as few shell calls as possible."
+            )
+
         # 3. Prior conversation context for multi-turn follow-ups
         prior_block = format_prior_context(history, d)
         if prior_block:
@@ -652,7 +733,15 @@ class AgentClient:
             parts.append(f"Restrict scope strictly to rooms labelled '{scope['label']}'.")
 
         parts.append(question)
-        return "\n\n".join(parts)
+        out = "\n\n".join(parts)
+        # The sidecar caps a question at SIDECAR_QUESTION_MAX chars: drop the optional candidate
+        # blocks (objects first, then rooms) rather than have the run refused.
+        for marker in ("Pre-indexed objects from the CAD layers", "Pre-indexed rooms on this floor plan"):
+            if len(out) <= SIDECAR_QUESTION_MAX:
+                break
+            parts = [p for p in parts if not p.startswith(marker)]
+            out = "\n\n".join(parts)
+        return out[-SIDECAR_QUESTION_MAX:] if len(out) > SIDECAR_QUESTION_MAX else out
 
     # ---- Live crop telemetry extraction ----
 
@@ -721,6 +810,13 @@ class AgentClient:
         project_drawings: list[tuple[str, tools.LoadedDrawing]] = []
         if scope.get("kind") == "project":
             dids = list(dict.fromkeys(scope.get("drawing_ids") or [d.id]))
+            if len(dids) > MAX_PROJECT_FILES:
+                raise PipelineError(
+                    "bad_request",
+                    f"The agent can read at most {MAX_PROJECT_FILES} floors at once; this project has "
+                    f"{len(dids)}. Ask about fewer floors.",
+                    400,
+                )
             for idx, did in enumerate(dids, 1):
                 pd = d if did == d.id else self.registry.get(did)
                 if pd is None:
@@ -761,9 +857,9 @@ class AgentClient:
                 )
             self._waiting += 1
             pos = self._waiting
-            yield "progress", {"queue_position": pos}
             acquired = False
             try:
+                yield "progress", {"queue_position": pos}
                 await self._sem.acquire()
                 acquired = True
             finally:
@@ -771,11 +867,10 @@ class AgentClient:
                 if not acquired and not settled:
                     self.budget.release(res)
                     settled = True
-            yield "progress", {"queue_position": 0}
+            queued = True
         else:
             await self._sem.acquire()
-
-        yield "_ready", {"detected_lang": lang, "canonical_en": question, "route": "agent"}
+            queued = False
 
         t_start = time.perf_counter()
         self_budget_s = max(1.0, deadline_s - 5.0)
@@ -783,7 +878,12 @@ class AgentClient:
         scan_boxes: list[Box] = []
         scan_subj: str | None = None
 
+        # From here on the slot is held: every yield sits inside the try whose `finally` releases
+        # it, so a client disconnect or deadline cancel at any yield cannot leak a slot.
         try:
+            if queued:
+                yield "progress", {"queue_position": 0}
+            yield "_ready", {"detected_lang": lang, "canonical_en": question, "route": "agent"}
             # 4. Immediate (<50 ms) candidate sweep on single-plan CAD/IFC/Raster when applicable
             if scope.get("kind") != "project" and not history:
                 r_scan = route(question, d.ctx)
@@ -887,7 +987,7 @@ class AgentClient:
                     json={"file_ids": file_ids, "questions": [injected_q]},
                 )
             if post_run.status_code not in (200, 202):
-                raise GeminiError(f"Sidecar /runs returned HTTP {post_run.status_code}.")
+                raise GeminiError(post_run.status_code, "Sidecar /runs refused the run.")
 
             run_id = post_run.json()["run_id"]
             by_ws_file: dict[str, tools.LoadedDrawing] = {}
@@ -904,6 +1004,7 @@ class AgentClient:
             run_usage: dict[str, Any] = {}
             run_error: str | None = None
             pending_nodes: dict[str, dict] = {}
+            crops_seen = 0
             step_seq = 1
 
             async with asyncio.timeout(max(0.5, self_budget_s - (time.perf_counter() - t_start))):
@@ -914,7 +1015,7 @@ class AgentClient:
                     timeout=httpx.Timeout(connect=10.0, read=self_budget_s + 5.0, write=10.0, pool=10.0),
                 ) as sse_resp:
                     if sse_resp.status_code != 200:
-                        raise GeminiError(f"Sidecar events returned HTTP {sse_resp.status_code}.")
+                        raise GeminiError(sse_resp.status_code, "Sidecar events stream refused.")
                     data_lines: list[str] = []
                     async for raw_line in sse_resp.aiter_lines():
                         if raw_line == "":
@@ -941,10 +1042,11 @@ class AgentClient:
                                 call_id = str(ev.get("call_id") or f"call-{step_seq}")
                                 tname = str(ev.get("tool") or "shell")
                                 raw_cmd = str(ev.get("command") or ev.get("path") or "")[:300]
-                                step_label = (
-                                    f"Inspecting image {raw_cmd}" if tname == "view_image"
-                                    else f"Running {tname}: {raw_cmd[:90]}"
-                                )
+                                if tname == "view_image":
+                                    crops_seen += 1
+                                    step_label = f"Inspecting crop {crops_seen}"
+                                else:
+                                    step_label = shell_step_label(raw_cmd)
                                 t_args: dict[str, Any] = {
                                     "step": step_label[:160],
                                     "seq": int(ev.get("seq") or step_seq),
@@ -956,12 +1058,10 @@ class AgentClient:
                                         t_args["focus_rect"] = f_rect
                                         if f_did and scope.get("kind") == "project":
                                             t_args["drawing_id"] = f_did
-                                else:
-                                    t_args["command"] = raw_cmd
                                 node = {
                                     "id": f"agent-step-{step_seq}",
                                     "parent": "q",
-                                    "title": "Inspecting crop" if tname == "view_image" else "Agent shell step",
+                                    "title": step_label,
                                     "tag": f"Agent · {tname}",
                                     "body": raw_cmd or tname,
                                     "kind": "model",
@@ -1121,7 +1221,8 @@ class AgentClient:
                 intent_tag=intent_tag,
             )
             yield "_built", built
-        except ( httpx.HTTPError, GeminiError ) as e:
+        except (httpx.HTTPError, GeminiError) as e:
+            log.warning("deep agent run failed: %s: %s", type(e).__name__, e)  # detail stays in the log
             if not settled:
                 self.budget.release(res)
                 settled = True
@@ -1133,7 +1234,7 @@ class AgentClient:
                 response_scope,
                 "low_confidence",
                 question,
-                f"The deep agent service is unavailable ({e}); nothing guessed.",
+                "The deep agent is not reachable right now; nothing guessed. Try again in a minute.",
                 intent_tag=intent_tag,
             )
             yield "_built", built
@@ -1306,7 +1407,13 @@ class AgentClient:
             if isinstance(raw_cad_bbox, list) and len(raw_cad_bbox) >= 4:
                 pct_rect = cad_bbox_to_pct(item_d.drawing, raw_cad_bbox)
             if pct_rect is None and isinstance(ev.get("bbox_px"), list) and len(ev["bbox_px"]) >= 4:
-                pct_rect = px_bbox_to_pct(item_d.drawing, ev["bbox_px"])
+                # On a PDF the agent reads coordinates with pdfplumber: `bbox_px` against
+                # `image: drawing.pdf` is in page points (top-left origin), not image pixels.
+                ref_name = str(ev.get("image") or ev.get("file") or "")
+                frame_px = ev.get("image_px") if isinstance(ev.get("image_px"), list) else None
+                if frame_px is None and ref_name.lower().endswith(".pdf"):
+                    frame_px = await asyncio.to_thread(self.pdf_page_points, item_d)
+                pct_rect = px_bbox_to_pct(item_d.drawing, ev["bbox_px"], image_px=frame_px)
 
             # Check if evidence matches an indexed room on `item_d` when answering area/room/apartment questions
             if (ekind == "room" or raw_unit == "m2" or count_subj in ("room", "apartment")) and (item_d.drawing.get("rooms") or []):

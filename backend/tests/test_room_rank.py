@@ -95,3 +95,29 @@ def test_demo_trace_detail_keeps_only_decision_and_answer(tmp_path):
         _, r = _chat(c, None, "smallest room")
         stages = [n.get("stage") for n in r["trace"] if n.get("stage")]
         assert stages == ["decision", "answer"] and all("detail" not in n for n in r["trace"])
+
+
+def test_decision_model_exact_route_answers_and_is_shown_in_the_trace(tmp_path):
+    """gemini-decision-1 says a plain door count answers it: exact answer, decision node with its
+    calibrated outputs and runner-up (this path used to crash on a missing attribute)."""
+    def exact(path, body):
+        q = body.get("questions") or {}
+        if "exact_sufficient" not in q:
+            return None
+        ans = {"on_drawing": {"noul": 0.97}, "exact_sufficient": {"noul": 0.91},
+               "intent": {"choice": "count", "confidence": 0.88, "probabilities": {"count": 0.88, "area": 0.1}},
+               "subject": {"choice": "door", "confidence": 0.93, "probabilities": {"door": 0.93, "window": 0.05}},
+               "scope": {"choice": "floor", "confidence": 0.95, "probabilities": {"floor": 0.95}}}
+        if "cache_match" in q:
+            ans["cache_match"] = {"choice": "none", "confidence": 0.9, "probabilities": {"none": 0.9}}
+        return 200, {"answers": ans, "usageMetadata": {"promptTokenCount": 120, "candidatesTokenCount": 10}}
+
+    sc = MockSidecarState()
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc, gemini=MockGeminiDecisionsTransport(exact))) as c:
+        _, r = _chat(c, None, "tell me about the doors please")
+        assert r["answer"]["kind"] == "count" and r["answer"]["subject"] == "door" and r["route"] == "choice"
+        dec = next(n for n in r["trace"] if n.get("stage") == "decision")
+        assert dec["detail"]["decider"] == "gemini-decision-1" and dec["detail"]["chosen"] == "exact"
+        assert dec["detail"]["runner_up"] == "agent" and dec["confidence"] == pytest.approx(0.91)
+        assert dec["detail"]["asked"]["subject"]["choice"] == "door"
+        assert sc.runs == []

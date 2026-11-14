@@ -1,8 +1,8 @@
 """Uploads: type from magic bytes (never the extension), size caps, an id, a delete token.
 
 Files go to <DATA_DIR>/uploads/<id>/source.<ext>; the client filename is never used for paths.
-DXF is open to everyone; PNG/JPG need the presenter token (or AURA_RASTER_PUBLIC_CAP).
-PDF and IFC are T3: rejected as unsupported for now. DWG and zip archives are rejected.
+DXF, PDF and IFC are open to everyone; PNG/JPG need the presenter token unless
+AURA_RASTER_PUBLIC_CAP allows them (0 = unlimited, the default). DWG and zip archives are rejected.
 """
 
 from __future__ import annotations

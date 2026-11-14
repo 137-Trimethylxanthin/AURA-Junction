@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS answer_cache (
 CREATE INDEX IF NOT EXISTS answer_cache_drawing ON answer_cache(drawing_id);
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY, t REAL NOT NULL, title TEXT NOT NULL,
-  floors TEXT NOT NULL, auto_matched INTEGER DEFAULT 0, body TEXT NOT NULL
+  floors TEXT NOT NULL, auto_matched INTEGER DEFAULT 0, body TEXT NOT NULL,
+  token_hash TEXT
 );
 """
 
@@ -72,6 +73,10 @@ def init_db(path: Path) -> None:
     try:
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.executescript(SCHEMA)
+        # Migration: project owner token (hash only), added after the projects table shipped.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+        if "token_hash" not in cols:
+            conn.execute("ALTER TABLE projects ADD COLUMN token_hash TEXT")
     finally:
         conn.close()
 

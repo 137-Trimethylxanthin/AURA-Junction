@@ -27,7 +27,8 @@ from .config import ALLOWED_EXT, SANDBOX_MODES, Settings, model_status, sandbox_
 from .runs import Registry, Run
 from .workspace import FileStore, Forbidden, NotFound, extension
 
-Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+# Room/object candidates are injected by the AURA backend, so questions can be long.
+Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=24000)]
 
 
 class RegisterIn(BaseModel):

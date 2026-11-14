@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     agent_runs_per_ip_hour: int = Field(default=0, alias="AURA_AGENT_RUNS_PER_IP_HOUR")
     agent_runs_per_day: int = Field(default=0, alias="AURA_AGENT_RUNS_PER_DAY")
 
-    turn_deadline_s: float = Field(default=60.0, alias="AURA_TURN_DEADLINE_S")
+    turn_deadline_s: float = Field(default=120.0, alias="AURA_TURN_DEADLINE_S")
     # dev: every answering stage in the trace (grab, decision, filter, answer) with its detail;
     # demo: the short trace (decision and answer nodes only, no detail payloads).
     trace_detail: Literal["dev", "demo"] = Field(default="dev", alias="AURA_TRACE_DETAIL")

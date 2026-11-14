@@ -15,7 +15,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aura import answer as A
 from aura import tools
@@ -201,6 +201,70 @@ def resolve_reference(r, question: str, history: list[dict] | None, d: tools.Loa
             "room_ids": rooms}
 
 
+def decision_node(hd, route: str) -> dict:
+    """The gemini-decision-1 routing step as a trace node: every question it was asked, its
+    calibrated answer, what was chosen (exact / cache / agent / abstain) and the runner-up."""
+    a = hd.asked
+    ex = hd.exact_sufficient
+    parts: list[str] = []
+    if "on_drawing" in a and a["on_drawing"]["p"] is not None:
+        parts.append(f"about the drawing? p = {a['on_drawing']['p']:.2f}")
+    if ex is not None:
+        parts.append(f"a plain count/area answers it? p = {ex:.2f}")
+    for k in ("intent", "subject", "scope"):
+        if k in a and a[k]["choice"] is not None:
+            probs = sorted(a[k]["probabilities"].items(), key=lambda kv: -kv[1])
+            ru = f", runner-up {probs[1][0]} {probs[1][1]:.2f}" if len(probs) > 1 else ""
+            parts.append(f"{k} = {a[k]['choice']} ({a[k]['confidence']:.2f}{ru})")
+    if "cache_match" in a:
+        parts.append(f"earlier question = {a['cache_match']['choice']} ({a['cache_match']['confidence']:.2f})")
+    if route == "exact":
+        chosen_conf, runner, runner_conf = ex, "agent", (None if ex is None else 1 - ex)
+        matched = f"template {hd.intent}" + (f" · {hd.subject}" if hd.subject else "")
+    elif route == "cache":
+        chosen_conf, runner, runner_conf = hd.cache_conf, "agent", None
+        matched = f"cached question “{hd.cache_question}”"
+    elif route == "abstain":
+        p = a.get("on_drawing", {}).get("p")
+        chosen_conf, runner, runner_conf = (None if p is None else 1 - p), "agent", p
+        matched = "off the drawing"
+    else:
+        chosen_conf, runner, runner_conf = (None if ex is None else 1 - ex), "exact", ex
+        matched = "no template or earlier answer fits whole"
+    return {
+        "id": "decision", "parent": "q", "title": "Route decision · gemini-decision-1",
+        "tag": f"Decisions API · {route}" + (f" · {chosen_conf:.2f}" if chosen_conf is not None else ""),
+        "body": "; ".join(parts) + f". → {route}: {matched}.",
+        "kind": "model", "stage": "decision",
+        **({"confidence": round(chosen_conf, 3)} if chosen_conf is not None else {}),
+        "detail": {"decider": "gemini-decision-1", "model": hd.model or "gemini-decision-1",
+                   "question": "Route this question: off the drawing, an earlier answer, an exact "
+                               "template, or the agent?",
+                   "options": ["exact", "cache", "agent", "abstain"], "chosen": route,
+                   "confidence": chosen_conf, "runner_up": runner,
+                   "runner_up_confidence": runner_conf, "matched": matched, "route": route,
+                   "asked": a, "calls": hd.calls, "cost_usd": hd.cost_usd,
+                   "latency_ms": hd.latency_ms},
+    }
+
+
+def _no_nulls(v: Any) -> Any:
+    """The contract carries no nulls: drop None values from trace detail payloads."""
+    if isinstance(v, dict):
+        return {k: _no_nulls(x) for k, x in v.items() if x is not None}
+    if isinstance(v, list):
+        return [_no_nulls(x) for x in v if x is not None]
+    return v
+
+
+def _with_decision(trace: list[dict], node: dict | None) -> list[dict]:
+    """Insert the routing decision after the intent node unless the trace already has one."""
+    if node is None or any(n.get("stage") == "decision" for n in trace):
+        return trace
+    i = next((k + 1 for k, n in enumerate(trace) if n.get("id") == "intent"), min(1, len(trace)))
+    return [*trace[:i], node, *trace[i:]]
+
+
 FOLLOW_UP_CUE = re.compile(
     r"^\s*(and|what about|how about|same|et|und|ja|entä|e|ed|plus|also|then)\b", re.IGNORECASE)
 WHOLE_FLOOR = re.compile(r"\b(in total|total|whole|entire|all|altogether|insgesamt|gesamt|au total|"
@@ -228,7 +292,10 @@ def _try_deterministic_color_followup(
     if prev is None:
         return None
     prev_ev = prev.get("evidence") or {}
-    raw_rooms = prev_ev.get("rooms") or []
+    known = set(d.ctx.room_ids)
+    # Only the previous turn's rooms on THIS drawing (a project turn carries other floors' rooms).
+    raw_rooms = [r for r in prev_ev.get("rooms") or []
+                 if r.get("drawing_id") in (None, d.id) and r.get("room_id") in known]
     if not raw_rooms:
         return None
     prev_ans = prev.get("answer") or {}
@@ -782,9 +849,12 @@ async def _finalize_and_emit(
 
     body["calls"] = meters["answer"].calls  # every request sent for the answer, failed or not
     body["cost_usd"] = round(meters["answer"].cost_usd, 8)
+    body["trace"] = _with_decision(body["trace"], stats.get("decision_node"))
     for n in body["trace"]:
         if n.get("stage") == "answer" and isinstance(n.get("detail"), dict):
             n["detail"] |= {"calls": body["calls"], "cost_usd": body["cost_usd"]}
+        if isinstance(n.get("detail"), dict):
+            n["detail"] = _no_nulls(n["detail"])
     if svc.settings.trace_detail == "demo":
         body["trace"] = [{k: v for k, v in n.items() if k != "detail"} for n in body["trace"]
                          if n.get("stage") not in ("resources", "filter")]
@@ -980,7 +1050,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                     )
                 if hd.on_drawing is not None:
                     intent_tag = f"Decisions API · {hd.on_drawing:.2f}"
+                stats["decision_node"] = decision_node(hd, "agent")  # refined below
                 if hd.off_drawing:
+                    stats["decision_node"] = decision_node(hd, "abstain")
                     stats["route"] = "choice"
                     off_b = A.abstain(
                         question,
@@ -1001,7 +1073,11 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 if hd.cache_key:
                     sem_hit = svc.answers.get(hd.cache_key)
                     if sem_hit is not None:
-                        sem_trace = list(sem_hit.get("trace") or [])
+                        sem_trace = _with_decision(
+                            [n for n in sem_hit.get("trace") or [] if n.get("stage") != "decision"],
+                            decision_node(hd, "cache"))
+                        sem_trace = [n | ({"detail": _no_nulls(n["detail"])} if n.get("detail") else {})
+                                     for n in sem_trace]
                         sem_trace.append({
                             "id": "semantic-cache",
                             "parent": "q",
@@ -1026,14 +1102,14 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                         yield "answer", {"response": body}
                         return
 
-                if hd.can_use_exact and hd.exact_intent in ("count", "area"):
+                if hd.can_use_exact and hd.intent in ("count", "area"):
                     ex_scope = hd.scope if (scope_dump is None and hd.scope and hd.scope_conf >= MIN_CONFIDENCE) else eff_scope
                     ex_built, ex_ok = await _execute_exact_intent(
                         d,
                         question,
                         lang,
-                        hd.exact_intent,
-                        hd.exact_subject,
+                        hd.intent,
+                        hd.subject,
                         ex_scope,
                         overrides,
                         r.matched,
@@ -1042,6 +1118,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                     )
                     if ex_ok:
                         stats["route"] = "choice"
+                        stats["decision_node"] = decision_node(hd, "exact")
                         yield "understood", {"detected_lang": ex_built.body["detected_lang"],
                                              "canonical_en": ex_built.body["canonical_en"], "route": "choice"}
                         for ev in _tool_events(ex_built):

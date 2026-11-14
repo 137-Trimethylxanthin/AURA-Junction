@@ -100,7 +100,7 @@ Generated from `backend/aura/config.py` by `backend/scripts/env_table.py --write
 | `AURA_SIDECAR_MODEL` | backend env | `gemini-3.8-flash` | Sidecar model used for cost booking until the run reports its own (match JUNCTION_MODEL) |
 | `AURA_AGENT_RUNS_PER_IP_HOUR` | backend env | `0` | Deep-agent sidecar runs per client IP per hour (presenter exempt) (0 = unlimited) |
 | `AURA_AGENT_RUNS_PER_DAY` | backend env | `0` | Public deep-agent sidecar runs per Europe/Helsinki day (0 = unlimited) |
-| `AURA_TURN_DEADLINE_S` | backend env | `60` | Deadline of one /ask or /chat turn (s) |
+| `AURA_TURN_DEADLINE_S` | backend env | `120` | Deadline of one /ask or /chat turn (s) |
 | `AURA_TRACE_DETAIL` | backend env | `dev` | Reasoning trace detail: `dev` (every stage with its data) or `demo` (short) |
 | `AURA_AGENT_DEADLINE_S` | backend env | `150` | Deadline of a /chat turn once it escalates to the sidecar agent (s) |
 | `AURA_VOLUME_COMMIT_S` | backend env | `60` | Modal Volume commit interval (s) |
