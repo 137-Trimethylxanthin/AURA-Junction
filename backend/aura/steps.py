@@ -30,7 +30,7 @@ from aura import door_leaves, store_sql, tools
 from aura.budget import BudgetError
 from aura.contract import BOX_SUBJECTS, Box
 from aura.gemini.client import GeminiError
-from aura.router import LABEL_CONCEPTS
+from aura.router import COUNT, LABEL_CONCEPTS
 
 log = logging.getLogger("aura.steps")
 
@@ -1006,7 +1006,7 @@ def _sql_nodes(rs: ResultSet, parent: str, drawn: int) -> list[dict]:
 
 
 def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: list[dict], calls: int,
-               model: str, scope: dict, sqlres: store_sql.SqlResult | None = None) -> A.Built:
+               model: str, scope: dict, sqlres: store_sql.SqlResult | None = None) -> A.Built | None:
     """An sql set as the answer: the number comes from `store_sql.take`, never from the model."""
     q = rs.sql or {}
     taken = q.get("take")
@@ -1019,6 +1019,8 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
             m2 = [c for c in res.columns if c.lower().endswith("m2")]
             shape = (f"value:{m2[0]}" if res.total == 1 else f"sum:{m2[0]}") if m2 else "rows"
         taken = store_sql.take(res, shape)
+    if taken is None and not COUNT.search(question):
+        return None  # a row count is no answer to "what is the scale?": the reasoning step answers instead
     taken = taken or {"kind": "count", "value": q.get("total", 0), "unit": None, "rule": rs.rule}
     ids = [int(i) for i in rs.ids if str(i).isdigit()]
     boxes, room_ids = store_sql.boxes_for(d, ids)
