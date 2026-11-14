@@ -17,13 +17,15 @@ Hook: `pipeline.ask()` / `pipeline.chat_events()` take an optional `run_fn`; `ma
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
+import json
 import logging
 import re
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -360,6 +362,7 @@ def _branch(i: int, sheet: Sheet, resp: dict | None, status: str, mapping: dict[
 
 def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseException]], elapsed_ms: int) -> dict:
     """One whole-building response from the per-sheet results (never calls a model)."""
+    results = [(sh, copy.deepcopy(r) if isinstance(r, dict) else r) for sh, r in results]
     oks: list[tuple[int, Sheet, dict]] = []
     others: list[tuple[int, Sheet, dict | BaseException]] = []
     for i, (sh, r) in enumerate(results):
@@ -577,6 +580,155 @@ def _with_shared_budget(svc: Any, max_calls: int) -> tuple[Any, SharedCallBudget
     return svc, gate
 
 
+# ---- sheet tracking & persistence -------------------------------------------------------
+
+
+def sheet_ids_of(resp: dict, plan: Plan | None = None, *, extra_ids: Iterable[str] = ()) -> list[str]:
+    """Ordered distinct drawing ids participating in `resp` (and `plan`, when provided)."""
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def add(did: Any) -> None:
+        if isinstance(did, str) and did and did not in seen:
+            seen.add(did)
+            out.append(did)
+
+    for did in extra_ids:
+        add(did)
+    if plan is not None:
+        for s in plan.sheets:
+            add(s.id)
+    add(resp.get("drawing_id"))
+    scope = resp.get("scope")
+    if isinstance(scope, dict):
+        add(scope.get("drawing_id"))
+        for did in scope.get("drawing_ids") or []:
+            add(did)
+    for b in resp.get("breakdown") or []:
+        if isinstance(b, dict):
+            add(b.get("drawing_id"))
+    ev = resp.get("evidence")
+    if isinstance(ev, dict):
+        for key in ("boxes", "rooms", "links"):
+            for it in ev.get(key) or []:
+                if isinstance(it, dict):
+                    add(it.get("drawing_id"))
+                    add(it.get("target_drawing_id"))
+        for grp in ev.get("groups") or []:
+            if isinstance(grp, dict):
+                add(grp.get("target_drawing_id"))
+    for n in resp.get("trace") or []:
+        if not isinstance(n, dict):
+            continue
+        if n.get("parent") == "scope":
+            add(n.get("tag"))
+        det = n.get("detail")
+        if isinstance(det, dict) and isinstance(det.get("sheets"), list):
+            for sh in det["sheets"]:
+                if isinstance(sh, dict):
+                    add(sh.get("id"))
+    return out
+
+
+def response_contains_sheet(
+    resp: Any, drawing_id: str, sheet_ids_raw: str | list[str] | None = None
+) -> bool:
+    """True when `resp` (dict or JSON string) or `sheet_ids_raw` includes `drawing_id` or its items."""
+    if not drawing_id:
+        return False
+    if isinstance(sheet_ids_raw, list) and drawing_id in sheet_ids_raw:
+        return True
+    if isinstance(sheet_ids_raw, str) and sheet_ids_raw:
+        try:
+            parsed_ids = json.loads(sheet_ids_raw)
+            if isinstance(parsed_ids, list) and drawing_id in parsed_ids:
+                return True
+        except ValueError:
+            pass
+    if isinstance(resp, str):
+        try:
+            resp = json.loads(resp)
+        except ValueError:
+            return False
+    if not isinstance(resp, dict):
+        return False
+    return drawing_id in sheet_ids_of(resp)
+
+
+def turn_contains_sheet(turn: Any, drawing_id: str) -> bool:
+    """True when a mirrored browser session turn references `drawing_id`."""
+    if not isinstance(turn, dict) or not drawing_id:
+        return False
+    if turn.get("drawing_id") == drawing_id:
+        return True
+    if isinstance(turn.get("response"), dict) and response_contains_sheet(turn["response"], drawing_id):
+        return True
+    return response_contains_sheet(turn, drawing_id)
+
+
+def _answers_has_sheet_ids(svc: Any) -> bool:
+    st = getattr(svc, "store", None)
+    if st is None or not hasattr(st, "_q"):
+        return False
+    return "sheet_ids" in {r["name"] for r in st._q("PRAGMA table_info(answers)")}
+
+
+def persist_answer(
+    svc: Any,
+    drawing_id: str,
+    question: str,
+    body: dict,
+    stats: dict,
+    *,
+    plan: Plan | None = None,
+) -> None:
+    """Persist a combined whole-building answer together with its participating `sheet_ids`."""
+    if svc is None or getattr(svc, "writer", None) is None:
+        return
+    now = time.time()
+    resp_json = json.dumps(body, ensure_ascii=False)
+    if _answers_has_sheet_ids(svc):
+        sids = sheet_ids_of(body, plan, extra_ids=(drawing_id,))
+        svc.writer.submit(
+            "INSERT INTO answers(id, t, day, drawing_id, question, route, method, calls, cost_usd, "
+            "check_calls, check_cost_usd, response, sheet_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                body["answer_id"],
+                now,
+                svc.budget.day(now),
+                drawing_id,
+                question,
+                body.get("route"),
+                body["method"],
+                body["calls"],
+                body["cost_usd"],
+                stats["check_calls"],
+                stats["check_cost_usd"],
+                resp_json,
+                json.dumps(sids, ensure_ascii=False),
+            ),
+        )
+        return
+    svc.writer.submit(
+        "INSERT INTO answers(id, t, day, drawing_id, question, route, method, calls, cost_usd, "
+        "check_calls, check_cost_usd, response) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            body["answer_id"],
+            now,
+            svc.budget.day(now),
+            drawing_id,
+            question,
+            body.get("route"),
+            body["method"],
+            body["calls"],
+            body["cost_usd"],
+            stats["check_calls"],
+            stats["check_cost_usd"],
+            resp_json,
+        ),
+    )
+
+
 # ---- running ----------------------------------------------------------------------------
 
 BaseRun = Callable[..., AsyncIterator[tuple[str, dict]]]
@@ -619,9 +771,19 @@ async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = Non
             sub = _sub_request(req, only, plan) if only.id != req.drawing_id else req
             async for ev, data in base_run(svc, sub, caller, context, history, meters, deadline_s, agent_deadline_s):
                 if ev == "answer":
-                    resp = dict(data["response"])
+                    resp = copy.deepcopy(data["response"])
                     trace = list(resp.get("trace") or [])
                     resp["trace"] = [*trace[:1], scope_node | {"parent": (trace[0]["id"] if trace else "q")}, *trace[1:]]
+                    if svc is not None and getattr(svc, "writer", None) is not None and _answers_has_sheet_ids(svc):
+                        sids = sheet_ids_of(resp, plan, extra_ids=(only.id,))
+                        svc.writer.submit(
+                            "UPDATE answers SET sheet_ids=?, response=? WHERE id=?",
+                            (
+                                json.dumps(sids, ensure_ascii=False),
+                                json.dumps(resp, ensure_ascii=False),
+                                resp["answer_id"],
+                            ),
+                        )
                     data = {"response": resp}
                 yield ev, data
             return

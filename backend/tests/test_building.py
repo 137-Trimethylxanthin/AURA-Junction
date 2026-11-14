@@ -413,3 +413,166 @@ def test_shared_call_budget_caps_total_calls_across_sheets_and_isolates_sheet_me
     # Per-sheet meters were isolated: sum of per-sheet calls equals actual sent calls (5, not double-counted)
     assert resp["calls"] == 5 and outer["answer"].calls == 5
     assert resp["cost_usd"] == pytest.approx(0.05) and outer["answer"].cost_usd == pytest.approx(0.05)
+
+
+def test_combine_does_not_mutate_cached_per_sheet_responses():
+    full = _plan()
+    p = building.Plan("p", "House", full.sheets[:2], full.sheets[:2], "a", building.DECIDER_DEFAULT)
+    r_a = _resp(1, evidence={"boxes": [{"id": "b1", "subject": "door", "x": 1, "y": 2, "w": 3, "h": 4}], "rooms": []})
+    r_b = _resp(1, evidence={"boxes": [{"id": "b1", "subject": "door", "x": 5, "y": 6, "w": 3, "h": 4}], "rooms": []})
+    snap_b = copy.deepcopy(r_b)
+
+    out = building.combine(p, "how many doors", [(p.sheets[0], r_a), (p.sheets[1], r_b)], 10)
+    assert [b["id"] for b in out["evidence"]["boxes"]] == ["b1", "b:b1"]
+    assert r_b == snap_b  # cached per-sheet dict in AnswerCache must stay untouched
+
+
+def test_deleting_upload_purges_combined_answers_caches_turns_and_sessions(tmp_path):
+    from aura.cache import answer_key
+    from tests.test_agent_client import parse_sse_raw
+    from tests.test_uploads import plain_dxf, wait_status
+
+    base = json.loads(FRONTEND_DRAWING.read_text())
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild")
+    with TestClient(create_app(s)) as c:
+        up1 = c.post("/uploads", files={"file": ("eg.dxf", plain_dxf(), "application/dxf")}).json()
+        up2 = c.post("/uploads", files={"file": ("og1.dxf", plain_dxf(), "application/dxf")}).json()
+        u1, tok1 = up1["drawing_id"], up1["delete_token"]
+        u2, tok2 = up2["drawing_id"], up2["delete_token"]
+        assert wait_status(c, u1)["status"] == "ready"
+        assert wait_status(c, u2)["status"] == "ready"
+
+        # Give u1 (3 doors) and u2 (5 uniquely tagged doors) distinct door boxes on disk so items are unmistakable
+        svc = c.app.state.svc
+        for uid, lbl, n_doors, prefix in [(u1, "EG", 3, "u1-door"), (u2, "1. OG", 5, "u2-door")]:
+            dp = s.uploads_dir / uid / "drawing.json"
+            d_json = copy.deepcopy(base)
+            d_json |= {"id": uid, "title": f"House · {lbl}", "source": "upload", "floor_label": lbl}
+            doors = []
+            for idx in range(n_doors):
+                box = dict(base["evidence"]["door"][idx])
+                box["id"] = f"{prefix}-{idx}"
+                doors.append(box)
+            d_json["evidence"]["door"] = doors
+            dp.write_text(json.dumps(d_json))
+            svc.registry.evict(uid)
+
+        proj = c.post(
+            "/projects",
+            json={"id": "proj-s2", "title": "S2 House", "drawing_ids": [u1, u2]},
+            headers={"x-delete-token": f"{tok1},{tok2}"},
+        )
+        assert proj.status_code == 200, proj.text
+        owner_headers = {"x-project-token": proj.json()["token"]}
+
+        # 1. Single-floor answer on u1 only (must survive deleting u2)
+        ans_u1 = c.post(
+            "/ask",
+            json={"drawing_id": u1, "project_id": "proj-s2", "question": "how many doors on this floor?"},
+            headers=owner_headers,
+        ).json()
+        assert ans_u1["answer"]["value"] == 3
+        u1_ans_id = ans_u1["answer_id"]
+
+        # 2. Combined whole-building answer asked from u1 across [u1, u2]
+        ans_both = c.post(
+            "/ask",
+            json={"drawing_id": u1, "project_id": "proj-s2", "question": "how many doors are there?"},
+            headers=owner_headers,
+        ).json()
+        assert ans_both["answer"]["value"] == 8
+        both_ans_id = ans_both["answer_id"]
+        assert any(b["id"].startswith("u2-door-") and b["drawing_id"] == u2 for b in ans_both["evidence"]["boxes"])
+
+        # Verify sheet_ids column persisted [u1, u2] and evidence CSV works before delete
+        c.portal.call(svc.writer.flush)
+        saved_row = svc.store._q("SELECT drawing_id, sheet_ids FROM answers WHERE id=?", (both_ans_id,))[0]
+        assert saved_row["drawing_id"] == u1
+        assert json.loads(saved_row["sheet_ids"]) == [u1, u2]
+        csv_before = c.get(f"/answers/{both_ans_id}/evidence.csv")
+        assert csv_before.status_code == 200 and "u2-door-0" in csv_before.text
+
+        # 3. Seed a project-scoped AnswerCache entry under u1 (both RAM & SQLite) containing u2's items
+        proj_scope = {"kind": "project", "project_id": "proj-s2", "drawing_ids": [u1, u2]}
+        ckey = answer_key(u1, "how many doors are there?", proj_scope, None, None, True)
+        svc.answers.put(ckey, ans_both, drawing_id=u1, question="how many doors are there?")
+        assert svc.answers.get(ckey) is not None
+
+        # 4. Two-turn /chat conversation started on u1: turn 1 is u1-only, turn 2 is combined [u1, u2]
+        evs1, _ = parse_sse_raw(
+            c.post(
+                "/chat",
+                json={"drawing_id": u1, "project_id": "proj-s2", "message": "how many doors on this floor?"},
+                headers=owner_headers,
+            ).text
+        )
+        conv_id = dict(evs1)["turn"]["conversation_id"]
+        evs2, _ = parse_sse_raw(
+            c.post(
+                "/chat",
+                json={
+                    "drawing_id": u1,
+                    "project_id": "proj-s2",
+                    "conversation_id": conv_id,
+                    "message": "how many doors across all floors?",
+                },
+                headers=owner_headers,
+            ).text
+        )
+        assert dict(evs2)["answer"]["response"]["answer"]["value"] == 8
+
+        # 5. Browser session mirror on u1 with both a u1-only turn and the combined [u1, u2] turn
+        client_hdr = {"X-Aura-Client": "a" * 32}
+        sess_res = c.post(
+            "/sessions",
+            json={
+                "id": "sess-s2",
+                "drawing_id": u1,
+                "project_id": "proj-s2",
+                "title": "Doors check",
+                "turns": [
+                    {"id": "t1", "question": "this floor?", "response": ans_u1},
+                    {"id": "t2", "question": "all floors?", "response": ans_both},
+                ],
+            },
+            headers=client_hdr,
+        )
+        assert sess_res.status_code in (200, 201), sess_res.text
+
+        # 6. Delete upload u2!
+        deleted = c.delete(f"/drawings/{u2}", headers={"x-delete-token": tok2})
+        assert deleted.status_code == 204
+
+        # Combined answer is gone (404 on CSV); u1-only answer survives (200 on CSV)
+        assert c.get(f"/answers/{both_ans_id}/evidence.csv").status_code == 404
+        assert c.get(f"/answers/{u1_ans_id}/evidence.csv").status_code == 200
+
+        # No row in answers, answer_cache, turns, check_cache, or chat_sessions still contains u2 or u2-door-*
+        for table, col in [
+            ("answers", "response"),
+            ("answer_cache", "response"),
+            ("turns", "response"),
+            ("chat_sessions", "body"),
+        ]:
+            rows = svc.store._q(f"SELECT {col} AS payload FROM {table} WHERE {col} IS NOT NULL")
+            for row in rows:
+                payload = row["payload"]
+                assert u2 not in payload, f"{table} leaked deleted sheet {u2}"
+                assert "u2-door-" not in payload, f"{table} leaked items from deleted sheet {u2}"
+
+        # In-memory AnswerCache has neither ckey nor any entry referencing u2
+        assert svc.answers.get(ckey) is None
+        for k, v in svc.answers._d.items():
+            blob = json.dumps([k, v])
+            assert u2 not in blob and "u2-door-" not in blob
+
+        # Conversation conv_id kept turn 1 (u1-only) and dropped turn 2 ([u1, u2])
+        conv = c.get(f"/conversations/{conv_id}").json()
+        assert len(conv["turns"]) == 1
+        assert conv["turns"][0]["response"]["answer"]["value"] == 3
+
+        # Mirrored browser session kept turn 1 (u1-only) and redacted turn 2 ([u1, u2])
+        sessions = c.get("/sessions", params={"drawing_id": u1}, headers=client_hdr).json()["sessions"]
+        assert len(sessions) == 1
+        assert [t["id"] for t in sessions[0]["turns"]] == ["t1"]
+

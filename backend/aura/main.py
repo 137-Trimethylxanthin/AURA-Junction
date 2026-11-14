@@ -334,7 +334,8 @@ def _building_run(s: Services, request: Request, drawing_id: str, question: str,
         return None
     building.validate_plan(plan)
     from aura import pipeline
-    return functools.partial(building.run, plan=plan, base_run=pipeline.run, persist=pipeline._persist)
+    persist = functools.partial(building.persist_answer, plan=plan)
+    return functools.partial(building.run, plan=plan, base_run=pipeline.run, persist=persist)
 
 
 def _same_project(s: Services, did_a: str, did_b: str) -> bool:
@@ -387,6 +388,8 @@ def create_app(
         writer = Writer(settings.db_path, volume_commit=volume.commit if volume else None,
                         commit_every_s=settings.volume_commit_every_s)
         await writer.start()
+        if "sheet_ids" not in {r["name"] for r in store._q("PRAGMA table_info(answers)")}:
+            await writer.execute("ALTER TABLE answers ADD COLUMN sheet_ids TEXT")
         reqlog = RequestLogFile(settings.logs_dir)
 
         def sink(rec: RequestRecord) -> None:
@@ -456,7 +459,7 @@ def create_app(
 
         def materialised(did: str) -> None:  # the drawing file changed: nothing cached may outlive it
             registry.evict(did)
-            app.state.svc.answers.drop_drawing(did)
+            _drop_cached_sheet(app.state.svc.answers, did)
             app.state.svc.checks.forget_drawing(did)
 
         drawing_store.on_materialised = materialised
@@ -1161,28 +1164,130 @@ async def _sse(gen) -> AsyncIterator[bytes]:
             yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
+def _drop_cached_sheet(answers: AnswerCache, drawing_id: str) -> None:
+    """Remove every in-memory cached answer whose own drawing, scope or body includes `drawing_id`."""
+    from aura import building
+
+    answers.drop_drawing(drawing_id)
+    for k, v in list(answers._d.items()):
+        d_id, _q, k_scope, *_ = answers._parse_key(k)
+        in_scope = isinstance(k_scope, dict) and drawing_id in (k_scope.get("drawing_ids") or [])
+        if d_id == drawing_id or in_scope or building.response_contains_sheet(v, drawing_id):
+            answers._d.pop(k, None)
+            answers._t.pop(k, None)
+            answers._q.pop(k, None)
+
+
 async def _remove_single_upload(s: Services, drawing_id: str) -> None:
+    from aura import building
+
     s.registry.evict(drawing_id)
     if s.agent is not None:
         await s.agent.evict_drawing(drawing_id)
     d = s.settings.uploads_dir / drawing_id
     if d.is_dir() and d.parent == s.settings.uploads_dir:
         await asyncio.to_thread(shutil.rmtree, d, True)
+    _drop_cached_sheet(s.answers, drawing_id)
+    s.checks.forget_drawing(drawing_id)
+
     w = s.writer
-    await w.execute("DELETE FROM drawings WHERE id=?", (drawing_id,))  # type: ignore[union-attr]
+    if w is None:
+        return
+    # Drain queued fire-and-forget writes (answers, answer_cache, check_cache) before scanning/deleting.
+    await w.flush()
+    await w.execute("DELETE FROM drawings WHERE id=?", (drawing_id,))
     # Everything derived from the upload goes with it: answers, conversations, turns, caches.
-    await w.execute("DELETE FROM answers WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    await w.execute(  # type: ignore[union-attr]
+    await w.execute("DELETE FROM answers WHERE drawing_id=?", (drawing_id,))
+    await w.execute(
         "DELETE FROM turns WHERE conversation_id IN "
         "(SELECT id FROM conversations WHERE drawing_id=?)", (drawing_id,))
-    await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    await w.execute("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    await w.execute("DELETE FROM answer_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    # Saved chat sessions on the upload (aura/sessions.py) go too; the table exists once sessions ran.
-    if s.store is not None and s.store._q(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_sessions'"):
-        await w.execute("DELETE FROM chat_sessions WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
-    s.answers.drop_drawing(drawing_id)
+    await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))
+    await w.execute("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))
+    await w.execute("DELETE FROM answer_cache WHERE drawing_id=?", (drawing_id,))
+
+    if s.store is not None:
+        pat = f"%{drawing_id}%"
+        has_sheet_col = "sheet_ids" in {r["name"] for r in s.store._q("PRAGMA table_info(answers)")}
+        ans_rows = (
+            s.store._q(
+                "SELECT id, response, sheet_ids FROM answers WHERE sheet_ids LIKE ? OR response LIKE ?",
+                (pat, pat),
+            )
+            if has_sheet_col
+            else s.store._q(
+                "SELECT id, response, NULL AS sheet_ids FROM answers WHERE response LIKE ?",
+                (pat,),
+            )
+        )
+        for row in ans_rows:
+            if building.response_contains_sheet(row["response"], drawing_id, row["sheet_ids"]):
+                await w.execute("DELETE FROM answers WHERE id=?", (row["id"],))
+
+        cache_rows = s.store._q(
+            "SELECT key, response FROM answer_cache WHERE key LIKE ? OR response LIKE ?",
+            (pat, pat),
+        )
+        for crow in cache_rows:
+            d_id, _q, k_scope, *_ = s.answers._parse_key(crow["key"])
+            in_key = d_id == drawing_id or (
+                isinstance(k_scope, dict) and drawing_id in (k_scope.get("drawing_ids") or [])
+            )
+            if in_key or building.response_contains_sheet(crow["response"], drawing_id):
+                await w.execute("DELETE FROM answer_cache WHERE key=?", (crow["key"],))
+
+        turn_rows = s.store._q(
+            "SELECT id, conversation_id, response FROM turns WHERE response IS NOT NULL AND response LIKE ?",
+            (pat,),
+        )
+        touched_convs: set[str] = set()
+        for trow in turn_rows:
+            if building.response_contains_sheet(trow["response"], drawing_id):
+                await w.execute("DELETE FROM turns WHERE id=?", (trow["id"],))
+                touched_convs.add(trow["conversation_id"])
+        for cid in touched_convs:
+            await w.execute(
+                "DELETE FROM conversations WHERE id=? AND NOT EXISTS "
+                "(SELECT 1 FROM turns WHERE conversation_id=?)",
+                (cid, cid),
+            )
+
+        # Saved chat sessions on the upload (aura/sessions.py) or containing combined turns with it.
+        if s.store._q("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_sessions'"):
+            await w.execute("DELETE FROM chat_sessions WHERE drawing_id=?", (drawing_id,))
+            sess_rows = s.store._q(
+                "SELECT client_id, id, body FROM chat_sessions WHERE body LIKE ?",
+                (pat,),
+            )
+            for srow in sess_rows:
+                try:
+                    sbody = json.loads(srow["body"])
+                except ValueError:
+                    continue
+                if isinstance(sbody, dict) and isinstance(sbody.get("turns"), list):
+                    kept = [
+                        t
+                        for t in sbody["turns"]
+                        if not building.turn_contains_sheet(t, drawing_id)
+                    ]
+                    if len(kept) != len(sbody["turns"]):
+                        if not kept:
+                            await w.execute(
+                                "DELETE FROM chat_sessions WHERE client_id=? AND id=?",
+                                (srow["client_id"], srow["id"]),
+                            )
+                        else:
+                            sbody["turns"] = kept
+                            await w.execute(
+                                "UPDATE chat_sessions SET body=? WHERE client_id=? AND id=?",
+                                (
+                                    json.dumps(sbody, separators=(",", ":")),
+                                    srow["client_id"],
+                                    srow["id"],
+                                ),
+                            )
+
+    await w.flush()
+    _drop_cached_sheet(s.answers, drawing_id)
     s.checks.forget_drawing(drawing_id)
 
 
