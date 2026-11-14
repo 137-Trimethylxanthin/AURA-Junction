@@ -28,7 +28,7 @@ def build_drawing(model: SwissModel, *, base_url: str | None = None, source: str
         room = {'room_id': r['room_id'], 'num': r['num'], 'name': r['name'] or ''}
         if r['unit']:
             room['unit'] = r['unit']
-        room.update(area_m2=round(area or 0, 2), outdoor=r['outdoor'],
+        room.update(area_m2=None if area is None else round(area, 2), outdoor=r['outdoor'],
                     points=swiss.room_poly_pct(model, r), label_at=swiss.label_at(model, r))
         if r['area'] is None:
             room['area_source'] = 'outline'  # no printed area: the outline's geometric area (probe rule)

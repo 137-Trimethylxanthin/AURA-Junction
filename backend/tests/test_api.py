@@ -255,6 +255,14 @@ def test_gemini_network_failure_never_breaks_a_geometry_answer(tmp_path):
         again = ask(c, "How many washbasins are drawn on this floor plan?")
         assert boom.calls == 2 and again["route"] != "cache" and "check" not in again
         assert "not retried" in next(n for n in again["trace"] if n["id"] == "check")["body"]
+        third = ask(c, "How many washbasins are drawn on this floor plan?")
+        assert third["route"] != "cache" and boom.calls == 2  # not cached without its check
+        # After the pause the check is tried again.
+        svc = c.app.state.svc
+        for k in svc.check_failures:
+            svc.check_failures[k] -= 601
+        ask(c, "How many washbasins are drawn on this floor plan?")
+        assert boom.calls == 3
 
 
 def test_cached_answer_does_not_replay_live_check_cost(live_client):
@@ -554,3 +562,34 @@ def test_deploy_refuses_public_salt_and_implicit_seed(monkeypatch):
         _check_deploy_settings(Settings(AURA_IP_SALT="s3cret"))
     monkeypatch.setenv("AURA_BUDGET_SEED", "230")
     _check_deploy_settings(Settings(AURA_IP_SALT="s3cret"))
+
+
+def test_unknown_room_area_travels_as_null_and_is_never_summed(tmp_path):
+    """N1: a room with no known area is area_m2: null, included: false, left out of the sum,
+    and the summary says so; never 0."""
+    import json
+
+    from aura import tools
+    from aura.config import Settings
+    from aura.main import create_app
+    from tests.conftest import FRONTEND_DRAWING
+
+    raw = json.loads(FRONTEND_DRAWING.read_text())
+    room = next(r for r in raw["rooms"] if r["room_id"] == "3.05")
+    full = ask_total = None
+    room["area_m2"] = None
+    src = tmp_path / "d.json"
+    src.write_text(json.dumps(raw))
+    d = tools.load_file(src)
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild")
+    with TestClient(create_app(s, extra_drawings=[d], use_gemini=False)) as c:
+        b = c.post("/ask", json={"drawing_id": d.id, "question": "What is the total net floor "
+                                 "area of apartment A?"}).json()
+        no_nulls(b)
+        row = next(r for r in b["evidence"]["rooms"] if r["room_id"] == "3.05")
+        assert row["area_m2"] is None and row["included"] is False
+        full = sum(r["area_m2"] for r in b["evidence"]["rooms"] if r["included"])
+        assert b["answer"]["value"] == pytest.approx(full)
+        assert "without a printed area left out" in json.dumps(b["trace"])
+        ask_total = c.get(f"/answers/{b['answer_id']}/evidence.csv")
+    assert full and ask_total is not None

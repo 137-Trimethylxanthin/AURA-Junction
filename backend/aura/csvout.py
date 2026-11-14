@@ -34,7 +34,8 @@ def evidence_csv(response: dict, rooms_by_id: dict[str, dict] | None = None) -> 
         room = rooms_by_id.get(r["room_id"], {})
         w.writerow([safe(x) for x in (
             "room", f"room-{r['room_id']}", "room", r["room_id"], room.get("name", ""),
-            room.get("unit", ""), "", "", "", "", "yes" if r["included"] else "no", r["area_m2"],
+            room.get("unit", ""), "", "", "", "", "yes" if r["included"] else "no",
+            "" if r.get("area_m2") is None else r["area_m2"],
             "yes" if r.get("edited") else "", "", "")])
     w.writerow([])
     summary = (f"{ans.get('value')} {ans.get('subject') or ans.get('unit') or ''}".strip()

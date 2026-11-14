@@ -34,7 +34,11 @@ RULES = ('shared_outline_once',    # P1: two room numbers on one outline: its ar
          'garden_patio_outdoor',   # P2: Garten/Patio (jardin, giardino) are outdoor like balconies
          'wintergarten_outdoor',   # P2b: measured separately, see ADOPTED
          'fixture_mark_smallest')  # P3: a basin/WC mark belongs to the smallest rectangle around it
-ADOPTED = ('shared_outline_once', 'garden_patio_outdoor')
+# Wintergarten: +11/0. On its 5 drawings it is labelled like that drawing's balconies (outline only
+# where they have no printed area; printed where they are printed), and the gold equals the sum
+# minus exactly its outline (e.g. 205.61 - 19.32 = 186.29 vs gold 186.30). Fixture marks: +7/-1; the one loss is a WC drawn as two
+# nested rectangles around the same marks, which the gold counts twice (one physical WC).
+ADOPTED = RULES
 ACTIVE_RULES: set[str] = set(ADOPTED)
 GARDEN = re.compile(r'(?<!winter)garten|patio|jardin|giardino', re.IGNORECASE)
 WINTERGARDEN = re.compile(r'wintergarten|jardin d.hiver|giardino d.inverno', re.IGNORECASE)
@@ -595,7 +599,7 @@ def answer(model: SwissModel, family: str, scope: dict | None = None,
             letters = sorted(model.applabel)
             rooms = [r for r in model.rooms if r['unit'] in letters]
         n = len(letters) if (letters or scope.get('kind', 'floor') != 'floor') else len(model.units)
-        ev = [{'room_id': r['room_id'], 'included': True, 'area_m2': _room_area(r, ov)[0] or 0} for r in rooms]
+        ev = [{'room_id': r['room_id'], 'included': True, 'area_m2': _room_area(r, ov)[0]} for r in rooms]
         return {'result_id': rid, 'family': family, 'scope': scope,
                     'answer': {'kind': 'count', 'value': n, 'subject': 'apartment'}, 'value': n, 'numbers': [n],
                     'evidence': {'boxes': [], 'rooms': ev},
@@ -608,7 +612,7 @@ def answer(model: SwissModel, family: str, scope: dict | None = None,
 
     if family == 'room':
         n = len(rooms)
-        ev = [{'room_id': r['room_id'], 'included': True, 'area_m2': _room_area(r, ov)[0] or 0} for r in rooms]
+        ev = [{'room_id': r['room_id'], 'included': True, 'area_m2': _room_area(r, ov)[0]} for r in rooms]
         return {'result_id': rid, 'family': family, 'scope': scope,
                     'answer': {'kind': 'count', 'value': n, 'subject': 'room'}, 'value': n, 'numbers': [n],
                     'evidence': {'boxes': [], 'rooms': ev},
@@ -637,7 +641,7 @@ def answer(model: SwissModel, family: str, scope: dict | None = None,
                 a = 0  # listed but excluded: an unknown area is never summed as 0 m² (never seen in the dataset)
             inc = not (drop_outdoor and r['outdoor']) and not unknown and not twin
             shared += twin and not unknown and not (drop_outdoor and r['outdoor'])
-            row = {'room_id': r['room_id'], 'included': inc, 'area_m2': round(a, 2)}
+            row = {'room_id': r['room_id'], 'included': inc, 'area_m2': None if unknown else round(a, 2)}
             if edited:
                 row['edited'] = True
             ev.append(row)

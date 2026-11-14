@@ -79,6 +79,14 @@ def ensure_ready(svc: Services, drawing_id: str) -> None:
         raise PipelineError("processing", f"Drawing '{drawing_id}' is {row['status']}.", 409)
 
 
+def with_unknown_areas(out: dict) -> dict:
+    """Contract: an evidence room with no known area carries area_m2: null (never 0, never
+    dropped), included: false. The only null a response may contain."""
+    for room in (out.get("evidence") or {}).get("rooms") or []:
+        room.setdefault("area_m2", None)
+    return out
+
+
 def _tool_events(built: A.Built) -> list[tuple[str, dict]]:
     """tool_call / tool_result pairs for the trace nodes that carry a tool."""
     out: list[tuple[str, dict]] = []
@@ -92,7 +100,8 @@ def _tool_events(built: A.Built) -> list[tuple[str, dict]]:
         out.append(("tool_result", {
             "node_id": node["id"],
             "evidence": {"boxes": [b.model_dump(exclude_none=True) for b in r.boxes] if r else [],
-                         "rooms": [x.model_dump(exclude_none=True) for x in r.rooms] if r else []},
+                         "rooms": [x.model_dump(exclude_none=True) | {"area_m2": x.area_m2}
+                                   for x in r.rooms] if r else []},
             "summary": r.summary if r else "",
         }))
     return out
@@ -330,16 +339,22 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
         image = d.image_path()
         if image is None or not svc.models_usable():
             return None
-        failed_at = svc.check_failures.get(key)
-        if failed_at is not None and time.time() - failed_at < CHECK_RETRY_AFTER_S:
+        def recently_failed() -> bool:
+            t = svc.check_failures.get(key)
+            return t is not None and time.time() - t < CHECK_RETRY_AFTER_S
+
+        if recently_failed():
             stats["check_note"] = "a check of this layer failed a moment ago; not retried yet"
+            stats["no_cache"] = True  # the check-less answer must not stick after the pause
             return None  # M5: a slow or failing check is not re-sent on every ask
         lock = svc.check_locks.setdefault(key, asyncio.Lock())
         async with lock:  # concurrent first asks share one request
             full = svc.checks.get(key, d.dir, subject)
             cached = full is not None
-            if full is None and key in svc.check_failures:
-                return None  # failed while this ask waited for the lock
+            if full is None and recently_failed():  # failed while this ask waited for the lock
+                stats["check_note"] = "a check of this layer failed a moment ago; not retried yet"
+                stats["no_cache"] = True
+                return None
             if full is None:
                 anchors = d.anchors or default_anchors(d.drawing.get("rooms", []), boxes)
                 cm: Meter = stats["check_meter"]
@@ -364,6 +379,7 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
                     return None
                 full["key"] = key
                 svc.checks.put(key, d.id, subject, full)
+                svc.check_failures.pop(key, None)
         svc.check_locks.pop(key, None)  # R3: the result is cached; the lock is not needed again
     vision = d.drawing.get("kind") == "raster"
     sliced = slice_check(full, built.check_ids, image="upload" if vision else "dataset_png")
@@ -494,7 +510,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     body["answer_id"] = "a-" + uuid.uuid4().hex
     body["latency_ms"] = int((time.perf_counter() - t0) * 1000)
     resp = AskResponse.model_validate(body)  # contract gate: fails loudly on a bad body
-    out = resp.model_dump(exclude_none=True)
+    out = with_unknown_areas(resp.model_dump(exclude_none=True))
     _persist(svc, d.id, req.question, out, stats)
     # The agent reads the conversation history, which is not in the cache key: a turn with
     # history is not cached on that route.

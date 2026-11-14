@@ -11,18 +11,28 @@ from aura.budget import ip_hash
 from aura.config import Settings
 
 
-def client_ip(request: Request) -> str | None:
-    """IPv4 as is; IPv6 bucketed by /64 (one subscriber's prefix), so rotating addresses inside
-    it does not reset the per-IP limits (L6)."""
-    host = request.client.host if request.client else None
-    if host and ":" in host:
-        import ipaddress
+def ip_bucket(host: str | None) -> str | None:
+    """The rate-limit bucket of a client address. IPv4 as is; an IPv4-mapped IPv6 address
+    (::ffff:a.b.c.d) as its IPv4 address (same client, same bucket); a real IPv6 address by its
+    /64 (one subscriber's prefix), so rotating inside it does not reset the limits (L6).
+    Anything unparseable shares one conservative bucket."""
+    if not host:
+        return None
+    import ipaddress
 
-        try:
-            return str(ipaddress.ip_network(f"{host}/64", strict=False))
-        except ValueError:
-            return host
-    return host
+    try:
+        ip = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return "invalid"
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
+def client_ip(request: Request) -> str | None:
+    return ip_bucket(request.client.host if request.client else None)
 
 
 def client_ip_hash(request: Request, settings: Settings) -> str | None:

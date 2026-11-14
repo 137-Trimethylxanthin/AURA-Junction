@@ -238,3 +238,30 @@ def test_kill_switch_file_turns_models_off_live(tmp_path, monkeypatch):
     assert models_enabled()
     (tmp_path / "MODELS_OFF").touch()
     assert not models_enabled()
+
+
+def test_a_failing_volume_flush_never_refuses_or_orphans(tmp_path):
+    from aura.budget import Ledger
+    from aura.store import Store, init_db
+
+    db = tmp_path / "a.sqlite3"
+    init_db(db)
+
+    def boom():
+        raise OSError("volume")
+
+    b = Budget(Settings(AURA_BUDGET_SEED=990), ledger=Ledger(db, flush=boom))  # near the cap
+    res = b.reserve("agent", "public", ip_hash="ip1")
+    b.commit(res, model="gemini-3.1-flash-lite", input_tokens=1)
+    assert Store(db).request_counts()[0] == 1
+
+
+def test_ip_buckets_map_ipv4_mapped_and_group_real_ipv6():
+    from aura.netutil import ip_bucket
+
+    assert ip_bucket("::ffff:1.2.3.4") == ip_bucket("1.2.3.4") == "1.2.3.4"
+    assert ip_bucket("::ffff:1.2.3.4") != ip_bucket("::ffff:5.6.7.8")
+    assert ip_bucket("2001:db8:1:2::1") == ip_bucket("2001:db8:1:2:ffff::9")
+    assert ip_bucket("2001:db8:1:2::1") != ip_bucket("2001:db8:1:3::1")
+    assert ip_bucket("not an ip") == ip_bucket("also bad") == "invalid"
+    assert ip_bucket(None) is None

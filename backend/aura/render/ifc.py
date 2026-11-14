@@ -70,7 +70,7 @@ def build_drawing(model: IfcModel, *, base_url: str | None = None, source: str =
         if pts is None:
             continue  # no footprint: the room still counts and sums, it just cannot be lit
         room = {'room_id': r['room_id'], 'num': r['num'], 'name': r['name'],
-                'area_m2': round(r['area'] or 0, 2), 'outdoor': False, 'points': pts,
+                'area_m2': None if r['area'] is None else round(r['area'], 2), 'outdoor': False, 'points': pts,
                 'label_at': ifc.label_at(model, r)}
         if r['area_source'] == 'geometry':
             room['area_source'] = 'outline'

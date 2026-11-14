@@ -95,7 +95,10 @@ class Ledger:
             "INSERT INTO requests(t, day, model, purpose, bucket, ip_hash, status) "
             "VALUES (?,?,?,?,?,?,-1)", (res.t, res.day, "", res.purpose, res.bucket, res.ip_hash))
         if near_cap and self._flush is not None:
-            self._flush()
+            try:
+                self._flush()  # the row is committed locally either way; this is the Volume copy
+            except Exception:
+                logging.getLogger("aura.budget").warning("volume flush failed", exc_info=True)
         return int(cur.lastrowid)
 
     def settle(self, row_id: int, rec: RequestRecord) -> None:

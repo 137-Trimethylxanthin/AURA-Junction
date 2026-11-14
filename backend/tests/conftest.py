@@ -60,7 +60,7 @@ def client(tmp_path):
 
 
 def no_nulls(obj, path="$"):
-    if obj is None:
+    if obj is None and not path.endswith(".area_m2"):  # the one contract null: unknown area
         raise AssertionError(f"null at {path}")
     if isinstance(obj, dict):
         for k, v in obj.items():

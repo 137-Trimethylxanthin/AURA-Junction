@@ -190,7 +190,7 @@ Answer = Annotated[
 class EvidenceRoom(_M):
     room_id: str
     included: bool
-    area_m2: float
+    area_m2: float | None = None  # None: no printed area and no outline (never 0)
     edited: bool | None = None
 
 
@@ -315,7 +315,7 @@ class RoomPoly(_Open):
     num: str
     name: str
     unit: str | None = None
-    area_m2: float
+    area_m2: float | None = None  # None: no printed area and no outline (never 0)
     outdoor: bool
     points: list[tuple[float, float]]
     label_at: tuple[float, float]

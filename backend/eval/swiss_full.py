@@ -120,9 +120,10 @@ def main():
     rules = []
     for rule in swiss.RULES:
         alone = score_all(by_file, (rule,), a.jobs)
-        gain = sum(1 for r in alone if r['ok'] and not ok0[r['line']])
+        gain = [r for r in alone if r['ok'] and not ok0[r['line']]]
         loss = [r for r in alone if not r['ok'] and ok0[r['line']]]
-        rules.append({'rule': rule, 'adopted': rule in swiss.ADOPTED, 'gain': gain, 'loss': len(loss),
+        rules.append({'rule': rule, 'adopted': rule in swiss.ADOPTED, 'gain': len(gain), 'loss': len(loss),
+                      'gained': [{k: v for k, v in r.items() if k not in ('ok', 'nbox')} for r in gain][:5],
                       'lost': [{k: v for k, v in r.items() if k not in ('ok', 'nbox')} for r in loss][:10]})
     rows = score_all(by_file, swiss.ADOPTED, a.jobs)
     secs = time.time() - t0

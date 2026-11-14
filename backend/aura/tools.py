@@ -69,6 +69,12 @@ def scope_text(scope: dict) -> str:
     }[k]
 
 
+def _area(r: dict) -> float | None:
+    """A room's area, or None when it is unknown (never 0)."""
+    a = r.get("area_m2")
+    return None if a is None else float(a)
+
+
 def _rid(drawing_id: str, tool: str, args: dict) -> str:
     key = json.dumps([drawing_id, tool, args], sort_keys=True, ensure_ascii=False)
     return "r-" + hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:12]
@@ -205,17 +211,26 @@ class BundleEngine:
                     o = ov[r["room_id"]]
                     row["area_m2"] = round(o["w_m"] * o["h_m"], 2)
                     row["edited"] = True
+                if row["area_m2"] is None:  # unknown area: listed, never summed as 0
+                    row["included"] = inc = False
                 ev.append(row)
                 if inc:
                     parts.append(row["area_m2"])
             value = round(sum(parts), 2)
-            n_out = len(ev) - len(parts)
+            n_unknown = sum(1 for e in ev if e["area_m2"] is None)
+            n_out = len(ev) - len(parts) - n_unknown
+            if scope.get("kind") == "room" and rooms and ev[0]["area_m2"] is None:
+                return {"answer": {"kind": "abstain", "reason": "unclear_question"},
+                        "value": None, "numbers": [], "evidence": {"boxes": [], "rooms": ev},
+                        "summary": f"Room {rooms[0]['room_id']} has no printed area."}
             if scope.get("kind") == "room" and rooms:
                 r0 = rooms[0]
                 summary = f"Room {r0['room_id']} ({r0['name']}), net area {ev[0]['area_m2']:.2f} m²."
             else:
                 summary = (f"Sum of {len(parts)} net room areas {where} = {value:.2f} m²"
-                           + (f"; {n_out} outdoor left out." if n_out else "."))
+                           + (f"; {n_out} outdoor left out" if n_out else "")
+                           + (f"; {n_unknown} without a printed area left out" if n_unknown else "")
+                           + ".")
             return {"answer": {"kind": "area", "value": value, "unit": "m2"}, "value": value,
                     "numbers": [value, *parts], "evidence": {"boxes": [], "rooms": ev},
                     "summary": summary}
@@ -305,7 +320,7 @@ class IfcEngine:
     def room_list(self, scope: dict | None) -> list[dict]:
         st = self.model.storey
         return [{"room_id": r["room_id"], "name": r["name"], "unit": None,
-                 "area_m2": round(r["area"] or 0, 2), "outdoor": False}
+                 "area_m2": None if r["area"] is None else round(r["area"], 2), "outdoor": False}
                 for r in self.model.rooms if r["storey"] == st]
 
 
@@ -586,7 +601,7 @@ def count_rooms_labelled(d: LoadedDrawing, label: str, scope: dict | None = None
         result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
         kind="count", subject="room", value=n, numbers=[float(n)],
         rooms=[EvidenceRoom(room_id=r["room_id"], included=True,
-                            area_m2=float(r.get("area_m2") or 0)) for r in hits],
+                            area_m2=_area(r)) for r in hits],
         summary=summary, ms=_ms(t0))
 
 
@@ -615,14 +630,14 @@ def list_rooms(d: LoadedDrawing, scope: dict | None = None) -> ToolResult:
     t0 = time.perf_counter()
     rows = d.engine.room_list(scope)
     rooms = [EvidenceRoom(room_id=r["room_id"], included=not r.get("outdoor", False),
-                          area_m2=float(r.get("area_m2") or 0)) for r in rows]
+                          area_m2=_area(r)) for r in rows]
     by_label: dict[str, int] = {}
     for r in rows:
         by_label[r["name"]] = by_label.get(r["name"], 0) + 1
     return ToolResult(
         result_id=_rid(d.id, "list_rooms", {"scope": scope}), tool="list_rooms",
         args={"scope": scope}, kind="rooms", rooms=rooms,
-        numbers=[float(r.get("area_m2") or 0) for r in rows] + [float(len(rows))]
+        numbers=[a for r in rows if (a := _area(r)) is not None] + [float(len(rows))]
                 + [float(v) for v in by_label.values()],
         summary=f"{len(rows)} rooms {where_en(scope)}; by label: "
                 + ", ".join(f"{k} {v}" for k, v in sorted(by_label.items())),
@@ -643,7 +658,7 @@ def scope_to_region(d: LoadedDrawing, rect: dict, label: str = "Area 1") -> Tool
     return ToolResult(
         result_id=_rid(d.id, "scope_to_region", scope), tool="scope_to_region", args=scope,
         kind="rooms",
-        rooms=[EvidenceRoom(room_id=r["room_id"], included=True, area_m2=float(r.get("area_m2") or 0))
+        rooms=[EvidenceRoom(room_id=r["room_id"], included=True, area_m2=_area(r))
                for r in rooms],
         summary=f"{len(rooms)} rooms have their label inside {label}.",
         meta={"scope": scope},

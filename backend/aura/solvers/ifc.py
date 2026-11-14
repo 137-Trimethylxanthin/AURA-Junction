@@ -346,7 +346,8 @@ def answer(model: IfcModel, family: str, scope: dict | None = None) -> dict:
         ev = {'boxes': [], 'rooms': [], 'rows': []}
         how = 'listed by IFC GlobalId (no 2D boxes)'
         if family == 'room':
-            ev['rooms'] = [{'room_id': r['room_id'], 'included': True, 'area_m2': round(r['area'] or 0, 2)}
+            ev['rooms'] = [{'room_id': r['room_id'], 'included': True,
+                            'area_m2': None if r['area'] is None else round(r['area'], 2)}
                            for r in model.rooms if k == 'model' or r['storey'] == st]
             how = 'shown as room polygons where the storey plan has them'
         elif family in BOX_SUBJECTS and k == 'floor' and st == model.storey and (b := boxes(model, family)):
@@ -383,13 +384,13 @@ def answer(model: IfcModel, family: str, scope: dict | None = None) -> dict:
             return _abstain(rid, family, scope, 'not_supported_yet', f'Scope {k!r} is not used for IFC areas.')
         if k == 'room' and rr[0]['area'] is None:
             return _abstain(rid, family, scope, 'unclear_question', 'The room has no area quantity and no geometry.')
-        parts = [round(r['area'] or 0, 2) for r in rr]
-        value = round(sum(parts), 2)
+        parts = [None if r['area'] is None else round(r['area'], 2) for r in rr]
+        value = round(sum(a for a in parts if a is not None), 2)
         geo = sum(1 for r in rr if r['area_source'] == 'geometry')
         missing = sum(1 for r in rr if r['area'] is None)  # listed, not included, never summed as 0
         return {'result_id': rid, 'family': family, 'scope': scope,
                 'answer': {'kind': 'area', 'value': value, 'unit': 'm2'}, 'value': value,
-                'numbers': [value, len(parts)] + ([geo] if geo else []) + parts,
+                'numbers': [value, len(parts)] + ([geo] if geo else []) + [a for a in parts if a is not None],
                 'evidence': {'boxes': [], 'rows': [],
                              'rooms': [{'room_id': r['room_id'], 'included': r['area'] is not None, 'area_m2': a}
                                        for r, a in zip(rr, parts, strict=True)]},

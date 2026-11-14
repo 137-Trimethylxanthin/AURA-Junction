@@ -358,3 +358,44 @@ def test_ifc_zero_footprint_area_rule():
     assert abs(ifc.answer(m, 'area', {'kind': 'floor', 'storey': 'Level 2'})['value'] - 114.25) <= 0.02 * 114.25
     old = ifc.load(p, geometry=False, probe_rules=True)
     assert ifc.answer(old, 'area', {'kind': 'room', 'room': 'Hallway (A201)', 'storey': 'Level 2'})['value'] == 0
+
+
+# ---- rules added after reading the misses (eval/results/swiss_misses.md) -------------------
+
+RULE_CASES = [  # (rule, dataset line, file): measured gains of each rule in eval/results/swiss.json
+    ("shared_outline_once", 90177, "site1008_bldg2090_floor46975.dxf"),
+    ("garden_patio_outdoor", 114133, "site11680_bldg18228_floor48799.dxf"),
+    ("wintergarten_outdoor", 115805, "site1273_bldg2474_floor11569.dxf"),
+    ("fixture_mark_smallest", 122379, "site544_bldg1242_floor5523.dxf"),
+]
+
+
+@pytest.mark.dataset
+@pytest.mark.parametrize(("rule", "line", "name"), RULE_CASES)
+def test_each_adopted_swiss_rule_fixes_its_named_drawing(rule, line, name, monkeypatch):
+    import importlib.util
+    import json
+
+    from aura.solvers import swiss
+    from tests.conftest import BACKEND, REPO
+
+    data = REPO / "data" / "junction-dataset"
+    with open(data / "questions.jsonl", encoding="utf-8") as f:
+        q = json.loads(next(x for i, x in enumerate(f, 1) if i == line))
+    spec = importlib.util.spec_from_file_location("swiss_full", BACKEND / "eval" / "swiss_full.py")
+    ev = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ev)
+    _fam, sf, scope = ev.route(q["question"])
+    path = data / q["path"].replace(".pdf", ".dxf")
+    assert path.name == name and rule in swiss.ADOPTED
+
+    def value(rules):
+        monkeypatch.setattr(swiss, "ACTIVE_RULES", set(rules))
+        return swiss.answer(swiss.load(path), sf, scope)["value"]
+
+    gold = q["answer"]
+    def ok(v):
+        return v == gold if q["type"] == "count" else abs(v - gold) <= 0.02 * abs(gold)
+
+    assert ok(value(swiss.ADOPTED))
+    assert not ok(value(set(swiss.ADOPTED) - {rule}))

@@ -34,6 +34,18 @@ def usd(x: float, dp: int = 4) -> str:
     return f'${math.floor(x * f + 1e-9) / f:.{dp}f}'
 
 
+def rules_caveat(sw: dict) -> str:
+    """The rules added after reading the misses, with the original-rule figure next to the new one."""
+    pr = sw.get('probe_rules_reproduced')
+    if not pr or pr['correct'] == sw['correct']:
+        return ''
+    adopted = [r for r in sw.get('rules', []) if r['adopted']]
+    gain, loss = sw['correct'] - pr['correct'], sum(r['loss'] for r in adopted)
+    return (f" {len(adopted)} rules were added after reading the misses on this same set, so this is not a held-out "
+            f"measure; with the original rules: {pr['correct']:,}/{pr['questions']:,} = "
+            f"{pct(pr['correct'], pr['questions'])} (net +{gain}, {loss} answer lost).")
+
+
 def load(p: Path):
     return json.loads(p.read_text(encoding='utf-8')) if p.exists() else None
 
@@ -50,7 +62,8 @@ def facts() -> list[dict]:
             'method': 'DXF layers read with ezdxf and shapely; counts and areas computed in code, no model',
             'measured': sw['measured_at'][:10],
             'caveat': (f'{DEV} Each question also has a German, French or Italian twin asking the same fact; only the '
-                       'English lines were scored. Areas count as correct within 2 %, as in the dataset.')})
+                       'English lines were scored. Areas count as correct within 2 %, as in the dataset.'
+                       + rules_caveat(sw))})
     lib, idx = load(DRAWINGS / 'library.json'), load(DRAWINGS / 'index.json')
     if lib and idx:
         ids = {d['id'] for d in lib['drawings']}

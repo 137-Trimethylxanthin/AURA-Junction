@@ -439,13 +439,14 @@ def test_child_drops_secrets_and_refuses_oversized_models(monkeypatch):
     """M4 + H1: the parse child keeps no secret env vars; a DXF with thousands of doors is
     refused in the child instead of reaching the web process."""
     import os
+    from unittest import mock
 
     from aura import parse_worker
 
-    monkeypatch.setenv("GEMINI_API_KEY", "x")
     monkeypatch.setattr(parse_worker.resource, "setrlimit", lambda *a: None)  # not in-process
-    parse_worker._limits()
-    assert "GEMINI_API_KEY" not in os.environ and "PATH" in os.environ
+    with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}):  # restored afterwards
+        parse_worker._limits()
+        assert "GEMINI_API_KEY" not in os.environ and "PATH" in os.environ
 
 
 def test_dxf_with_too_many_objects_is_refused_in_the_child(tmp_path, monkeypatch):

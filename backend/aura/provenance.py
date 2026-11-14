@@ -171,7 +171,8 @@ def allowed_numbers(results: Iterable[ToolResult], extra_text: str = "") -> set[
         if isinstance(r.value, int | float):
             allowed.add(float(r.value))
         for room in r.rooms:
-            allowed.add(float(room.area_m2))
+            if room.area_m2 is not None:
+                allowed.add(float(room.area_m2))
             allowed.update(numbers_in(room.room_id))
         for row in r.meta.get("rooms") or []:
             allowed.update(numbers_in(str(row.get("room_id", ""))))
