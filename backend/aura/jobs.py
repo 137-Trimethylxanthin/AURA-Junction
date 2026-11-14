@@ -46,6 +46,61 @@ class Jobs:
             "UPDATE drawings SET status=?, progress=?, error=? WHERE id=?",
             (status, progress, error, drawing_id))
 
+    async def _register_pdf_bundle(self, drawing_id: str, meta: dict, ctx: dict, res: dict) -> None:
+        """Persist sibling PDF floor drawings + auto-matched ProjectBundle before ready."""
+        import json
+
+        project = res.get("project")
+        siblings = res.get("siblings") or []
+        if not project and not siblings:
+            return
+        now = time.time()
+        del_hash = ctx.get("delete_token_hash")
+        exp = ctx.get("expires_at")
+        if project:
+            p0_floor = next(
+                (f for f in project.get("floors", []) if f.get("drawing_id") == drawing_id), None
+            )
+            p0_meta = {
+                **meta,
+                "source_ext": ".pdf",
+                "project_id": project["id"],
+                **({"floor_label": p0_floor["label"], "floor_order": p0_floor["order"]} if p0_floor else {}),
+            }
+            await self.writer.execute(
+                "UPDATE drawings SET meta=? WHERE id=?",
+                (json.dumps(p0_meta), drawing_id),
+            )
+        for sib in siblings:
+            await self.writer.execute(
+                "INSERT OR REPLACE INTO drawings(id, t, kind, status, progress, title, "
+                "delete_token_hash, expires_at, meta) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    sib["id"],
+                    now,
+                    sib.get("kind", "raster"),
+                    "ready",
+                    1.0,
+                    sib["title"],
+                    del_hash,
+                    exp,
+                    json.dumps(sib["meta"]),
+                ),
+            )
+        if project:
+            await self.writer.execute(
+                "INSERT OR REPLACE INTO projects(id, t, title, floors, auto_matched, body) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    project["id"],
+                    now,
+                    project["title"],
+                    json.dumps(project["floors"]),
+                    1 if project.get("auto_matched") else 0,
+                    json.dumps(project),
+                ),
+            )
+
     async def _run(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict,
                    ctx: dict) -> None:
         async with self.sem:
@@ -82,6 +137,7 @@ class Jobs:
                     if err:
                         res = {"ok": False, "error": err}
                 if res.get("ok"):
+                    await self._register_pdf_bundle(drawing_id, meta, ctx, res)
                     await self._set(drawing_id, "ready", 1.0)
                 else:
                     await self._set(drawing_id, "failed", None, str(res.get("error"))[:300])

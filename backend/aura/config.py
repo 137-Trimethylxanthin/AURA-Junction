@@ -10,7 +10,7 @@ import json
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -67,6 +67,14 @@ class Settings(BaseSettings):
 
     decision_model: str = Field(default="gemini-decision-1", alias="AURA_DECISION_MODEL")
     agent_model: str = Field(default="gemini-3.1-flash-lite", alias="AURA_AGENT_MODEL")
+
+    answerer: Literal["hybrid", "agent", "exact"] = Field(
+        default="hybrid", alias="AURA_ANSWERER"
+    )
+    sidecar_url: str | None = Field(default=None, alias="AURA_SIDECAR_URL")
+    sidecar_token_file: Path | None = Field(default=None, alias="AURA_SIDECAR_TOKEN_FILE")
+    agent_runs_per_ip_hour: int = Field(default=3, alias="AURA_AGENT_RUNS_PER_IP_HOUR")
+    agent_runs_per_day: int = Field(default=15, alias="AURA_AGENT_RUNS_PER_DAY")
 
     turn_deadline_s: float = Field(default=60.0, alias="AURA_TURN_DEADLINE_S")
     volume_commit_every_s: float = Field(default=60.0, alias="AURA_VOLUME_COMMIT_S")

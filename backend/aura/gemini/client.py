@@ -171,7 +171,7 @@ class Transport(Protocol):
 
 
 class HttpTransport:
-    def __init__(self, api_key: str, timeout_s: float = 30.0):
+    def __init__(self, api_key: str, timeout_s: float = 120.0):
         if os.environ.get("PYTEST_CURRENT_TEST") and not live_allowed():
             raise RuntimeError("Live Gemini calls are disabled in tests (set AURA_LIVE=1).")
         self._key = api_key

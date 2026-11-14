@@ -94,6 +94,11 @@ Generated from `backend/aura/config.py` by `backend/scripts/env_table.py --write
 | `AURA_BUDGET_TZ` | backend env | `Europe/Helsinki` | Time zone of the daily cap |
 | `AURA_DECISION_MODEL` | backend env | `gemini-decision-1` | Model for the Decisions API (checks, question choice) |
 | `AURA_AGENT_MODEL` | backend env | `gemini-3.1-flash-lite` | Model for the function-calling agent and /rewrite |
+| `AURA_ANSWERER` | backend env | `hybrid` | Answer routing mode (`hybrid`, `agent`, or `exact`) |
+| `AURA_SIDECAR_URL` | backend env |  | Base URL of the isolated deep-agent sidecar (`agent-service`) |
+| `AURA_SIDECAR_TOKEN_FILE` | backend env |  | Path to the shared bearer token file for `agent-service` |
+| `AURA_AGENT_RUNS_PER_IP_HOUR` | backend env | `3` | Deep-agent sidecar runs per client IP per hour (presenter exempt) |
+| `AURA_AGENT_RUNS_PER_DAY` | backend env | `15` | Public deep-agent sidecar runs per Europe/Helsinki day |
 | `AURA_TURN_DEADLINE_S` | backend env | `60` | Deadline of one /ask or /chat turn (s) |
 | `AURA_VOLUME_COMMIT_S` | backend env | `60` | Modal Volume commit interval (s) |
 | `AURA_CLEANUP_S` | backend env | `3600` | Interval of the expiry sweep (s) |

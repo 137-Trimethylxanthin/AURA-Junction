@@ -36,7 +36,7 @@ def test_mcp_tools_in_memory(tmp_path):
                 assert a["answer"]["value"] == 12 and a["calls"] == 0
                 await svc.writer.flush()
                 csv = (await m.call_tool("evidence_csv_for", {"answer_id": a["answer_id"]})).data
-                assert csv.startswith("kind,id,subject") and "win-01" in csv
+                assert csv.lstrip("\ufeff").startswith("kind,id,subject") and "win-01" in csv
 
         c.portal.call(go)
 

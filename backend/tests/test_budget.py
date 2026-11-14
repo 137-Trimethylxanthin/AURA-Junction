@@ -314,3 +314,103 @@ def test_admin_models_switch_needs_the_presenter_and_works_live(tmp_path, monkey
         assert r.json()["models"] is False and not models_enabled()
         r = c.post("/admin/models", json={"on": True}, headers={"x-aura-presenter": "pres"})
         assert r.json()["models"] is True and models_enabled()
+
+
+def test_weighted_slots_and_record_external_and_agent_run_caps(tmp_path):
+    import sqlite3
+    import time as _t
+
+    from aura.budget import Ledger, cost_usd
+    from aura.store import Store, init_db
+
+    # Gemini 4 sourced prices & default upper bound
+    assert cost_usd("gemini-4-argon", 1_000_000, 100_000) == pytest.approx(3.0)
+    assert cost_usd("gemini-4-carbon", 1_000_000, 100_000) == pytest.approx(3.0)
+    assert cost_usd("gemini-3.8-flash", 1_000_000, 100_000) == pytest.approx(1.125)
+    assert cost_usd("unknown-future-model", 1_000_000, 100_000) == pytest.approx(3.0)
+
+    db = tmp_path / "ext.sqlite3"
+    init_db(db)
+    s = Settings(
+        AURA_BUDGET_SEED=10,
+        AURA_EVENT_CAP=100,
+        AURA_DAILY_CAP=80,
+        AURA_AGENT_RUNS_PER_IP_HOUR=2,
+        AURA_AGENT_RUNS_PER_DAY=3,
+    )
+    b = Budget(s, ledger=Ledger(db))
+    # Weighted 40-slot reservation atomically blocks concurrent overshoot
+    r1 = b.reserve("agent_run", "public", ip_hash="ip1", slots=40)
+    r2 = b.reserve("agent_run", "public", ip_hash="ip1", slots=40)
+    assert b.event_used() == 90  # 10 seed + 40 + 40
+    # 3rd 40-slot reservation would exceed daily_cap (80) and event_cap (100)
+    with pytest.raises(BudgetError) as exc:
+        b.reserve("agent_run", "public", ip_hash="ip2", slots=40)
+    assert exc.value.code == "budget_exhausted"
+
+    # Settle r1 with actual 16 requests -> frees 24 unused slots, writes 1 agent_run + 15 agent_step
+    rec = b.record_external(
+        r1, model="gemini-4-argon", n_requests=16, input_tokens=100_000, output_tokens=5_000
+    )
+    assert rec.cost_usd == pytest.approx(0.25)
+    assert b.event_used() == 10 + 16 + 40
+    b.release(r2)
+    assert b.event_used() == 26
+
+    con = sqlite3.connect(db)
+    assert con.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
+    assert con.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 16
+    assert con.execute("SELECT COUNT(*) FROM requests WHERE purpose='agent_run'").fetchone()[0] == 1
+    assert con.execute("SELECT COUNT(*) FROM requests WHERE purpose='agent_step'").fetchone()[0] == 15
+    assert con.execute("SELECT SUM(cost_usd) FROM requests").fetchone()[0] == pytest.approx(0.25)
+    con.close()
+
+    # Restart persistence: Store.recent_agent_runs counts 1 agent_run (not 16 steps!)
+    store = Store(db)
+    by_ip, today_runs = store.recent_agent_runs(_t.time(), b.day())
+    assert len(by_ip["ip1"]) == 1 and today_runs == 1
+
+    # Per-IP agent_run cap (2/hour) enforced, presenter exempt, daily agent_run cap (3/day) enforced
+    r3 = b.reserve("agent_run", "public", ip_hash="ip1", slots=10)
+    b.record_external(r3, model="gemini-4-argon", n_requests=5)
+    with pytest.raises(BudgetError) as exc2:
+        b.reserve("agent_run", "public", ip_hash="ip1", slots=10)
+    assert exc2.value.code == "rate_limited"
+    r4 = b.reserve("agent_run", "public", ip_hash="ip1", presenter=True, slots=10)
+    b.record_external(r4, model="gemini-4-argon", n_requests=5)
+    with pytest.raises(BudgetError) as exc3:
+        b.reserve("agent_run", "public", ip_hash="ip2", presenter=True, slots=10)
+    assert exc3.value.code == "budget_exhausted"
+
+
+def test_sqlite_answer_cache_persists_across_restarts(tmp_path):
+    import asyncio
+
+    from aura.cache import AnswerCache, answer_key
+    from aura.store import Store, init_db
+    from aura.writer import Writer
+
+    db = tmp_path / "cache.sqlite3"
+    init_db(db)
+    store = Store(db)
+
+    async def go():
+        writer = Writer(db)
+        await writer.start()
+        try:
+            c1 = AnswerCache(store=store, writer=writer)
+            k = answer_key("swiss-46639", "Show all north windows", None, None, None, True) + "|agent|m"
+            c1.put(k, {"answer": {"kind": "count", "value": 4, "subject": "window"}},
+                   drawing_id="swiss-46639", question="Show all north windows")
+            await writer.flush()
+        finally:
+            await writer.stop()
+
+        # Brand new AnswerCache over SQLite store recovers both get(k) and entries_for_drawing!
+        c2 = AnswerCache(store=store)
+        hit = c2.get(k)
+        assert hit is not None and hit["answer"]["value"] == 4
+        entries = c2.entries_for_drawing("swiss-46639", scope=None, overrides=None, models_on=True)
+        assert entries == [(k, "Show all north windows")]
+
+    asyncio.run(go())

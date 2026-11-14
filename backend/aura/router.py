@@ -128,7 +128,96 @@ NOT_ON_DRAWING: list[tuple[str, re.Pattern[str]]] = [
     ("material", S(r"material|matériau|materiaali|rakenne|baustoff|materiale")),
 ]
 LENGTH = S(r"length|lengths|longueur|pituus|länge|lunghezza|perimeter|périmètre|umfang|"
-           r"volume|volumen|tilavuus|volum")
+           r"volume|volumen|tilavuus|volum|width|widths|wide|narrow|largeur|étroit|leveys|"
+           r"kapea|breite|breit|schmal|larghezza")
+
+LOCATE = S(
+    r"show|highlight|mark|find|locate|point out|where (?:is|are)|"
+    r"montre\w*|affiche\w*|surlign\w*|où (?:est|sont)|"
+    r"näytä|korosta|missä (?:on|ovat)|etsi|"
+    r"zeig\w*|markier\w*|wo (?:ist|sind)|"
+    r"mostra\w*|dove (?:è|sono)"
+)
+
+STAIR_ESCALATE = re.compile(
+    rf"(?<!{_LD})(?:stairs?|staircases?|stairwells?|escaliers?|portaat|porras|porraskäytäv\w*|"
+    rf"treppen?|treppenhäuser|treppenhaus|vano scala)(?!{_LD})|"
+    r"\bleads?\s+to\b|\bwhere\s+do(?:es)?\b.*\blead\b|\boù\s+mène|\bmihin\b.*\bjohta|\bwohin\s+führ",
+    re.IGNORECASE,
+)
+
+DEICTIC_SIMILARITY = re.compile(
+    r"\b(?:like this|like that|like these|similar to|same as this|spots?\s+like|symbols?\s+like|"
+    r"these spots|what is this|what['’]s this|where else|other ones|same symbol|same icon)\b|"
+    rf"(?<!{_LD})(?:comme ça|comme ceci|similaire\w*|semblable\w*|"
+    r"tällaisi[aä]|tämän kaltaisi\w*|samanlaisi[aä]|mikä tämä|"
+    rf"wie diese[rsnm]?|solche\w*|ähnlich\w*|was ist das)(?!{_LD})",
+    re.IGNORECASE,
+)
+
+_INCLUSIVE_PAREN = re.compile(
+    r"\([^)]*\b(?:together|zusammen|confondues?|insieme|yhteensä|both|alle)\b[^)]*\)",
+    re.IGNORECASE,
+)
+
+COLOR_CUE = re.compile(
+    rf"(?<!{_LD})(?:colors?|colours?|color[- ]?cod\w*|colour[- ]?cod\w*|"
+    r"different\s+colou?rs?|colou?r\s+by|en\s+couleurs?|couleurs?\s+différent\w*|"
+    r"eri\s+väreillä|väritä|värikood\w*|farbig\w*|verschiedene[rn]?\s+farben|färb\w*)(?!{_LD})",
+    re.IGNORECASE,
+)
+
+FOLLOWUP_CUE = re.compile(
+    r"\b(?:only|show only|just the|filter|exclude|without|instead|now show|"
+    r"by apartment|by type|by room|group them|group by|these|those|them|"
+    r"seulement|uniquement|sans|ceux|celles|vain|ilman|näistä|näitä|nur|ohne|diese[rn]?)\b",
+    re.IGNORECASE,
+)
+
+_FOLLOWUP_SUBJECT_PREFIX = re.compile(
+    r"^\s*(?:and|what about|how about|same(?: for)?|et|und|ja|entä|e|ed|plus|also|then)\b",
+    re.IGNORECASE,
+)
+
+_QUOTED_SPAN = re.compile(r"['\"«„][^'\"»“]{1,60}['\"»“]")
+
+QUALIFIER_GUARD = re.compile(
+    r"(?:(?<![\w-])|(?<=_))(?:"
+    # Door/window subtypes & accessibility
+    r"double|single|sliding|pocket|folding|revolving|hinged|french\s+doors?|"
+    r"exterior|external|outer|interior|internal|inner|entrance|entry|front\s+doors?|back\s+doors?|"
+    r"accessible|wheelchair|handicap\w*|barrier[- ]free|wider|narrower|swing\w*|inward|outward|"
+    r"porte\s+double|portes?\s+doubles?|portes?\s+couliss\w*|portes?\s+ext\w*|portes?\s+int\w*|"
+    r"pariov\w*|liukuov\w*|ulko-?ov\w*|sisäov\w*|esteet\w*|"
+    r"doppeltür\w*|schiebetür\w*|außentür\w*|aussentür\w*|innentür\w*|haustür\w*|barrierefrei\w*|"
+    # Filter, restriction & threshold/comparison cues (EN/FR/FI/DE)
+    r"only|just|except|without|exclude|excluding|filter\w*|matching|whose|having|with\s+an?|"
+    r"where(?!\s+(?:is|are)\b)|"
+    r"higher|more\s+than|less\s+than|fewer\s+than|greater\s+than|smaller\s+than|larger\s+than|bigger\s+than|"
+    r"at\s+least|at\s+most|above|below|over|under|minimum|maximum|between|"
+    r"seulement|uniquement|sauf|supérieur\w*|inférieur\w*|au\s+moins|au\s+plus|plus\s+de|moins\s+de|"
+    r"vain|ilman|suurempi\w*|pienempi\w*|vähintään|enintään|yli\s+\d|alle\s+\d|"
+    r"nur|außer|ausser|größer\w*|grösser\w*|kleiner\w*|höher\w*|niedriger\w*|mindestens|höchstens|"
+    r"mehr\s+als|weniger\s+als|über\s+\d|unter\s+\d|zwischen\s+\d|"
+    # Compass, facade & positional qualifiers (EN/FR/FI/DE)
+    r"north(?:ern)?|south(?:ern)?|east(?:ern)?|west(?:ern)?|"
+    r"north[- ]facing|south[- ]facing|east[- ]facing|west[- ]facing|"
+    r"nord|sud|ouest|"
+    r"pohjoinen|pohjois\w*|etelä\w*|itä(?:ikkun\w*|ov\w*|puol\w*|siv\w*|julki\w*|inen|än)?|länsi\w*|läntinen|"
+    r"norden|süden|osten|westen|nord(?:seite|fassade|fenster|tür\w*)|süd(?:seite|fassade|fenster|tür\w*)|"
+    r"ost(?:seite|fassade|fenster|tür\w*)|west(?:seite|fassade|fenster|tür\w*)|"
+    r"facades?|façades?|julki\w+|fassaden?|"
+    r"left|right|top|bottom|upper|lower|corner|gauche|droite|haut|bas|coin|"
+    r"vasen\w*|oikea\w*|ylä(?:puol\w*|osa\w*|reun\w*)|ala(?:puol\w*|osa\w*|reun\w*)|kulma\w*|"
+    r"links|rechts|oben|unten|ecke"
+    rf")(?!{_LD})|"
+    # French 'est' only in directional contexts (never matching verb 'est' = 'is')
+    r"(?:\borienté\w*\s+(?:à\s+l['’])?est\b|\bcôté\s+est\b|\bfa[çc]ade\s+est\b|\bà\s+l['’]est\b|\bvers\s+l['’]est\b)|"
+    # Explicit dimensional & area thresholds (note: Python 3 treats '²'/'³' as \w, so never rely on \b after ²!)
+    r"(?<!\d)\d+(?:[.,]\d+)?\s*(?:m[²³23]|cm[²³23]?|mm[²³23]?|sqm\b|sq\.?\s*m\b|ft[²³23]?|m(?![a-zA-Z0-9_²³]))|"
+    r"(?:[<>]=?|[≥≤])\s*\d+",
+    re.IGNORECASE,
+)
 
 SUBJECTS: list[tuple[str, re.Pattern[str]]] = [
     ("window", S(r"windows?|fenêtres?|fenetres?|ikkun|fenster|finestr")),
@@ -349,21 +438,42 @@ def _scope(text: str, ctx: DrawingCtx | None) -> dict | None:
     return None
 
 
-SELECTOR = S(r"which|most|fewest|least|largest|smallest|biggest|more than|less than|fewer than|"
-             r"at least|at most|quel(?:les?|s)?\b(?!\s+(?:est|sont))|lequel|laquelle|le plus|la plus|les plus|welche[rsn]?|"
-             r"meisten|wenigsten|grösste[rn]?|größte[rn]?|kleinste[rn]?|mehr als|mindestens|mikä(?!\s+on\b)|"
-             r"mitkä(?!\s+ovat\b)|missä|eniten|vähiten|suurin|pienin|enemmän kuin|vähintään|quale|quali|"
+SELECTOR = S(r"which|most|fewest|least|largest|smallest|biggest|widest|narrowest|longest|shortest|"
+             r"more than|less than|fewer than|"
+             r"at least|at most|quel(?:les?|s)?\b(?!\s+(?:est|sont))|lequel|laquelle|"
+             r"le plus|la plus|les plus|plus large|plus étroit|welche[rsn]?|"
+             r"meisten|wenigsten|grösste[rn]?|größte[rn]?|kleinste[rn]?|breiteste[rn]?|schmalste[rn]?|"
+             r"mehr als|mindestens|mikä(?!\s+on\b)|"
+             r"mitkä(?!\s+ovat\b)|missä(?!\s+(?:on|ovat)\b)|eniten|vähiten|suurin|pienin|levein|kapein|"
+             r"enemmän kuin|vähintään|quale|quali|"
              r"il più|la più|di più|almeno")
 ROOMS_WITH = S(r"(?:rooms?|bedrooms?|pièces?|chambres?|zimmer|räume|huonee?t?)\s+(?:that\s+|which\s+)?"
                r"(?:with|have|has|having|contain\w*|avec|ayant|mit|joissa|jossa)")
 
 
 def _counts_apartments(s: str) -> bool:
-    """Apartments are what is COUNTED ("how many flats…"), not just the scope ("…in this
-    flat?"): the apartment word must follow the count cue within two words."""
-    c = COUNT.search(s)
-    a = APARTMENT.search(s, c.end()) if c else None
-    return bool(a) and len(s[c.end():a.start()].split()) <= 2
+    """Apartments are what is COUNTED/SHOWN ("how many flats…", "show apartments"), not just the
+    scope ("…in this flat?"): the apartment word must follow the count/locate cue within 3 words."""
+    for cue_rx in (COUNT, LOCATE):
+        c = cue_rx.search(s)
+        a = APARTMENT.search(s, c.end()) if c else None
+        if a and len(s[c.end():a.start()].split()) <= 3:
+            return True
+    return False
+
+
+def is_followup_message(text: str, routed: Routed | None = None) -> bool:
+    """True when `text` looks like an elliptical refinement/color/filter follow-up to a prior turn."""
+    s = unicodedata.normalize("NFC", text or "")
+    if COLOR_CUE.search(s) or FOLLOWUP_CUE.search(s):
+        return True
+    if routed is not None and "qualifier_guard" in routed.matched:
+        has_explicit_noun = any(rx.search(s) for _, rx in SUBJECTS) or bool(
+            ROOM_WORD.search(s) or APARTMENT.search(s) or AREA.search(s)
+        )
+        if not has_explicit_noun:
+            return True
+    return False
 
 
 def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
@@ -392,17 +502,22 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     # A template answers only a question it accounts for whole: a selector or superlative
     # ("which bedroom has the most windows?") or a "rooms with/that have X" clause is NOT
     # "count X"; it goes to the model step (or abstains when models are off).
+    if DEICTIC_SIMILARITY.search(s):
+        return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["deictic_similarity"])
     if SELECTOR.search(s) or (ROOMS_WITH.search(s) and not LABELLED.search(s)):
         return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["needs_model"])
 
     is_area = bool(AREA.search(s))
     is_count = bool(COUNT.search(s))
+    is_locate = bool(LOCATE.search(s))
     subject = None
+    subject_rx: re.Pattern[str] | None = None
     scope_text = s
     for subj, rx in SUBJECTS:
         m = rx.search(s)
         if m:
             subject = subj
+            subject_rx = rx
             # "vasche da bagno" is a bathtub, not the label "Bagno": scope from the rest.
             scope_text = s[: m.start()] + " " + s[m.end():]
             break
@@ -415,21 +530,61 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
         return Routed("count", lang, signal, subject="room", scope=scope,
                       matched=["count", "label"])
 
-    if subject and not (is_area and not is_count):
+    # Stairs and connectivity ("show all stairs and where they lead") escalate to deep_agent,
+    # while preserving explicit room-id area queries ("room 1.01 ('Treppenhaus')") handled below.
+    if STAIR_ESCALATE.search(s) and not (scope and scope["kind"] == "room"):
+        return Routed("unknown", lang, signal, scope=scope, matched=["stair_escalate"])
+
+    # Subtype, dimensional, area-threshold, filter, compass & positional qualifiers ("double doors",
+    # "north windows", "things with a 30m² area or higher") must never collapse into unadorned counts/areas.
+    # Exception: naming a single explicit room ID ("the bedroom on the top right, the 3.05 one, how big is it")
+    # asks for that one room's area unless a numeric threshold/filter cue is also present.
+    s_qual = _QUOTED_SPAN.sub(" ", _INCLUSIVE_PAREN.sub(" ", _EXCLUSION.sub(" ", s)))
+    single_room_area = bool(
+        is_area
+        and scope
+        and scope.get("kind") == "room"
+        and not re.search(
+            r"(?<!\d)\d+(?:[.,]\d+)?\s*(?:m[²³23]|cm[²³23]?|mm[²³23]?|sqm\b|sq\.?\s*m\b|ft[²³23]?|m(?![a-zA-Z0-9_²³]))|"
+            r"(?:[<>]=?|[≥≤])\s*\d+|\b(?:only|higher|more\s+than|less\s+than|at\s+least|at\s+most|above|below|over|under)\b",
+            s_qual,
+            re.IGNORECASE,
+        )
+    )
+    if QUALIFIER_GUARD.search(s_qual) and not single_room_area:
+        return Routed("unknown", lang, signal, scope=scope, matched=["qualifier_guard"])
+
+    has_color = bool(COLOR_CUE.search(s))
+    extra_match = ["color_cue"] if has_color else []
+
+    is_bare_subject = bool(
+        subject_rx is not None
+        and re.fullmatch(rf"\s*(?:{subject_rx.pattern}){_L}*\s*\??\s*", s, re.IGNORECASE)
+    )
+    is_followup_subject = bool(
+        subject is not None
+        and _FOLLOWUP_SUBJECT_PREFIX.search(s)
+        and len(s.split()) <= 6
+        and not FOLLOWUP_CUE.search(s)
+    )
+    if subject and (is_count or is_locate or is_bare_subject or is_followup_subject) and not (is_area and not is_count):
+        if has_color:
+            return Routed("unknown", lang, signal, scope=scope, matched=["color_cue", subject])
         return Routed("count", lang, signal, subject=subject, scope=scope, matched=["count", subject])
     if is_area:
-        return Routed("area", lang, signal, scope=scope, matched=["area"])
+        return Routed("area", lang, signal, scope=scope, matched=["area", *extra_match])
 
-    if is_count and _counts_apartments(s) and not (scope and scope["kind"] == "unit"):
+    if (is_count or is_locate) and _counts_apartments(s) and not (scope and scope["kind"] == "unit"):
         return Routed("count", lang, signal, subject="apartment", scope=None,
-                      matched=["count", "apartment"])
-    if scope and scope["kind"] == "label" and (is_count or ROOM_WORD.search(s)):
+                      matched=["count", "apartment", *extra_match])
+    if scope and scope["kind"] == "label" and (is_count or is_locate or ROOM_WORD.search(s)):
         return Routed("count", lang, signal, subject="room", scope=scope,
-                      matched=["count", "label"])
-    if is_count and ROOM_WORD.search(s):
-        return Routed("count", lang, signal, subject="room", scope=scope, matched=["count", "room"])
+                      matched=["count", "label", *extra_match])
+    if (is_count or (is_locate and has_color)) and ROOM_WORD.search(s):
+        return Routed("count", lang, signal, subject="room", scope=scope,
+                      matched=["count", "room", *extra_match])
 
-    return Routed("unknown", lang, signal, scope=scope, matched=[])
+    return Routed("unknown", lang, signal, scope=scope, matched=extra_match)
 
 
 WHERE_TO_FIND = {

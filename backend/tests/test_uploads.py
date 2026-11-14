@@ -76,11 +76,27 @@ def test_sniff_by_magic_bytes():
     assert uploads.sniff(b"  0\nSECTION\n  2\nHEADER\n") == "dxf"
     assert uploads.sniff(b"999\nmade by x\n0\r\nSECTION\r\n") == "dxf"
     assert uploads.sniff(b"AutoCAD Binary DXF\r\n\x1a\x00rest") == "dxf"
+    assert uploads.sniff(b"%PDF-1.7\n1 0 obj\n") == "pdf"
+    assert uploads.sniff(b"ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\n") == "ifc"
     assert uploads.sniff(b"AC1032\x00\x00") == "dwg"
     assert uploads.sniff(b"PK\x03\x04....") == "zip"
     assert uploads.sniff(b"MZ\x90\x00") is None
     assert uploads.sniff(tiny_png()) == "png"
     assert uploads.image_size(png_header(20000, 20000), "png") == (20000, 20000)
+
+
+def test_pdf_and_ifc_validate_public_and_size_caps():
+    assert uploads.BODY_CAP == 65 * MB
+    assert uploads.validate(b"%PDF-1.7\n1 0 obj\n", 10 * MB, presenter_ok=False) == "pdf"
+    with pytest.raises(uploads.UploadError) as exc_pdf:
+        uploads.validate(b"%PDF-1.7\n1 0 obj\n", 41 * MB, presenter_ok=False)
+    assert exc_pdf.value.status == 413 and exc_pdf.value.code == "too_large"
+
+    ifc_head = b"ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC2X3'));\nENDSEC;\nDATA;\n"
+    assert uploads.validate(ifc_head, 55 * MB, presenter_ok=False) == "ifc"
+    with pytest.raises(uploads.UploadError) as exc_ifc:
+        uploads.validate(ifc_head, 61 * MB, presenter_ok=False)
+    assert exc_ifc.value.status == 413 and exc_ifc.value.code == "too_large"
 
 
 def test_exe_renamed_dxf_is_415(client):
@@ -230,7 +246,7 @@ def test_csv_escapes_formula_labels(tmp_path):
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
         text = r.text
         assert "'=HYPERLINK(" in text and ',=HYPERLINK(' not in text
-        assert text.splitlines()[0].startswith("kind,id,subject")
+        assert text.lstrip("\ufeff").splitlines()[0].startswith("kind,id,subject")
         assert "139.34" in text
         assert c.get("/answers/nope/evidence.csv").status_code == 404
 
