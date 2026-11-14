@@ -215,7 +215,9 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
                 "id": pid,
                 "title": base_title[:200],
                 "floors": floors,
-                "auto_matched": True,
+                # Not a guess from names: the storeys of one IFC model (like the pages of one upload), so the
+                # client keeps them as a building instead of dropping them with name-matched bundles.
+                "auto_matched": False,
             })
             bundles.append(pb)
             seen_ids.add(pid)
