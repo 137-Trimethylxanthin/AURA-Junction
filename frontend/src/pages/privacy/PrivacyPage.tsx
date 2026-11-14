@@ -1,9 +1,10 @@
-import { PageFrame, useTitle } from "@/pages/landing/chrome"
+import { useTitle } from "@/hooks/use-title"
+import { PageFrame } from "@/pages/landing/chrome"
 import { ISSUES_URL } from "@/pages/landing/links"
 import { ProsePage, ProseSection } from "@/pages/landing/Prose"
 
 export default function PrivacyPage() {
-  useTitle("Privacy · AURA")
+  useTitle("Privacy")
   return (
     <PageFrame>
       <ProsePage
@@ -43,9 +44,12 @@ export default function PrivacyPage() {
               numbers, apartment letters, room areas and printed text.
             </li>
             <li>
-              Image uploads (PNG, JPG) are open only with a presenter link; PDFs
-              are not accepted. Those images are sent to the Google Gemini API to detect and check
-              items, and again with any question our routing cannot match.
+              DXF, IFC and PDF uploads are open; image-only uploads (PNG, JPG,
+              WebP) use a presenter link. Routine CAD and IFC takeoffs are
+              computed by code on our server. PDFs, images, and open-ended
+              questions our deterministic router cannot solve are analysed inside
+              an isolated container sandbox using the Google Gemini API, with
+              every model call and cost shown.
             </li>
           </ul>
         </ProseSection>

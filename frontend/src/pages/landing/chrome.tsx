@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react"
+import type { ReactNode } from "react"
 import { Link } from "react-router"
 import { ArrowRightIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -6,16 +6,6 @@ import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { APP_ROUTE, ISSUES_URL, REPO_URL } from "./links"
 import "./landing.css"
-
-export function useTitle(title: string) {
-  useEffect(() => {
-    const prev = document.title
-    document.title = title
-    return () => {
-      document.title = prev
-    }
-  }, [title])
-}
 
 /** The AURA mark: a two-room plan outline, the right room filled in the evidence colour. */
 export function AuraMark({ className }: { className?: string }) {

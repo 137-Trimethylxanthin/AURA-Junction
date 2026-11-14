@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { useReducedMotion } from "motion/react"
 import { RotateCcwIcon, Undo2Icon } from "lucide-react"
 import { bundledDrawing } from "@/data/drawing"
 import { deriveAnswer, type Toggles } from "@/lib/answer"
@@ -50,6 +51,7 @@ function useStageWidth() {
 }
 
 export function HeroDemo() {
+  const reduce = useReducedMotion()
   const [rejected, setRejected] = useState<Record<string, boolean>>({})
   const [history, setHistory] = useState<string[]>([])
   const [hot, setHot] = useState<string | null>(null)
@@ -152,7 +154,7 @@ export function HeroDemo() {
                   top: `${b.y}%`,
                   width: `${b.w}%`,
                   height: `${b.h}%`,
-                  animationDelay: `${BOX_START + i * BOX_STEP}ms`,
+                  animationDelay: reduce ? undefined : `${BOX_START + i * BOX_STEP}ms`,
                 }}
                 className={cn(
                   "plan-evidence-in absolute min-h-2.5 min-w-2.5 rounded-[3px] border-2 p-0 outline-none",
@@ -185,7 +187,7 @@ export function HeroDemo() {
                     style={{
                       left: `calc(${at.x}% + ${at.dx}px)`,
                       top: `calc(${at.y}% + ${at.dy}px)`,
-                      animationDelay: `${BOX_START + i * BOX_STEP}ms`,
+                      animationDelay: reduce ? undefined : `${BOX_START + i * BOX_STEP}ms`,
                     }}
                   >
                     <span
