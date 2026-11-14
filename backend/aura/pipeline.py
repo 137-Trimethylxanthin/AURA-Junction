@@ -1218,7 +1218,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                             yield ev
                         return
             except (BudgetError, GeminiError, TimeoutError) as e:
-                log.warning("hybrid decision gate skipped (%s); escalating to sidecar agent", e or "timeout")
+                log.warning("decision gate skipped (%s); continuing with the tool steps", e or "timeout")
 
         # 4b. Tool-step answerer: fixed read-only tools over the indexed drawing, a few model calls, no generated code.
         #     Returns None when it cannot answer; only then does the turn go to the sidecar agent.

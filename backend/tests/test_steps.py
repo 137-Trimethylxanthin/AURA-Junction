@@ -358,10 +358,42 @@ async def test_store_estimates_label_the_answer_never_cad_geometry(d):
     rooms, st1, _ = await ask(sd, [[("list_rooms", {"min_area_m2": 15, "finish_as": "list"})]])
     assert validated(rooms, st1)["method"] == "pdf_vector"
     doors, st2, _ = await ask(sd, [[("list_rooms", {"room_type": "bathroom"}),
-                                    ("list_openings", {"kind": "door", "rooms": "s1", "min_width_m": 0.9,
-                                                       "finish_as": "count"})]])
+                                    ("list_openings", {"kind": "door", "rooms": "s1", "finish_as": "count"})]])
     body = validated(doors, st2)
     assert body["method"] == "vision" and "estimate" in body["explanation"]
+
+
+async def test_width_filter_abstains_when_widths_are_not_measured(d):
+    """Model-detected doors carry no measured width: a width filter is not answered with a guess."""
+    built, _, client = await ask(store_doc(d), [[("rooms_containing", {"kind": "door", "min_width_m": 0.9,
+                                                                      "finish_as": "list"})],
+                                               [("finish", {"set": "none", "answer": "list"})]])
+    assert built is None
+    replies = [p["functionResponse"]["response"] for c in client.sent[1]["contents"] for p in c["parts"]
+               if "functionResponse" in p]
+    assert "not measured" in replies[0]["error"]
+
+
+def test_door_width_is_the_clear_opening_not_the_padded_box(d):
+    """Swiss boxes are the door footprint plus 0.08 m on each side; the width is the footprint."""
+    from aura.solvers.swiss import PAD
+
+    tb = steps.Toolbox(d)
+    mx, my = d.drawing["m_per_pct_x"], d.drawing["m_per_pct_y"]
+    for b in tb.boxes["door"]:
+        assert tb.width_m[b.id] == round(max(b.w * mx, b.h * my) - 2 * PAD["door"], 2)
+
+
+async def test_rooms_with_a_door_wider_than_answers_with_rooms(d):
+    tb = steps.Toolbox(d)
+    want = sorted({r for b in tb.boxes["door"] if tb.width_m[b.id] > 0.85 for r in tb.box_rooms[b.id]})
+    built, stats, _ = await ask(d, [[("rooms_containing", {"kind": "door", "min_width_m": 0.85,
+                                                           "finish_as": "list"})]],
+                                question="which rooms have a door wider than 0.85 m")
+    body = validated(built, stats)
+    assert body["answer"]["subject"] == "room"
+    assert sorted(r["room_id"] for r in body["evidence"]["rooms"]) == want
+    assert "clear width > 0.85 m" in body["explanation"]
 
 
 async def test_no_metric_scale_skips_the_geometric_tools(d, monkeypatch):
@@ -370,3 +402,24 @@ async def test_no_metric_scale_skips_the_geometric_tools(d, monkeypatch):
     flagged = tools.LoadedDrawing(id=d.id, dir=None, drawing={**d.drawing, "toolbox": False},
                                   engine=d.engine, source="upload")
     assert not steps.has_scale(flagged) and steps.has_scale(d)
+
+
+async def test_a_door_set_answers_with_rooms_when_rooms_are_asked(d):
+    tb = steps.Toolbox(d)
+    doors = [b.id for b in tb.boxes["door"] if tb.width_m[b.id] > 0.85]
+    want = sorted({r for i in doors for r in tb.box_rooms[i]})
+    built, stats, _ = await ask(d, [[("list_openings", {"kind": "door", "min_width_m": 0.85,
+                                                        "finish_as": "count"})]],
+                                question="which rooms have a door wider than 0.85 m")
+    body = validated(built, stats)
+    assert body["answer"] == {"kind": "count", "value": len(want), "subject": "room"}
+    assert len(want) <= len(d.drawing["rooms"])
+    assert {b["id"] for b in body["evidence"]["boxes"]} == set(doors)
+
+
+@pytest.mark.parametrize(("q", "rooms"), [
+    ("which rooms have a door wider than 0.92 m", True), ("show me the rooms with toilets", True),
+    ("ok now show only doors that are in rooms that have toilets", False),
+    ("which of them are wider than 0.95 m", False), ("how many doors are wider than 1 m", False)])
+def test_asks_for_rooms(q, rooms):
+    assert steps.asks_for_rooms(q) is rooms

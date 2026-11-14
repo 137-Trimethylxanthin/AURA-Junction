@@ -61,7 +61,8 @@ SYSTEM = (
     "total area, list = which ones): that ends the question in this same turn, so plan the whole "
     "chain at once when you can. Map everyday words to room_type (bedroom, bathroom, kitchen, "
     "living, corridor, storage, outdoor, stairs, wc). 'Toilet' means the fixture kind 'wc' (use "
-    "rooms_containing). For rooms WITHOUT something (no window, no toilet) use rooms_containing "
+    "rooms_containing; rooms that have a door or window wider/narrower than X: rooms_containing with "
+    "kind and min_width_m/max_width_m). For rooms WITHOUT something (no window, no toilet) use rooms_containing "
     "with present=false. Doors or windows that open into, belong to or are in some rooms: make the "
     "room set, then list_openings with rooms=<that set>. Use judge only when the question needs a property no other tool reads. "
     "If the tools cannot answer, call finish with set='none'."
@@ -92,6 +93,10 @@ DECLARATIONS: list[dict] = [
          "kind": {"type": "string", "enum": [*FIXTURES, *OPENINGS]},
          "present": {"type": "boolean"},
          "min_count": {"type": "integer"},
+         "min_width_m": {"type": "number", "description": "door/window only: clear width bound (rooms with "
+                                                         "a door wider than X)."},
+         "max_width_m": {"type": "number"},
+         "min_strict": {"type": "boolean"}, "max_strict": {"type": "boolean"},
          "from": _FROM}, "required": ["kind"]}},
     {"name": "list_openings",
      "description": f"Door or window boxes, optionally only those on the outline of rooms of a set "
@@ -227,6 +232,22 @@ def _box_m(b: Box, mx: float, my: float):
     return sbox(b.x * mx, b.y * my, (b.x + b.w) * mx, (b.y + b.h) * my)
 
 
+def _box_pad(d, subject: str) -> float | None:
+    """Metres the solver added around each object's footprint to draw its box (so the clear width
+    is the box's long side minus twice this). None: widths are not measured (model-detected boxes)."""
+    if (d.drawing.get("evidence_method") or {}).get(subject) not in (None, "cad_geometry", "pdf_vector"):
+        return None
+    if d.drawing.get("kind") == "ifc":
+        from aura.solvers.ifc import BOX_PAD
+
+        return BOX_PAD
+    if d.drawing.get("kind", "cad_dxf") == "cad_dxf":
+        from aura.solvers.swiss import PAD
+
+        return PAD.get(subject, PAD["fixture"])
+    return None
+
+
 def room_type(r: dict) -> str:
     cat, _ = tools._room_category(r.get("name", ""), bool(r.get("outdoor")))
     return cat.removeprefix("cat-") if cat.removeprefix("cat-") in ROOM_TYPES else "other"
@@ -253,12 +274,17 @@ class Toolbox:
                 self.supported.add(s)
                 self.boxes[s] = list(tr.boxes)
         self.box_by_id = {b.id: b for bs in self.boxes.values() for b in bs}
-        self.width_m: dict[str, float] = {}
+        self.width_m: dict[str, float | None] = {}
+        self.width_note: dict[str, str] = {}  # subject -> why its widths are not measured
         self.box_rooms: dict[str, list[str]] = {}
         for s, bs in self.boxes.items():
             for b in bs:
                 g = _box_m(b, mx, my)
-                self.width_m[b.id] = round(max(b.w * mx, b.h * my), 2)
+                pad = _box_pad(d, s)
+                self.width_m[b.id] = None if pad is None else round(max(b.w * mx, b.h * my) - 2 * pad, 2)
+                if pad is None:
+                    self.width_note[s] = (f"the {tools.noun(s, 2)} on this drawing were detected on the page "
+                                          "image, so their widths are not measured")
                 if s in OPENINGS:
                     g = g.buffer(WALL_REACH_M)
                     self.box_rooms[b.id] = [rid for rid, p in self.poly.items() if g.intersects(p)]
@@ -378,6 +404,17 @@ class Session:
     def among(self, ref: Any) -> str:
         return f", among {self.words(ref)}" if ref not in (None, "", "none") else ""
 
+    def as_rooms(self, rs: ResultSet) -> ResultSet:
+        """The rooms on whose outline the boxes of a door/window set sit (a door on a shared wall
+        belongs to both rooms): the answer when the question asks for rooms."""
+        rooms = list(dict.fromkeys(r for i in rs.ids for r in self.tb.box_rooms.get(i, [])))
+        ref = self._ref()
+        out = ResultSet(ref, "rooms_of", {"set": rs.ref}, "rooms", rooms, rs.rule + "; the rooms on each "
+                        f"{tools.noun(rs.subject or 'door', 1)}'s outline", ["room outlines"], len(rs.ids),
+                        witness=list(rs.ids), desc=f"rooms with {rs.desc}")
+        self.sets[ref] = out
+        return out
+
     def _ref(self) -> str:
         self.n += 1
         return f"s{self.n}"
@@ -482,13 +519,14 @@ class Session:
                              "needs them, finish with set='none'")
         present = a.get("present", True) is not False
         k = max(1, int(_num(a.get("min_count")) or 1))
+        lo, lo_s, hi, hi_s = self._widths(a, kind) if kind in OPENINGS else (None, False, None, False)
         pool = self._rooms_of(a.get("from"))
         # A room without windows only makes sense indoors: balconies are open air.
         skip_out = not present and kind == "window"
         witness: list[str] = []
 
         def keep(rid: str) -> str | None:
-            hits = tb.in_room(kind, rid)
+            hits = [i for i in tb.in_room(kind, rid) if not _outside(tb.width_m[i] or 0.0, lo, lo_s, hi, hi_s)]
             if skip_out and tb.rooms[rid].get("outdoor"):
                 return "outdoor space"
             ok = len(hits) >= k if present else not hits
@@ -502,13 +540,42 @@ class Session:
         rule = (f"≥ {k} {tools.noun(kind, k)} {where}" if present else
                 f"no {kind} {where}" + ("; outdoor spaces left out; glazed balcony doors are on the "
                                         "door layer, not windows" if skip_out else ""))
+        wrule, wwords = self._width_words(lo, lo_s, hi, hi_s, bool(a.get("double")))
+        if wrule:
+            rule += f" with {wrule}"
         rs = self._rooms_set(ref, "rooms_containing", a, pool, keep, rule,
                              ["rooms", f"{kind} boxes"], witness)
         rs.witness = witness
-        what = "a " + tools.noun(kind, 1) if kind != "wc" else "a WC (toilet)"
+        what = ("a " + tools.noun(kind, 1) if kind != "wc" else "a WC (toilet)") + (f" {wwords}" if wwords else "")
         rs.desc = ((f"rooms that contain {what}" if k == 1 else f"rooms with at least {k} {tools.noun(kind, k)}")
                    if present else f"rooms with no {tools.noun(kind, 1)}") + self.among(a.get("from"))
         return rs
+
+    def _widths(self, a: dict, kind: str) -> tuple:
+        """(lo, lo_strict, hi, hi_strict) of a width filter; NotIndexed when widths are not measured."""
+        lo, hi = _num(a.get("min_width_m")), _num(a.get("max_width_m"))
+        lo_s = lo is not None and _strict("lo", a.get("min_strict"), self.question)
+        hi_s = hi is not None and _strict("hi", a.get("max_strict"), self.question)
+        if a.get("double") and (lo is None or lo < DOUBLE_DOOR_M):
+            lo, lo_s = DOUBLE_DOOR_M, False  # the double-door rule is inclusive
+        if (lo is not None or hi is not None) and kind in self.tb.width_note:
+            raise NotIndexed(self.tb.width_note[kind] + "; a width question cannot be answered here, "
+                             "finish with set='none'")
+        return lo, lo_s, hi, hi_s
+
+    @staticmethod
+    def _width_words(lo, lo_s, hi, hi_s, double: bool = False) -> tuple[str, str]:
+        """(rule, words) of a width filter, saying which comparison was applied."""
+        rule = " and ".join(x for x in (
+            f"clear width {'>' if lo_s else '≥'} {lo:.2f} m" + (" (double door)" if double else "")
+            if lo is not None else "",
+            f"clear width {'<' if hi_s else '≤'} {hi:.2f} m" if hi is not None else "") if x)
+        words = " and ".join(x for x in (
+            f"at least {DOUBLE_DOOR_M:.2f} m wide (double doors)" if double else
+            (f"wider than {lo:.2f} m" if lo_s else f"at least {lo:.2f} m wide") if lo is not None else "",
+            (f"narrower than {hi:.2f} m" if hi_s else f"at most {hi:.2f} m wide") if hi is not None else "")
+            if x)
+        return rule, words
 
     def t_list_openings(self, ref: str, a: dict) -> ResultSet:
         tb = self.tb
@@ -525,31 +592,20 @@ class Session:
             if src is None or src.kind != "boxes" or src.subject != kind:
                 raise StepError(f"from={a['from']!r} is not a {kind} result set")
             pool = [b for b in pool if b.id in set(src.ids)]
-        lo, hi = _num(a.get("min_width_m")), _num(a.get("max_width_m"))
-        lo_s = lo is not None and _strict("lo", a.get("min_strict"), self.question)
-        hi_s = hi is not None and _strict("hi", a.get("max_strict"), self.question)
-        if a.get("double") and (lo is None or lo < DOUBLE_DOOR_M):
-            lo, lo_s = DOUBLE_DOOR_M, False  # the double-door rule is inclusive
+        lo, lo_s, hi, hi_s = self._widths(a, kind)
         kept, dropped = [], []
         for b in pool:
-            w = tb.width_m[b.id]
+            w = tb.width_m[b.id] or 0.0
             why = ("not on those rooms" if rooms is not None and not rooms & set(tb.box_rooms[b.id]) else
                    f"{w:.2f} m wide" if _outside(w, lo, lo_s, hi, hi_s) else None)
             (dropped.append({"id": b.id, "reason": why}) if why else kept.append(b.id))
         twice = sum(1 for i in kept if tb.box_by_id[i].duplicate_of)
         on = (f"on the outline of {self.words(a['rooms'])}" if a.get("rooms") else
               "in the selected scope" if rooms is not None else "")
-        parts = [on,
-                 f"width {'>' if lo_s else '≥'} {lo:.2f} m" + (" (double door)" if a.get("double") else "")
-                 if lo is not None else "",
-                 f"width {'<' if hi_s else '≤'} {hi:.2f} m" if hi is not None else "",
+        wrule, wwords = self._width_words(lo, lo_s, hi, hi_s, bool(a.get("double")))
+        parts = [on, wrule,
                  f"{twice} drawn twice in the CAD file, both counted as the dataset does" if twice else ""]
-        desc = " ".join(x for x in (
-            tools.noun(kind, 2),
-            f"at least {DOUBLE_DOOR_M:.2f} m wide (double doors)" if a.get("double") else
-            (f"wider than {lo:.2f} m" if lo_s else f"at least {lo:.2f} m wide") if lo is not None else "",
-            (f"narrower than {hi:.2f} m" if hi_s else f"at most {hi:.2f} m wide") if hi is not None else "",
-            on) if x)
+        desc = " ".join(x for x in (tools.noun(kind, 2), wwords, on) if x)
         if a.get("from"):
             desc += f", among {self.words(a['from'])}"
         return ResultSet(ref, "list_openings", a, "boxes", kept, ", ".join(p for p in parts if p) or "all",
@@ -644,7 +700,8 @@ class Session:
                                 if tb.rooms[rid].get("area_m2") is not None else {})}
                             for rid in rs.ids[:MAX_LIST]]
         else:
-            out["items"] = [{"id": i, "width_m": tb.width_m[i], "rooms": tb.box_rooms.get(i, [])}
+            out["items"] = [{"id": i, **({"width_m": tb.width_m[i]} if tb.width_m.get(i) is not None else {}),
+                             "rooms": tb.box_rooms.get(i, [])}
                             for i in rs.ids[:MAX_LIST]]
         return out
 
@@ -995,6 +1052,16 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
     return A.Built(body, [], [], None)
 
 
+_ASKED = re.compile(r"^\W*(?:ok(?:ay)?,?\s+)?(?:now\s+)?(?:which|what|list|show(?:\s+me)?|name|how many)"
+                    r"(?:\s+(?:all|only|the|of\s+(?:them|those|these)))*\s+(\w+)", re.IGNORECASE)
+
+
+def asks_for_rooms(question: str) -> bool:
+    """The noun the question asks for is rooms ('which rooms have a door wider than 0.9 m')."""
+    m = _ASKED.search(question or "")
+    return bool(m) and m.group(1).lower().startswith(("room", "space"))
+
+
 def _empty(rs: ResultSet) -> bool:
     return (rs.sql or {}).get("total", 0) == 0 if rs.kind == "rows" else not rs.ids
 
@@ -1175,6 +1242,8 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
             if fc.name == "finish":
                 ref = str(fc.args.get("set") or "none")
                 rs = sess.sets.get(ref)
+                if rs is not None and rs.kind == "boxes" and asks_for_rooms(question):
+                    rs = sess.as_rooms(rs)
                 if rs is None or (missing and _empty(rs)) or sess.gave_up(rs, fc.args):
                     return None  # 'none', an unknown set, or an empty stand-in for unindexed data
                 stats["route"] = "choice"
@@ -1218,6 +1287,8 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
             replies.append({"functionResponse": {"name": fc.name, "response": sess.payload(rs)}})
             if fc.args.get("finish_as") in ("count", "area", "list"):
                 done = (rs, {"answer": fc.args["finish_as"], "group_by": fc.args.get("group_by")})
+        if done is not None and done[0].kind == "boxes" and asks_for_rooms(question):
+            done = (sess.as_rooms(done[0]), done[1])
         if done is not None and not erred and ((missing and _empty(done[0])) or sess.gave_up(*done)):
             return None
         if done is not None and not erred and done[0].kind == "rows":
