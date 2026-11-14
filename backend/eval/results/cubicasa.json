@@ -187,7 +187,8 @@
    "exact": 3
   },
   "cost_usd_per_image": 0.00054,
-  "latency_s": 1.1
+  "latency_s": 1.1,
+  "served_in_app": "Since 14 Nov: image-only (raster) uploads answer bedroom, kitchen, bathroom, separate WC room, sauna, toilet, sink, shower/bathtub, storey and balcony counts from one Decisions score request per drawing (aura/gemini/score.py), with this evaluation's intro text, question wording and 0-6 levels. Difference from the evaluation: the live request carries only these 10 score questions (the evaluation request also carried door/window and other questions). Doors and windows are never answered by score."
  },
  "gate_G1": {
   "rule": "door and window recall >= 0.8 and exact >= 60 % (n=30)",
@@ -198,5 +199,55 @@
   "status": "in progress",
   "n": 12,
   "note": "paired exploration on 12 CC30 images (2x2 tiles, 20 % overlap); not a new held-out estimate. Fill from gemini-usecases.md section 'Tiled detection, paired test (n=12)' when complete."
+ },
+ "detection_n40": {
+  "run": "Few-shot paired test, baseline arm = frozen CC30 prompt (production pipeline), random.seed(2028)",
+  "source": ".omc/research/gemini/gemini-usecases.md section 'Few-shot detection, paired held-out test (n=40)'",
+  "note": "stratified in the dataset's style mix: 2 colorful, 8 high_quality, 30 high_quality_architectural (75 % architectural sheets)",
+  "door": {
+   "exact": 22,
+   "n": 40,
+   "wilson95": [
+    0.398,
+    0.693
+   ],
+   "within_1": 31
+  },
+  "window": {
+   "exact": 16,
+   "n": 40,
+   "wilson95": [
+    0.263,
+    0.554
+   ],
+   "within_1": 25
+  },
+  "cost_usd_per_image": 0.047,
+  "median_latency_s": 18.5,
+  "few_shot_arm": {
+   "door_exact": 19,
+   "window_exact": 14,
+   "verdict": "no gain (within noise, direction negative); not adopted"
+  }
+ },
+ "detection_pooled": {
+  "n": 70,
+  "door": {
+   "exact": 40,
+   "wilson95": [
+    0.455,
+    0.681
+   ],
+   "within_1": 56
+  },
+  "window": {
+   "exact": 33,
+   "wilson95": [
+    0.359,
+    0.587
+   ],
+   "within_1": 48
+  },
+  "note": "CC30 (n=30) + the n=40 baseline arm: two held-out samples of the same production prompt"
  }
 }

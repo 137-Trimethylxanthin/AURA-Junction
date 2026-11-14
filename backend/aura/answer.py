@@ -348,3 +348,45 @@ def not_supported(question: str, lang: str, scope: dict, tr: ToolResult,
     return abstain(question, lang, scope, "not_supported_yet",
                    f"How many {plural} are drawn {where_en(scope)}", tr.summary,
                    intent_tag=intent_tag, results=[tr])
+
+
+def score_estimate(question: str, lang: str, subject: str, value: int, conf: float,
+                   probs: dict[str, float], measured: dict, cached: bool) -> Built:
+    """A count read by Gemini Decisions from the image: always worded as a model estimate."""
+    word = noun(subject, value)
+    pct = int(conf * 100)
+    body = _base(question, lang, {"kind": "floor"}) | {
+        "answer": {"kind": "count", "value": value, "subject": subject},
+        "evidence": {"boxes": [], "rooms": []},
+        "canonical_en": f"How many {noun(subject, 2)} are on this floor plan",
+        "method": "vision",
+        "estimate": {"confidence": round(conf, 4), "probabilities": probs, "measured": measured},
+        "trace": [
+            question_node(question, lang),
+            intent_node(f"count · {noun(subject, 2)} · whole floor", "router · image"),
+            {"id": "read", "parent": "q", "title": "Read the image", "tag": "Decisions API · score",
+             "body": (f"Gemini Decisions estimated {value} {word} from the image, {pct} % sure"
+                      + (" (cached: 0 model calls)." if cached else ".")),
+             "kind": "model", "confidence": round(conf, 4)},
+            {"id": "answer", "parent": "q", "title": "Answer", "tag": "model estimate",
+             "body": (f"{value} {word} · model estimate, {pct} % sure. Not measured from geometry; "
+                      f"no boxes. At this confidence such answers were right {measured['correct']} "
+                      f"of {measured['n']} times ({measured['source']})."),
+             "kind": "model"},
+        ],
+    }
+    return Built(body, [], [], subject)
+
+
+def score_low_confidence(question: str, lang: str, subject: str, conf: float,
+                         probs: dict[str, float]) -> Built:
+    """Below the gate: no count is stated; the probabilities are shown."""
+    top = ", ".join(f"{k}: {int(v * 100)} %" for k, v in
+                    sorted(probs.items(), key=lambda kv: -kv[1])[:3])
+    b = abstain(question, lang, {"kind": "floor"}, "low_confidence",
+                f"How many {noun(subject, 2)} are on this floor plan",
+                f"Gemini Decisions was only {int(conf * 100)} % sure ({top}); below the 60 % gate "
+                "no count is given.", intent_body=f"count · {noun(subject, 2)} · whole floor",
+                intent_tag="router · image")
+    b.body["estimate"] = {"confidence": round(conf, 4), "probabilities": probs}
+    return b

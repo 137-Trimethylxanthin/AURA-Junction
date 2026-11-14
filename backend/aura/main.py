@@ -587,6 +587,17 @@ def _raster_hook(client: GeminiClient | None):
                                 "output_tokens": r["output_tokens"], "cost_usd": r["cost_usd"],
                                 "latency_ms": r["latency_ms"]}
         dp.write_text(json.dumps(drawing, ensure_ascii=False))
+        # Room and fixture counts: ONE Decisions score request, paid by the uploader (presenter),
+        # so later questions are answered from score.json at 0 calls. Best effort: a failure
+        # here leaves those questions to the ask-time path (also presenter-only).
+        from aura.gemini.score import run_score
+
+        try:
+            sc = await run_score(client, out / "original.png", ip_hash=ctx.get("ip_hash"),
+                                 presenter=ctx.get("presenter", False))
+            (out / "score.json").write_text(json.dumps(sc, ensure_ascii=False))
+        except (BudgetError, GeminiError) as e:
+            log.warning("score counts not run: %s", e)
         return None
 
     return hook

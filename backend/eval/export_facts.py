@@ -124,19 +124,24 @@ def facts() -> list[dict]:
         })
     cc = load(RESULTS / 'cubicasa.json')
     if cc:
-        det = cc['detection']
+        det, n40, pool = cc['detection'], cc['detection_n40'], cc['detection_pooled']
         for subj, label in (('door', 'Doors'), ('window', 'Windows')):
-            d = det[subj]
-            lo, hi = d['wilson95']
+            d, d40, dp = det[subj], n40[subj], pool[subj]
+            lo, hi = dp['wilson95']
             out.append({
                 'id': f'cubicasa-{subj}-exact', 'label': f'{label} counted exactly on scanned plans (model estimate)',
-                'value': pct(d['exact'], d['n']), 'numerator': d['exact'], 'denominator': d['n'], 'n': d['n'], 'n_unit': 'images',
-                'model_calls': 1, 'cost_usd': det['cost_usd_per_image_mean'],
-                'scope': '30 held-out CubiCasa5k plans, 10 per drawing style',
+                'value': pct(dp['exact'], pool['n']), 'numerator': dp['exact'], 'denominator': pool['n'],
+                'n': pool['n'], 'n_unit': 'images', 'model_calls': 1, 'cost_usd': n40['cost_usd_per_image'],
+                'scope': (f"{pool['n']} held-out CubiCasa5k plans in two samples: {d['n']} (10 per drawing style) and "
+                          f"{d40['n']} (in the dataset's style mix, 75 % architectural sheets)"),
                 'method': 'One Gemini detection call per image; count = boxes returned',
                 'measured': cc['measured_at'],
-                'caveat': f"Wilson 95 % interval {lo * 100:.0f}–{hi * 100:.0f} %; within ±1: {d['within_1']}/{d['n']}; "
-                       f"{d['exact_reweighted_to_pool'] * 100:.1f} % when reweighted to the dataset's style mix."})
+                'caveat': (f"Wilson 95 % interval {math.floor(lo * 1000) / 10:.1f}–{math.floor(hi * 1000) / 10:.1f} %; "
+                           f"within ±1: {dp['within_1']}/{pool['n']} ({pct(dp['within_1'], pool['n'], 0)}). "
+                           f"By sample: {d['exact']}/{d['n']} and {d40['exact']}/{d40['n']}. "
+                           f"${n40['cost_usd_per_image']:.3f} per image and {n40['median_latency_s']} s median "
+                           f"(n={d40['n']} run). Few-shot example crops were tested on the n={d40['n']} set and did "
+                           "not help.")})
         s = cc['score_prior']['room_and_fixture_families']
         out.append({
             'id': 'cubicasa-score-confident', 'label': 'Room and fixture counts right when the model is confident',
@@ -145,7 +150,11 @@ def facts() -> list[dict]:
             'scope': f"{s['n']} room and fixture questions on 15 held-out CubiCasa5k plans",
             'method': 'Gemini Decisions score per family; answer only at confidence 0.6 or higher',
             'measured': cc['measured_at'],
-            'caveat': f"Answers {s['accepted']} of {s['n']} ({pct(s['accepted'], s['n'], 0)}); the rest say 'not sure'."})
+            'caveat': (f"Answers {s['accepted']} of {s['n']} ({pct(s['accepted'], s['n'], 0)}); the rest say 'not sure'. "
+                       f"Wilson 95 % interval {s['accepted_correct_wilson95'][0] * 100:.0f}–"
+                       f"{s['accepted_correct_wilson95'][1] * 100:.0f} %. Served in the app for image-only uploads "
+                       "(presenter), always labelled as a model estimate with its confidence; never used for doors or "
+                       "windows.")})
     return out
 
 

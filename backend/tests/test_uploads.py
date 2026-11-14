@@ -493,3 +493,46 @@ def test_parse_child_starts_without_secrets(monkeypatch):
     proc.join(10)
     assert not {"GEMINI_API_KEY", "AURA_PRESENTER_TOKEN", "AURA_IP_SALT"} & set(keys)
     assert set(keys) <= set(parse_worker.KEEP_ENV)
+
+
+def test_raster_room_and_fixture_counts_are_gated_model_estimates(tmp_path):
+    """Decisions score counts on an image-only plan (answers derived from the recorded held-out
+    CubiCasa response): >= 0.6 answers as a model estimate with its confidence and the measured
+    figure; below 0.6 abstains with the probabilities; doors stay with the detector."""
+    from aura.gemini.client import FakeTransport
+    from tests.conftest import FIXTURES, SWISS_IMAGE
+
+    fake = FakeTransport(FIXTURES / "gemini")
+    with TestClient(make_app(tmp_path, transport=fake, AURA_PRESENTER_TOKEN="pres")) as c:
+        did = upload(c, SWISS_IMAGE.read_bytes(), "plan.png",
+                     headers={"x-aura-presenter": "pres"}).json()["drawing_id"]
+        assert wait_status(c, did)["status"] == "ready"
+        sent = len(fake.calls)
+
+        def ask(q, **h):
+            return c.post("/ask", json={"drawing_id": did, "question": q}, headers=h).json()
+
+        s = ask("How many saunas are on this floor plan?")
+        assert s["answer"] == {"kind": "count", "value": 1, "subject": "sauna"}
+        assert s["method"] == "vision" and s["calls"] == 0 and "gold" not in s
+        assert s["estimate"]["confidence"] == pytest.approx(0.9, abs=0.01)
+        assert s["estimate"]["measured"] == {"correct": 68, "n": 74, "source": s["estimate"][
+            "measured"]["source"]} and s["evidence"]["boxes"] == []
+        assert "model estimate, 89 % sure" in next(n for n in s["trace"] if n["id"] == "answer")["body"]
+        low = ask("How many sinks are there?")
+        assert low["answer"] == {"kind": "abstain", "reason": "low_confidence"}
+        assert low["estimate"]["confidence"] < 0.6 and low["estimate"]["probabilities"]
+        assert "value" not in low["answer"]
+        bed = ask("How many bedrooms are there?")  # not in that response: no guess
+        assert bed["answer"]["kind"] == "abstain"
+        assert len(fake.calls) == sent  # all from the upload-time request
+        assert ask("How many doors are drawn on this floor plan?")["answer"]["subject"] == "door"
+        # Ask-time path (no precomputed file): presenter only, then cached per drawing.
+        (tmp_path / "data" / "uploads" / did / "score.json").unlink()
+        c.app.state.svc.answers.clear()
+        anon = ask("How many toilets are drawn here?")
+        assert anon["answer"]["kind"] == "abstain" and anon["calls"] == 0
+        pres = ask("How many toilets are drawn here?", **{"x-aura-presenter": "pres"})
+        assert pres["answer"] == {"kind": "count", "value": 2, "subject": "wc"} and pres["calls"] == 1
+        again = ask("How many kitchens?")
+        assert again["answer"]["value"] == 1 and again["calls"] == 0

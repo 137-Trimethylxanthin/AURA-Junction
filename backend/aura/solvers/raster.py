@@ -26,8 +26,10 @@ SUBJECTS = ('door', 'window')
 PREFIX = {'door': 'door', 'window': 'win'}
 ESTIMATE_NOTE = 'Model estimate: boxes found by Gemini on the image; check them, some may be missing or wrong.'
 # Measured on 30 held-out CubiCasa5k plans (eval/results/cubicasa.json): exact-count rate per subject.
-MEASURED = {'door': {'exact': 18, 'n': 30}, 'window': {'exact': 17, 'n': 30},
-            'source': 'CubiCasa5k held-out n=30, 2026-11-14'}
+# Pooled held-out figures of this exact prompt (CC30 n=30 + the few-shot test's baseline arm n=40;
+# eval/results/cubicasa.json detection_pooled).
+MEASURED = {'door': {'exact': 40, 'n': 70, 'within_1': 56}, 'window': {'exact': 33, 'n': 70, 'within_1': 48},
+            'source': 'CubiCasa5k held-out, two samples pooled (n=30 + n=40), 2026-11-14'}
 
 
 def build_contents(image: bytes, mime_type: str = 'image/png') -> list[dict]:
@@ -126,4 +128,5 @@ def answer(result: dict, family: str, scope: dict | None = None) -> dict:
             'evidence': {'boxes': boxes, 'rooms': []}, 'method': 'vision', 'estimate': True,
             'measured': m,
             'summary': f'About {n} {family}{"s" if n != 1 else ""}: model estimate from {n} boxes found on the image '
-                       f'(exact on {m["exact"]} of {m["n"]} test plans). Check the boxes.'}
+                       f'(exact on {m["exact"]} of {m["n"]} held-out plans, within ±1 on {m["within_1"]}). '
+                       'Check the boxes.'}

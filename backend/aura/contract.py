@@ -14,13 +14,17 @@ CONTRACT_VERSION = "1.1"
 
 Lang = Literal["en", "fr", "fi", "de"]
 LANGS: tuple[str, ...] = ("en", "fr", "fi", "de")
-Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "room", "apartment"]
+Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "room", "apartment",
+                  # 1.1: image-only plans, Decisions score estimates (no boxes)
+                  "bedroom", "kitchen", "bathroom", "wc_room", "sauna", "sink",
+                  "shower_or_bathtub", "storey", "balcony"]
 TextSubject = Literal["label", "fire_rating"]
 BoxSubject = Subject | TextSubject
 BOX_SUBJECTS: tuple[str, ...] = ("window", "door", "washbasin", "wc", "bathtub", "shower")
 Method = Literal["cad_geometry", "ocr", "detector", "vision", "none"]
 TraceKind = Literal["exact", "model", "warn", "info"]
-AbstainReason = Literal["not_on_drawing", "not_supported_yet", "unclear_question"]
+AbstainReason = Literal["not_on_drawing", "not_supported_yet", "unclear_question",
+                        "low_confidence"]  # 1.1: a model estimate below its confidence gate
 ErrorCode = Literal[
     "bad_request",
     "unknown_drawing",
@@ -234,6 +238,21 @@ class Check(_M):
     cached: bool | None = None
 
 
+class Measured(_M):
+    correct: int
+    n: int
+    source: str
+
+
+class Estimate(_M):
+    """A count read by a model from an image: its confidence, the probabilities of each level,
+    and the measured accuracy of answers at that confidence."""
+
+    confidence: float
+    probabilities: dict[str, float] | None = None
+    measured: Measured | None = None
+
+
 class Gold(_M):
     dataset_qid: str
     value: float
@@ -281,6 +300,7 @@ class AskResponse(_M):
     turn_id: str | None = None
     route: Route | None = None
     explanation: str | None = None
+    estimate: Estimate | None = None  # 1.1: a model estimate (image-only plans), never a fact
 
 
 class ErrorBody(_M):

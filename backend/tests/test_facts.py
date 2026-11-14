@@ -17,3 +17,13 @@ def test_dollar_figures_truncate():
     assert usd(0.0040825) == "$0.0040"
     assert usd(0.0448607) == "$0.0448"
     assert usd(0.0012) == "$0.0012"
+
+
+def test_score_measured_figure_matches_the_eval_results():
+    import json
+
+    from aura.gemini.score import MEASURED
+
+    s = json.loads((BACKEND / "eval" / "results" / "cubicasa.json").read_text())["score_prior"]
+    fam = s["room_and_fixture_families"]
+    assert (MEASURED["correct"], MEASURED["n"]) == (fam["accepted_correct"], fam["accepted"])

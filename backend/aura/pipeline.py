@@ -24,6 +24,11 @@ from aura.config import Settings, models_enabled
 from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse, ChatRequest
 from aura.gemini.check import check_key, default_anchors, run_check, slice_check
 from aura.gemini.client import GeminiClient, GeminiError, Meter
+from aura.gemini.score import FAMILIES as SCORE_FAMILIES
+from aura.gemini.score import MEASURED as SCORE_MEASURED
+from aura.gemini.score import MIN_CONFIDENCE as SCORE_MIN_CONFIDENCE
+from aura.gemini.score import family_of as score_family_of
+from aura.gemini.score import run_score
 from aura.gemini.understand import MIN_CONFIDENCE, understand
 from aura.provenance import allowed_numbers, filter_prose
 from aura.router import FIRE_PATTERN, route
@@ -201,6 +206,50 @@ async def _agent(svc: Services, d: tools.LoadedDrawing, question: str, lang: str
     return built
 
 
+async def _score(svc: Services, d: tools.LoadedDrawing, question: str, lang: str, caller: Caller,
+                 stats: dict, family: str) -> A.Built:
+    """Image-only plan, room/fixture count: ONE Decisions score request per drawing (cached),
+    answered only at confidence >= 0.6, always as a model estimate."""
+    subject = SCORE_FAMILIES[family][0]
+    key = f"score:{d.id}"
+    full = svc.checks.get(key)
+    pre = d.dir / "score.json" if d.dir is not None else None
+    if full is None and pre is not None and pre.is_file():  # paid by the uploader at upload time
+        full = json.loads(pre.read_text(encoding="utf-8"))
+    cached = full is not None
+
+    def refuse(look: str) -> A.Built:
+        return A.abstain(question, lang, {"kind": "floor"}, "not_supported_yet",
+                         f"How many {A.noun(subject, 2)} are on this floor plan", look,
+                         intent_body=f"count · {A.noun(subject, 2)} · whole floor",
+                         intent_tag="router · image")
+
+    if full is None:
+        image = d.image_path()
+        if image is None or not svc.models_usable():
+            return refuse("Counting rooms and fixtures on an image needs the model, which is off.")
+        meter: Meter = stats["meter"]
+        before = meter.calls
+        try:
+            async with asyncio.timeout(MODEL_STEP_TIMEOUT_S):
+                full = await run_score(svc.client, image, ip_hash=caller.ip_hash,  # type: ignore[arg-type]
+                                       presenter=caller.presenter, meter=meter)
+        except (BudgetError, GeminiError, TimeoutError) as e:
+            stats["no_cache"] = True
+            sent = meter.calls - before
+            what = f"{sent} request sent, no usable answer" if sent else "skipped"
+            return refuse(f"The image model step was {what}: {e or 'timeout'}.")
+        svc.checks.put(key, d.id, "score", full)
+    fam = full["families"].get(family)
+    if fam is None:
+        return refuse("The model gave no estimate for this.")
+    if fam["confidence"] < SCORE_MIN_CONFIDENCE:
+        return A.score_low_confidence(question, lang, subject, fam["confidence"],
+                                      fam["probabilities"])
+    return A.score_estimate(question, lang, subject, round(fam["score"]), fam["confidence"],
+                            fam["probabilities"], SCORE_MEASURED, cached)
+
+
 async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller: Caller,
                   stats: dict, context: dict | None = None,
                   history: list[dict] | None = None) -> A.Built:
@@ -221,6 +270,8 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
             r.scope = context["scope"] if context["scope"].get("kind") != "region" else None
             r.matched.append("follow-up")
     lang = r.lang if r.lang_signal else (req.lang_hint or "en")
+    if d.drawing.get("kind") == "raster" and (family := score_family_of(question)) is not None:
+        return await _score(svc, d, question, lang, caller, stats, family)
     overrides = [o.model_dump() for o in req.overrides or []]
     req_scope = req.scope.model_dump(exclude_none=True) if req.scope else None
     intent, subject, text_scope, conf = r.intent, r.subject, r.scope, None

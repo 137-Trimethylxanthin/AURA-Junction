@@ -1,0 +1,386 @@
+{
+ "source": "derived",
+ "note": "Answers copied from the recorded held-out CubiCasa evaluation response (score_colorful-11752, Decisions score, the frozen wording) for the 10 room/fixture families; numbers only, no image. The live request sends only these 10 score questions.",
+ "path": "/decisions",
+ "request": {
+  "model": "gemini-decision-1",
+  "input": [
+   {
+    "type": "text",
+    "text": "Finnish apartment floor plan (CubiCasa5k).\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:not-an-image",
+    "mime_type": "image/png",
+    "resolution": "high"
+   }
+  ],
+  "questions": {
+   "bedrooms_score": {
+    "type": "score",
+    "instructions": "How many bedrooms (makuuhuone, usually marked MH) are on this floor plan?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "kitchens_score": {
+    "type": "score",
+    "instructions": "How many kitchens (including kitchenettes, open kitchens and utility kitchens) are on this floor plan?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "bathrooms_score": {
+    "type": "score",
+    "instructions": "How many bathrooms or washrooms (e.g. KH, KPH, PH, PESUH, SH) are on this floor plan, not counting separate WC rooms?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "separate_score": {
+    "type": "score",
+    "instructions": "How many separate WC rooms (toilet rooms marked WC) are on this floor plan?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "saunas_score": {
+    "type": "score",
+    "instructions": "How many saunas are on this floor plan?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "toilet_score": {
+    "type": "score",
+    "instructions": "How many toilet bowls (WC seats) are drawn on this floor plan?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "sinks_score": {
+    "type": "score",
+    "instructions": "How many sinks and wash basins (kitchen and bathroom combined; a double-bowl sink counts as one) are drawn on this floor plan?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "showers_score": {
+    "type": "score",
+    "instructions": "How many showers and bathtubs are drawn on this floor plan in total?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "floors_score": {
+    "type": "score",
+    "instructions": "How many floors (storeys) does this floor plan show?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   "balconies_score": {
+    "type": "score",
+    "instructions": "How many balconies (parveke, including glazed balconies) are on this floor plan?",
+    "criteria": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   }
+  }
+ },
+ "status": 200,
+ "response": {
+  "usage": {
+   "total_tokens": 5719,
+   "total_input_tokens": 5719,
+   "input_tokens_by_modality": [
+    {
+     "modality": "text",
+     "tokens": 4631
+    },
+    {
+     "modality": "image",
+     "tokens": 1088
+    }
+   ],
+   "total_output_tokens": 0
+  },
+  "_meta": {
+   "status": 200,
+   "latency_s": 1.107,
+   "model": "gemini-decision-1",
+   "purpose": "CC30 score counts colorful-11752",
+   "n_questions": 56
+  },
+  "answers": {
+   "bathrooms_score": {
+    "confidence": 0.6248817998709499,
+    "score": 1.4204085752200895,
+    "probabilities": {
+     "4": 0.01133968210337164,
+     "3": 0.05993309358795746,
+     "6": 0.0006511828262470256,
+     "5": 0.0021017632777426544,
+     "2": 0.27797642641279247,
+     "1": 0.6248817998709499,
+     "0": 0.023116051920938966
+    },
+    "legend": {
+     "6": "6",
+     "5": "5",
+     "1": "1",
+     "4": "4",
+     "3": "3",
+     "2": "2",
+     "0": "0"
+    },
+    "type": "score"
+   },
+   "kitchens_score": {
+    "confidence": 0.8626963509900869,
+    "score": 1.1106669091708201,
+    "probabilities": {
+     "4": 0.0031516072763183825,
+     "2": 0.09005418793684646,
+     "6": 0.0005354858607503893,
+     "3": 0.015506690294259122,
+     "1": 0.8626963509900869,
+     "5": 0.0011045534308973962,
+     "0": 0.02695112421084146
+    },
+    "legend": {
+     "0": "0",
+     "6": "6",
+     "2": "2",
+     "5": "5",
+     "4": "4",
+     "1": "1",
+     "3": "3"
+    },
+    "type": "score"
+   },
+   "showers_score": {
+    "confidence": 0.7571100569424897,
+    "score": 1.206706912554654,
+    "probabilities": {
+     "3": 0.03221476854812837,
+     "4": 0.0067512687379841715,
+     "6": 0.000995994519050992,
+     "5": 0.0024359957397930153,
+     "2": 0.15389576460128565,
+     "1": 0.7571100569424897,
+     "0": 0.046596150911268015
+    },
+    "legend": {
+     "3": "3",
+     "1": "1",
+     "4": "4",
+     "6": "6",
+     "5": "5",
+     "2": "2",
+     "0": "0"
+    },
+    "type": "score"
+   },
+   "balconies_score": {
+    "confidence": 0.8982549663432093,
+    "score": 1.0884753650260692,
+    "probabilities": {
+     "1": 0.8982549663432093,
+     "3": 0.011256338758928916,
+     "4": 0.0025331098227205358,
+     "6": 0.0005394320535295113,
+     "0": 0.017385610329425188,
+     "5": 0.0010070884698802967,
+     "2": 0.06902345422230631
+    },
+    "legend": {
+     "0": "0",
+     "2": "2",
+     "3": "3",
+     "4": "4",
+     "1": "1",
+     "5": "5",
+     "6": "6"
+    },
+    "type": "score"
+   },
+   "separate_score": {
+    "confidence": 0.6727226118541332,
+    "score": 1.7887102183191397,
+    "probabilities": {
+     "3": 0.049784276310071686,
+     "6": 0.0005279415111599543,
+     "2": 0.6727226118541332,
+     "1": 0.24509634456927262,
+     "4": 0.009787091868936454,
+     "0": 0.020781772972690037,
+     "5": 0.0012999609137360443
+    },
+    "legend": {
+     "6": "6",
+     "5": "5",
+     "4": "4",
+     "1": "1",
+     "2": "2",
+     "0": "0",
+     "3": "3"
+    },
+    "type": "score"
+   },
+   "sinks_score": {
+    "confidence": 0.35916844787473134,
+    "score": 3.3573351958273734,
+    "probabilities": {
+     "3": 0.35916844787473134,
+     "0": 0.0022880246775485442,
+     "4": 0.287838573617832,
+     "2": 0.16758153692082953,
+     "5": 0.11841951201757467,
+     "1": 0.03740170110931686,
+     "6": 0.027302203782166978
+    },
+    "legend": {
+     "3": "3",
+     "6": "6",
+     "5": "5",
+     "4": "4",
+     "0": "0",
+     "1": "1",
+     "2": "2"
+    },
+    "type": "score"
+   },
+   "floors_score": {
+    "confidence": 0.8764919277170572,
+    "score": 1.10598763972581,
+    "probabilities": {
+     "2": 0.08059400323823047,
+     "5": 0.002008953371469294,
+     "3": 0.01307962363992811,
+     "1": 0.8764919277170572,
+     "0": 0.0234530289806548,
+     "4": 0.0036053552804000215,
+     "6": 0.0007671077722601622
+    },
+    "legend": {
+     "2": "2",
+     "0": "0",
+     "3": "3",
+     "4": "4",
+     "5": "5",
+     "6": "6",
+     "1": "1"
+    },
+    "type": "score"
+   },
+   "saunas_score": {
+    "confidence": 0.8967719383580296,
+    "score": 1.0522536210769162,
+    "probabilities": {
+     "0": 0.03410707488605994,
+     "3": 0.010062052753059492,
+     "4": 0.001997827883285925,
+     "1": 0.8967719383580296,
+     "5": 0.0005540893938028297,
+     "6": 0.0003799331265063813,
+     "2": 0.05612708359925595
+    },
+    "legend": {
+     "0": "0",
+     "5": "5",
+     "2": "2",
+     "6": "6",
+     "3": "3",
+     "1": "1",
+     "4": "4"
+    },
+    "type": "score"
+   },
+   "toilet_score": {
+    "confidence": 0.7803449768626243,
+    "score": 1.9619927590306245,
+    "probabilities": {
+     "2": 0.7803449768626243,
+     "6": 0.0005893985610747828,
+     "5": 0.002055387197680124,
+     "0": 0.003397413384020688,
+     "3": 0.07034326140853094,
+     "4": 0.011063377046288254,
+     "1": 0.132206185539781
+    },
+    "legend": {
+     "1": "1",
+     "6": "6",
+     "5": "5",
+     "2": "2",
+     "3": "3",
+     "4": "4",
+     "0": "0"
+    },
+    "type": "score"
+   }
+  }
+ }
+}

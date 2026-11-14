@@ -174,3 +174,16 @@ def test_labels_that_are_question_words_need_a_cue():
                                                                       "label": "Floor"}
     assert route("How many bedrooms are there?", ctx).scope == {"kind": "label",
                                                                 "label": "Bedroom"}
+
+
+def test_score_families_route_and_never_doors_or_windows():
+    from aura.gemini.score import family_of
+
+    assert family_of("How many saunas are on this floor plan?") == "saunas"
+    assert family_of("How many toilets are drawn here?") == "toilet"
+    assert family_of("How many separate WC rooms are there?") == "separate"
+    assert family_of("How many bedrooms?") == "bedrooms"
+    assert family_of("How many floors does this plan show?") == "floors"
+    assert family_of("How many doors and windows?") is None
+    assert family_of("How many windows are drawn?") is None
+    assert family_of("Is there a sauna?") is None  # not a count question
