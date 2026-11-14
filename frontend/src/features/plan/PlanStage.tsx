@@ -775,6 +775,7 @@ export function PlanStage() {
       {handPan ? (
         <div
           data-hand-pan
+          aria-hidden="true"
           className="absolute inset-0 z-40 cursor-grab touch-none active:cursor-grabbing"
           onPointerDown={onPanDown}
           onPointerMove={onPanMove}
