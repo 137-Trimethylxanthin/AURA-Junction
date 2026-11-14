@@ -288,6 +288,7 @@ export function announce(resp: AskResponse, d: Derived): string {
     const r = resp.answer.reason
     if (r === 'not_on_drawing') return 'Not on this drawing. Nothing guessed.'
     if (r === 'not_supported_yet') return 'Fixtures of this kind are not extracted yet. Nothing guessed.'
+    if (r === 'low_confidence') return 'Not sure enough to say. Nothing stated as a count.'
     return 'The question could not be matched to this drawing.'
   }
   const v = valueParts(resp, d, 'en')

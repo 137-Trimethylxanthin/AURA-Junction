@@ -508,13 +508,17 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
     const title =
       a.reason === 'not_on_drawing'
         ? t(lang, 'not_on_drawing')
-        : a.reason === 'not_supported_yet'
+        : a.reason === 'low_confidence'
+          ? t(lang, 'low_conf_title')
+          : a.reason === 'not_supported_yet'
           ? t(lang, 'not_supported_yet')
           : t(lang, 'unclear_question')
     const body =
       a.reason === 'unclear_question'
         ? t(lang, 'unclear_hint')
-        : [a.where_to_find, t(lang, 'nothing_guessed')].filter(Boolean).join(' ')
+        : a.reason === 'low_confidence'
+          ? t(lang, 'low_conf_body')
+          : [a.where_to_find, t(lang, 'nothing_guessed')].filter(Boolean).join(' ')
     return (
       <CardShell active={active} turnId={turn.id} lang={lang}>
         <div className="flex flex-col gap-1.5" data-abstain={a.reason}>
@@ -524,6 +528,19 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
           <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]" data-abstain-body>
             {body}
           </p>
+          {a.reason === 'low_confidence' && resp.estimate?.probabilities ? (
+            <ul className="num flex flex-col gap-0.5 text-sm" data-estimate-probabilities>
+              {Object.entries(resp.estimate.probabilities)
+                .sort((x, y) => y[1] - x[1])
+                .slice(0, 5)
+                .map(([k, v]) => (
+                  <li key={k} className="flex justify-between gap-3">
+                    <span>{k}</span>
+                    <span>{Math.floor(v * 100)} %</span>
+                  </li>
+                ))}
+            </ul>
+          ) : null}
         </div>
         <Actions turn={turn} active={active} lang={lang} />
         <Feedback turn={turn} lang={lang} />
@@ -548,6 +565,14 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
           </p>
         ) : null}
         <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        {resp.estimate ? (
+          <p className="text-sm text-muted-foreground" data-estimate>
+            {t(lang, 'estimate_sure', { pct: Math.floor(resp.estimate.confidence * 100) })}
+            {resp.estimate.measured
+              ? ` ${t(lang, 'estimate_measured', { correct: resp.estimate.measured.correct, n: resp.estimate.measured.n })}`
+              : ''}
+          </p>
+        ) : null}
         {resp.dropped_items ? (
           <p className="text-sm text-warning" data-dropped-items={resp.dropped_items}>
             {t(lang, 'dropped_n', { n: fmtCount(resp.dropped_items, lang) })}

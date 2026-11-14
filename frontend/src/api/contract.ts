@@ -628,7 +628,7 @@ function isAnswer(v: unknown): v is Answer {
   if (v.kind === 'text') return isStr(v.value) && isOneOf(v.subject, ['fire_rating', 'label'] as const)
   if (v.kind === 'abstain')
     return (
-      isOneOf(v.reason, ['not_on_drawing', 'not_supported_yet', 'unclear_question'] as const) &&
+      isOneOf(v.reason, ['not_on_drawing', 'not_supported_yet', 'unclear_question', 'low_confidence'] as const) &&
       (v.where_to_find === undefined || isStr(v.where_to_find))
     )
   return false

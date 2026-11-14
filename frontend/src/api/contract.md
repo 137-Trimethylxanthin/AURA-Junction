@@ -171,6 +171,9 @@ For any other drawing id, every failure shows an error card.
 | `not_on_drawing` | The drawing cannot answer this kind of question, such as a fire rating, a height or a material. Put a short hint in `where_to_find`, written in the question's language. |
 | `not_supported_yet` | The drawing has the information but we don't extract it yet (e.g. WC, bathtub or shower on a drawing whose file has no such layer). The bundled swiss-46639 now answers all three. |
 | `unclear_question` | Nothing in the question can be matched, or it names a room or apartment that doesn't exist. |
+| `low_confidence` | Raster drawings only: the model estimate was below 0.6. No value is stated; `estimate.probabilities` lists the model's guesses and the UI shows them as percentages. |
+
+**Raster estimates (`estimate`, optional on `AskResponse`).** `{ confidence: number, probabilities?: Record<string, number>, measured?: { correct, n, source } }`. At confidence >= 0.6 the answer is a count with `method: 'vision'`, no boxes and `estimate.measured` (how often such answers were right); the UI labels it a model estimate ("n % sure", confidence truncated, never rounded up) and never as geometry. Below 0.6 the answer abstains with `low_confidence`. New subjects: `bedroom`, `kitchen`, `bathroom`, `wc_room`, `sauna`, `sink`, `shower_or_bathtub`, `storey`, `balcony`. `/ask` and `/chat` send `X-AURA-Presenter` when the browser stores the token.
 
 **How the UI derives the number it displays.** It recomputes the value from the evidence and the user's toggles, so the evidence must add up to `answer.value`.
 

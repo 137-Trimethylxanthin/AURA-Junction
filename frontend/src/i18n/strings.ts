@@ -134,6 +134,10 @@ const en = {
   tokens: '{n} tokens',
   thanks_up: 'Thanks. Marked as correct.',
   thanks_down: 'Thanks. Marked as wrong. Reject the wrong evidence on the plan to fix the number.',
+  low_conf_title: 'Not sure enough to say',
+  low_conf_body: 'Model estimate only; nothing is stated as a count. Most likely:',
+  estimate_sure: 'Model estimate, {pct} % sure. Not measured from geometry; no boxes.',
+  estimate_measured: 'At this confidence such answers were right {correct} of {n} times.',
 }
 
 export type StringKey = keyof typeof en
@@ -259,6 +263,10 @@ const fr: Dict = {
   tokens: '{n} jetons',
   thanks_up: 'Merci. Marqué comme correct.',
   thanks_down: 'Merci. Marqué comme faux. Rejetez les mauvaises preuves sur le plan pour corriger le nombre.',
+  low_conf_title: 'Pas assez sûr pour répondre',
+  low_conf_body: 'Estimation du modèle uniquement ; aucun nombre n’est affirmé. Le plus probable :',
+  estimate_sure: 'Estimation du modèle, sûre à {pct} %. Non mesurée sur la géométrie ; pas de zones.',
+  estimate_measured: 'À ce niveau de confiance, ces réponses étaient justes {correct} fois sur {n}.',
 }
 
 const fi: Dict = {
@@ -381,6 +389,10 @@ const fi: Dict = {
   tokens: '{n} tokenia',
   thanks_up: 'Kiitos. Merkitty oikeaksi.',
   thanks_down: 'Kiitos. Merkitty vääräksi. Hylkää väärät todisteet pohjassa, niin luku korjautuu.',
+  low_conf_title: 'Ei riittävän varma vastaamaan',
+  low_conf_body: 'Vain mallin arvio; lukua ei väitetä todeksi. Todennäköisimmät:',
+  estimate_sure: 'Mallin arvio, {pct} % varma. Ei mitattu geometriasta; ei merkintöjä.',
+  estimate_measured: 'Tällä varmuudella tällaiset vastaukset olivat oikein {correct} / {n} kertaa.',
 }
 
 const de: Dict = {
@@ -503,6 +515,10 @@ const de: Dict = {
   tokens: '{n} Tokens',
   thanks_up: 'Danke. Als richtig markiert.',
   thanks_down: 'Danke. Als falsch markiert. Verwerfen Sie die falschen Belege im Plan, um die Zahl zu korrigieren.',
+  low_conf_title: 'Nicht sicher genug für eine Antwort',
+  low_conf_body: 'Nur eine Modellschätzung; es wird keine Anzahl behauptet. Am wahrscheinlichsten:',
+  estimate_sure: 'Modellschätzung, zu {pct} % sicher. Nicht aus der Geometrie gemessen; keine Markierungen.',
+  estimate_measured: 'Bei dieser Sicherheit waren solche Antworten {correct} von {n} Mal richtig.',
 }
 
 export const STRINGS: Record<Lang, Dict> = { en, fr, fi, de }

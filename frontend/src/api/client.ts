@@ -21,6 +21,16 @@ import {
   type Health,
 } from './contract'
 
+/** The presenter token, when this browser has one: the server lets only presenters spend model calls on uploads. */
+export function presenterHeader(): Record<string, string> {
+  try {
+    const t = globalThis.localStorage?.getItem('aura.presenter')
+    return t ? { 'X-AURA-Presenter': t } : {}
+  } catch {
+    return {}
+  }
+}
+
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
 /** A 4xx, an invalid body or a contract mismatch: shown as an error card, never a fallback. */
@@ -143,7 +153,7 @@ export async function postAsk(opts: ClientOptions, req: AskRequest, timeoutMs = 
   const body = await request(
     opts,
     '/ask',
-    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req) },
+    { method: 'POST', headers: { 'content-type': 'application/json', ...presenterHeader() }, body: JSON.stringify(req) },
     timeoutMs,
   )
   if (body && typeof body === 'object' && typeof (body as { contract_version?: unknown }).contract_version === 'string')
