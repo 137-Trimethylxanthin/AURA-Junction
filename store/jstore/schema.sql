@@ -247,7 +247,7 @@ create index if not exists entity_source_file on entity_source (file_id);
 create table if not exists claim (          -- one value for one property from one source
   claim_id  bigserial primary key,
   entity_id bigint not null references entity on delete cascade,
-  property  text not null,                -- net_area_m2 | width_m | height_m | length_m | volume_m3 | label | number ...
+  property  text not null,                -- net_area_m2 | perimeter_m | width_m | height_m | length_m | volume_m3 | label | number ...
   value_num double precision, value_text text,
   unit      text,
   file_id   text references source_file on delete cascade,

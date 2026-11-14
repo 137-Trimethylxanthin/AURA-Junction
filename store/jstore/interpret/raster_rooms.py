@@ -14,14 +14,36 @@ How a room comes about (each step is recorded in the definition rows and in the 
               line), falling back to all ink for plans drawn with thin lines only; free space is cut at its
               constrictions (watershed on the distance to the walls, basins joined again where the passage between
               them is nearly as wide as they are) and a room is the part that holds its label.  A region that
-              does not fit the room box Gemini gave is dropped and the box itself is used (method gemini_box).
+              does not fit the room box Gemini gave is dropped (the box stays as evidence, method gemini_box).
+              With a Gemini key (JSTORE_ROOM_OUTLINE, default gemini) every labelled room is then
+              outlined by jstore.interpret.room_outline: Gemini draws the polygon of the room in an enlarged
+              cut-out and its edges are snapped onto the drawn lines (method gemini_polygon).  The wall
+              segmentation is never shown to the model, so it stays a second, independent measurement: the IoU of
+              the two outlines is stored with the room and sets the confidence, together with two checks of
+              the outlines against each other (overlaps_neighbour, open_edge: the room was cut where no line
+              ends it and no other room follows).  A sheet without a stated scale is outlined all the same (a
+              rough scale sizes the cut-outs, see nominal_mpp); the polygons are kept in pixels as
+              raster_detection rows and get metres only when step 3 finds a scale.  A room Gemini gives no usable
+              polygon for, or that is not answered within JSTORE_ROOM_OUTLINE_BUDGET_S (150), keeps the
+              wall-segmentation outline; the definition row says how many did and why.
   3. scale    in this order: the frame of the page, printed scale with the DPI of the file (above 96), printed
               scale with the paper size named on the sheet (the image must have the ISO proportions), the scale
-              bar measured in the pixels, the printed room areas themselves (>= 3 rooms that agree).  Where two of
-              them exist they must agree within 8 %, else the confidence drops.  Without one of these no measured
-              area is written, only printed ones.
+              bar measured in the pixels, the scale bar as Gemini boxed it, the printed room areas themselves
+              over the outlines of step 2 (>= 3 rooms that agree; the Gemini polygons where there are any).
+              Where two of them exist they must agree within 8 %, else the confidence drops.  Without one of
+              these no measured area is written, only printed ones.
   4. claims   net_area_m2 printed (method 'ocr' when the page OCR read the same value, else 'printed' = read by
-              Gemini) and measured (method 'measured_outline'), each with its pixel box as source.
+              Gemini) and measured (method 'measured_outline'), each with its pixel box as source, and perimeter_m
+              from the same outline.  Confidence of the measured ones = confidence of the scale x that of the
+              outline (OUTLINE_CONF; share of rooms within 5 % of the CAD area on the 65 benchmark plans:
+              confirmed = IoU >= 0.9 and no flag 99.8 %, unconfirmed = IoU below 0.9 or label outside or few
+              lines under the edges 96 %, no second outline about 90 % (n=35), flagged = DOUBTFUL about 55 %
+              (n=35), wall segmentation 46 %).  A measured area within 2 % of the printed one is raised to 0.9
+              (not when the scale itself comes from the printed areas); one more than 10 % off is flagged
+              (reconcile reports the pair as value_conflict) and drops to 0.3 when the outline is flagged or
+              segmented - an undoubted outline keeps its confidence, because the label is then as likely
+              misread.  A room known only by the box Gemini drew gets no measured area, no perimeter and no
+              geometry.
 
 Nothing is added when another format of the drawing already gave rooms, or when raster.interpret read a numbered
 plan well (>= 3 numbered rooms, at least half of them with a name or a printed area; see _prior).  Rooms raster.interpret left behind that do not pass that test are set to status
@@ -40,6 +62,7 @@ import json
 import math
 import os
 import re
+import signal
 import time
 import urllib.error
 import urllib.request
@@ -510,6 +533,98 @@ def _seed_basin(lab, box, k: float):
     return int(ids[np.argmax(cnt)])
 
 
+def outline_source() -> str:
+    """'gemini' or 'segmentation': JSTORE_ROOM_OUTLINE, else gemini whenever a key is configured."""
+    want = os.environ.get("JSTORE_ROOM_OUTLINE", "").strip().lower()
+    if want not in ("gemini", "segmentation"):
+        want = "segmentation" if os.environ.get("JSTORE_RASTER_ROOMS_GEMINI", "1") in ("0", "off") else "gemini"
+    return want if os.environ.get("GEMINI_API_KEY") else "segmentation"
+
+
+def _outline_budget() -> float:
+    """Seconds the Gemini outlines may take: the setting, and never close to the pipeline's alarm for the drawing."""
+    b = float(os.environ.get("JSTORE_ROOM_OUTLINE_BUDGET_S", "150"))
+    try:
+        left = signal.getitimer(signal.ITIMER_REAL)[0]
+    except (AttributeError, ValueError, OSError):
+        left = 0
+    return min(b, left - 30) if left > 0 else b
+
+
+# outline -> confidence of what is measured on it (before the scale); see the module docstring for the measurements
+OUTLINE_CONF = dict(confirmed=0.9, unconfirmed=0.7, no_second_outline=0.6, flagged=0.5, wall_segmentation=0.4)
+AGREE = 0.02                 # measured = printed within this (reconcile.TOLERANCE: no value_conflict below it)
+DOUBTFUL = ("other_label_inside", "touches_crop_border", "overlaps_neighbour", "open_edge")   # -> 'flagged'
+
+
+def outline_confidence(r: dict) -> float:
+    g = r.get("gem")
+    if g is None:
+        return OUTLINE_CONF["wall_segmentation"]
+    if any(f in g["flags"] for f in DOUBTFUL):
+        return OUTLINE_CONF["flagged"]
+    if g["iou"] is None:
+        return OUTLINE_CONF["no_second_outline"]
+    if g["flags"] or g["iou"] < 0.9:                         # label outside, few lines under the edges, IoU below 0.9
+        return OUTLINE_CONF["unconfirmed"]
+    return OUTLINE_CONF["confirmed"]
+
+
+def nominal_mpp(rooms: list[dict], k: float, W: int, H: int) -> float:
+    """A rough metres per source pixel for a sheet that states no scale, only to size the cut-outs and tolerances
+    of the outline step: the median outlined room taken as 12 m2 (0.8 to 2 times the true value on the benchmark
+    plans), else the long side of the image taken as 30 m.  Nothing is measured with it."""
+    px = [r["px"] / k / k for r in rooms if r.get("px") and r.get("outline") in ("wall_segmentation", "gemini_box")]
+    return math.sqrt(12.0 / float(np.median(px))) if px else 30.0 / max(W, H)
+
+
+def gemini_outlines(im: Image.Image, rooms: list[dict], k: float, mpp: float, log: dict) -> None:
+    """Give every room Gemini outlines: gem = {poly (shapely, source pixels), support, flags, iou with the
+    wall-segmentation region or None}; the others get gem_failed = why.  The segmentation only places the cut-out."""
+    from . import room_outline as RO
+    budget = _outline_budget()
+    if budget < 10:
+        log.update(skipped="no time left for this drawing")
+        for r in rooms:
+            r["gem_failed"] = "budget"
+        return
+    W, H = im.size
+    asks = []
+    for r in rooms:
+        r["seg_poly"] = _polygon(r, k) if r.get("outline") == "wall_segmentation" else None
+        hint = None
+        if r["seg_poly"] is not None:
+            hint = list(r["seg_poly"].exterior.coords)[:-1]
+        elif r.get("outline") == "gemini_box":
+            x0, y0, x1, y1 = [v / k for v in r["bbox"]]
+            hint = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        asks.append(dict(label=r["name"] or None, number=r["number"], label_box=r["label_box"], hint=hint))
+    order = sorted(range(len(rooms)), key=lambda i: rooms[i]["area"] is not None)    # no printed area: asked first
+    res = RO.outline_rooms(im, [asks[i] for i in order], mpp, budget, log)
+    for i, o in zip(order, res):
+        r = rooms[i]
+        poly = RO.shape(o["polygon"]) if o["polygon"] is not None else None
+        if poly is not None and poly.area > 0.5 * W * H:
+            poly, o = None, dict(o, reason="the polygon returned covers most of the sheet")
+        if poly is None:
+            r["gem_failed"] = o.get("reason") or "no polygon"
+            continue
+        # (open_edge only where the drawn lines are seen at all: with few edges on a line low_snap_support says so)
+        flags = [name for name, on in (
+            ("other_label_inside", o["others_inside"]), ("touches_crop_border", o["touches_crop_border"]),
+            ("overlaps_neighbour", o.get("overlap", 0) > 0.05),
+            ("open_edge", o.get("open_m", 0) > 0 and o["support"] >= 0.5),
+            ("label_outside", not o["label_inside"]), ("low_snap_support", o["support"] < 0.5)) if on]
+        r["gem"] = dict(poly=poly, support=o["support"], flags=flags, calls=o["calls"],
+                        overlap=o.get("overlap", 0), open_m=o.get("open_m", 0),
+                        iou=round(RO.iou(poly, r["seg_poly"]), 3) if r["seg_poly"] is not None else None)
+    why: dict[str, int] = {}
+    for r in rooms:
+        if r.get("gem_failed"):
+            why[r["gem_failed"]] = why.get(r["gem_failed"], 0) + 1
+    log["no_polygon"] = why
+
+
 def _iou(a, b) -> float:
     ix, iy = min(a[2], b[2]) - max(a[0], b[0]), min(a[3], b[3]) - max(a[1], b[1])
     if ix <= 0 or iy <= 0:
@@ -604,8 +719,10 @@ UNIT_M = {"m": 1.0, "ft": 0.3048, "feet": 0.3048, "'": 0.3048, "cm": 0.01, "mm":
 
 
 def _bar_px(gray: np.ndarray, box, k: float) -> float | None:
-    """Length in source pixels of the scale bar: the extent of the ink in the rows (columns) of the box Gemini gave,
-    looked for a little beyond both ends."""
+    """Length in source pixels of the scale bar, measured in the rows (columns) of the box Gemini gave and a little
+    beyond both ends: the widest connected piece of ink (the bar with its ticks, without a unit or a number
+    written next to its end) or the extent of all ink with small gaps closed (a bar drawn in separate pieces),
+    whichever is nearer to the box; None when neither is within 20 % of it."""
     x0, y0, x1, y1 = box
     horiz = (x1 - x0) >= (y1 - y0)
     if not horiz:
@@ -615,16 +732,20 @@ def _bar_px(gray: np.ndarray, box, k: float) -> float | None:
     c = gray[max(0, int(y0 * k)):int(math.ceil(y1 * k)) + 1, X0:int((x1 + 0.12 * w) * k) + 1]
     if c.size == 0:
         return None
-    cols = ((c.astype(np.int16) < int(np.percentile(c, 90)) - 30).any(0)).astype(np.uint8)[None, :]
+    dark = (c.astype(np.int16) < int(np.percentile(c, 90)) - 30).astype(np.uint8)
+    found = []
+    piece = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((1, max(3, int(0.006 * w * k)) | 1), np.uint8))
+    n, _, st, _ = cv2.connectedComponentsWithStats(piece, connectivity=8)
+    if n > 1:
+        found.append(float(st[1:, cv2.CC_STAT_WIDTH].max()) / k)
     gap = max(3, int(0.04 * w * k)) | 1
-    cols = cv2.morphologyEx(cols, cv2.MORPH_CLOSE, np.ones((1, gap), np.uint8))[0]
+    cols = cv2.morphologyEx(dark.any(0).astype(np.uint8)[None, :], cv2.MORPH_CLOSE, np.ones((1, gap), np.uint8))[0]
     d = np.diff(np.r_[0, cols.astype(np.int8), 0])
     s, e = np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]
-    if not len(s):
-        return None
-    i = int(np.argmax(e - s))
-    L = (e[i] - s[i]) / k
-    return float(L) if 0.8 * w <= L <= 1.2 * w else None
+    if len(s):
+        found.append(float((e - s).max()) / k)
+    found = [L for L in found if 0.8 * w <= L <= 1.2 * w]
+    return min(found, key=lambda L: abs(L - w)) if found else None
 
 
 def find_scale(db: DB, f: dict, page: dict, toks: list[dict], g: dict | None, gray: np.ndarray, k: float,
@@ -652,7 +773,7 @@ def find_scale(db: DB, f: dict, page: dict, toks: list[dict], g: dict | None, gr
         paper = next(iter(papers))
         mpp_paper = ratio * PAPER_MM[paper] / 1000.0 / max(W, H)
         detail.update(paper=paper, mpp_paper=round(mpp_paper, 6))
-    mpp_bar = None
+    mpp_bar = mpp_box = None
     bar = g.get("scale_bar") if g else None
     if bar and UNIT_M.get(bar["unit"]) and bar["length"] > 0:
         L = _bar_px(gray, bar["box"], k)
@@ -661,6 +782,9 @@ def find_scale(db: DB, f: dict, page: dict, toks: list[dict], g: dict | None, gr
         if L:
             mpp_bar = bar["length"] * UNIT_M[bar["unit"]] / L
             detail["mpp_bar"] = round(mpp_bar, 6)
+        elif max(bar["box"][2] - bar["box"][0], bar["box"][3] - bar["box"][1]) > 20:      # the last resort below
+            mpp_box = bar["length"] * UNIT_M[bar["unit"]] / max(bar["box"][2] - bar["box"][0], bar["box"][3] - bar["box"][1])
+            detail["mpp_bar_box"] = round(mpp_box, 6)
     agree = lambda a, b: a and b and abs(a / b - 1) < 0.08       # noqa: E731
     dpi = (meta.get("dpi") or [dpi_of_file])[0]
     if ratio and dpi and float(dpi) > 96 and not fr:          # 72 and 96 are writer defaults, not a statement about paper
@@ -687,6 +811,9 @@ def find_scale(db: DB, f: dict, page: dict, toks: list[dict], g: dict | None, gr
     if mpp_paper:
         return dict(mpp=mpp_paper, confidence=0.5, source="printed scale and paper size (image taken as the whole sheet)",
                     detail=detail)
+    if mpp_box:
+        return dict(mpp=mpp_box, confidence=0.4, detail=detail,
+                    source="scale bar as Gemini boxed it (its ends were not found in the pixels)")
     why = "no scale statement" if not ratio else "a printed scale but neither DPI, paper size nor scale bar to size a pixel"
     if len(meta.get("scales") or []) > 1 and sc is None:
         why = "several different scales on the sheet"
@@ -694,15 +821,20 @@ def find_scale(db: DB, f: dict, page: dict, toks: list[dict], g: dict | None, gr
 
 
 def scale_from_printed(rooms: list[dict], k: float) -> dict | None:
-    """m per source pixel implied by rooms that have both a printed area and a segmented outline."""
-    v = [math.sqrt(r["area"] / (r["px"] / k / k)) for r in rooms
-         if r.get("area") and r.get("outline") == "wall_segmentation" and r.get("px")]
+    """m per source pixel implied by rooms that have both a printed area and an outline: the Gemini polygons when
+    at least 3 such rooms have one that is not doubtful (wall-segmentation regions run about 3 % small, which
+    would bias every measurement), else the segmented regions."""
+    gem = [math.sqrt(r["area"] / r["gem"]["poly"].area) for r in rooms
+           if r.get("area") and r.get("gem") and not any(f in r["gem"]["flags"] for f in DOUBTFUL)]
+    seg = [math.sqrt(r["area"] / (r["px"] / k / k)) for r in rooms
+           if r.get("area") and r.get("outline") == "wall_segmentation" and r.get("px")]
+    v, of = (gem, "gemini_polygon") if len(gem) >= 3 else (seg, "wall_segmentation")
     if len(v) < 3:
         return None
     v = np.sort(np.array(v))
     med = float(np.median(v))
     spread = float((np.percentile(v, 75) - np.percentile(v, 25)) / med)
-    return dict(mpp=med, n=len(v), spread=round(spread, 3))
+    return dict(mpp=med, n=len(v), spread=round(spread, 3), outlines=of)
 
 
 # ------------------------------------------------------------------------------------------------------- Layer 2
@@ -806,16 +938,39 @@ def interpret(db: DB, f: dict) -> dict:
     except MemoryError:
         seg_log["error"] = "out of memory"
     scale = find_scale(db, f, page, toks, g, gray, k, dpi_of_file)
-    by_areas = scale_from_printed(rooms, k)
+
+    # the outline of every labelled room, drawn by Gemini; the regions above stay as the second measurement
+    source = outline_source()
+    ol_log: dict = dict(source=source)
+    if source == "gemini":
+        size = scale["mpp"]
+        if not size:                                      # no stated scale: a rough one sizes the cut-outs
+            first = scale_from_printed(rooms, k)
+            size = first["mpp"] if first else nominal_mpp(rooms, k, W, H)
+            ol_log["cut_outs_sized_by"] = dict(metres_per_pixel=round(size, 6), how="printed areas over the "
+                                               "segmented regions" if first else "a median room taken as 12 m2")
+        try:
+            gemini_outlines(im, rooms, k, size, ol_log)
+        except MemoryError:
+            ol_log["error"] = "out of memory"
+    elif not os.environ.get("GEMINI_API_KEY"):
+        ol_log["why"] = "no GEMINI_API_KEY"
+    for r in rooms:
+        r["method"] = "gemini_polygon" if r.get("gem") else r.get("outline") or "none"
+
+    by_areas = scale_from_printed(rooms, k)               # on the outlines that are measured
     if by_areas:
         scale["detail"]["printed_areas"] = dict(by_areas, mpp=round(by_areas["mpp"], 6))
         if scale["mpp"] is None and by_areas["spread"] < 0.12:
             scale.update(mpp=by_areas["mpp"], confidence=0.5,
-                         source=f"the printed areas of {by_areas['n']} rooms over their outlines in pixels")
+                         source=f"the printed areas of {by_areas['n']} rooms over their outlines in pixels "
+                                f"({by_areas['outlines']})")
         elif scale["mpp"] and abs(by_areas["mpp"] / scale["mpp"] - 1) > 0.12 and by_areas["spread"] < 0.12:
             scale["confidence"] = min(scale["confidence"], 0.3)
             scale["source"] += "; the printed room areas imply another scale"
     mpp = scale["mpp"]
+    from_printed = bool(by_areas) and mpp == by_areas["mpp"]
+
 
     # Layer 1: what Gemini returned, inspectable
     det_id: dict[int, int] = {}
@@ -837,23 +992,49 @@ def interpret(db: DB, f: dict) -> dict:
                    f=f["file_id"], x0=b[0], y0=b[1], x1=b[2], y1=b[3], det=detector,
                    a=js(dict(length=g["scale_bar"]["length"], unit=g["scale_bar"]["unit"])))
 
-    seg_n = sum(1 for r in rooms if r.get("outline") == "wall_segmentation")
-    box_n = sum(1 for r in rooms if r.get("outline") == "gemini_box")
-    d_units = define(db, f["file_id"], "units", "reader", dict(
+    out_id: dict[int, int] = {}
+    for i, r in enumerate(rooms):
+        if r.get("gem"):
+            b = r["gem"]["poly"].bounds
+            out_id[i] = db.one(
+                """insert into jstore.raster_detection (file_id, page_no, class, score, x0, y0, x1, y1, detector, attrs, geom)
+                   values (:f, 0, 'room_outline', null, cast(:x0 as float8), cast(:y0 as float8), cast(:x1 as float8), cast(:y1 as float8), :det, cast(:a as jsonb),
+                           st_geomfromtext(:w)) returning id""",
+                f=f["file_id"], x0=b[0], y0=b[1], x1=b[2], y1=b[3], det=f"raster_rooms {VERSION} outline {ol_log.get('model')}",
+                a=js(dict(name=r["name"], number=r["number"], snap_support=r["gem"]["support"], flags=r["gem"]["flags"],
+                          overlap_with_neighbour=r["gem"]["overlap"], open_edge_m=r["gem"]["open_m"],
+                          iou_with_segmentation=r["gem"]["iou"], calls=r["gem"]["calls"])),
+                w=r["gem"]["poly"].wkt)["id"]
+
+    n_of = {m: sum(1 for r in rooms if r["method"] == m) for m in ("gemini_polygon", "wall_segmentation", "gemini_box", "none")}
+    gem_n, seg_n = n_of["gemini_polygon"], n_of["wall_segmentation"]
+    fell_back = sum(1 for r in rooms if r.get("gem_failed") and r["method"] == "wall_segmentation")
+    if ol_log.get("budget_ended") or ol_log.get("skipped"):
+        ol_log["note"] = (f"the outline budget ({ol_log.get('budget_s', 0)} s) ended before "
+                          f"{(ol_log.get('no_polygon') or {}).get('budget', len(rooms))} rooms were answered: they keep the "
+                          "wall-segmentation outline where there is one")
+    define(db, f["file_id"], "units", "reader", dict(
         metres_per_pixel=mpp, how=scale["source"], detail=scale["detail"],
         rule="a measured area is written only when a pixel can be sized: frame of the page, printed scale with paper "
-             "size, scale bar, or >= 3 printed room areas that agree"), scale["confidence"], BY)
+             "size, scale bar, or >= 3 printed room areas that agree over their outlines"), scale["confidence"], BY)
     d_room = define(db, f["file_id"], "room", "reader", dict(
         source="raster_rooms", version=VERSION,
-        rule="every room label read on the plan is a room; its outline is the free space between the walls that "
-             "holds the label, cut from the neighbours at the narrowest passages",
+        rule="every room label read on the plan is a room; its outline is the polygon Gemini drew for it with the "
+             "edges snapped onto the drawn lines (gemini_polygon), else the free space between the walls that holds "
+             "the label, cut from the neighbours at the narrowest passages (wall_segmentation); a room known only "
+             "by a box gets no measured area",
+        confidence_rule=dict(outline=OUTLINE_CONF, times="confidence of the scale (definition 'units')",
+                             flagged=list(DOUBTFUL),
+                             printed="within 2 % of the printed area: at least 0.9 (not when the scale itself comes "
+                                     "from the printed areas); more than 10 % off and the outline is flagged or "
+                                     "from wall segmentation: at most 0.3"),
         labels_from="gemini" if g is not None else "ocr", gemini=log, created=len(rooms),
         with_number=sum(1 for r in rooms if r["number"]), printed_area_read=sum(1 for r in rooms if r["area"]),
         labels_also_in_ocr=sum(1 for r in rooms if r.get("word")),
-        outline=dict(wall_segmentation=seg_n, gemini_box=box_n, none=len(rooms) - seg_n - box_n, **seg_log),
+        outline=dict(n_of, fell_back_to_segmentation=fell_back, gemini=ol_log, **seg_log),
         measured_areas="written" if mpp else f"not written: {scale['source']}",
         work_scale=round(k, 4), seconds=round(time.time() - t0, 1)),
-        0.7 if seg_n >= 0.6 * len(rooms) else 0.5 if g is not None else 0.4, BY)
+        0.8 if gem_n >= 0.6 * len(rooms) else 0.7 if gem_n + seg_n >= 0.6 * len(rooms) else 0.5 if g is not None else 0.4, BY)
 
     fr = db.one("select m from jstore.frame where file_id = :f and page_no = 0 and method <> 'pixel_scale'",
                 f=f["file_id"])
@@ -881,23 +1062,56 @@ def interpret(db: DB, f: dict) -> dict:
                 claims.append(("net_area_m2", r["area"], aw["text"], "m2", "ocr", len(sources) - 1, 0.8))
             else:
                 claims.append(("net_area_m2", r["area"], r["area_text"], "m2", "printed", 0, 0.6))
-        attrs = dict(indoor=not outdoor, read_by="gemini " + r["view"] if g is not None else "ocr",
-                     outline=r.get("outline") or "none")
-        shape = None
-        if r.get("outline"):
+        method, gem = r["method"], r.get("gem")
+        attrs = dict(indoor=not outdoor, read_by="gemini " + r["view"] if g is not None else "ocr", outline=method)
+        shape = poly = None
+        flags: list[str] = []
+        if method == "gemini_polygon":
+            poly, flags = gem["poly"], list(gem["flags"])
+            area_px = poly.area
+            attrs.update(outline_px=round(area_px), iou_with_segmentation=gem["iou"], snap_support=gem["support"],
+                         geom="polygon drawn by Gemini for this room, edges snapped onto the drawn lines" if m else
+                              "none: no scale to place it; the polygon is kept in pixels (source role outline)")
+            if r.get("px") and r.get("outline") == "wall_segmentation":      # the second, independent measurement
+                attrs.update(segmentation_px=round(r["px"] / k / k), barrier=r.get("barrier"))
+                if mpp:
+                    attrs["segmentation_area_m2"] = round(r["px"] / k / k * mpp * mpp, 2)
+            sources.append(("raster_detection", str(out_id[i]), "outline", [round(v, 1) for v in poly.bounds], d_room))
+        elif method == "wall_segmentation":
             poly = _polygon(r, k)
-            bb = [round(v / k, 1) for v in r["bbox"]]
-            px_src = r["px"] / k / k
-            attrs.update(outline_px=round(px_src), barrier=r.get("barrier"), box_fit=r.get("fit"),
-                         geom="outline of the pixel region" if r["outline"] == "wall_segmentation" else
-                              "box drawn by Gemini around the room")
-            sources.append(("region", f"room {i}", "outline", bb, d_room))
+            area_px = r["px"] / k / k
+            if r.get("gem_failed"):
+                flags.append("fell_back_to_proposal")
+                attrs["gemini_outline"] = "none: " + r["gem_failed"]
+            attrs.update(outline_px=round(area_px), barrier=r.get("barrier"), box_fit=r.get("fit"),
+                         geom="outline of the pixel region between the walls")
+            sources.append(("region", f"room {i}", "outline", [round(v / k, 1) for v in r["bbox"]], d_room))
+        elif method == "gemini_box":                      # evidence of where the room is, not an outline
+            flags.append("box_only")
+            attrs["geom"] = "none: only the box Gemini drew around the room is known (source role room_box)"
+            sources.append(("region", f"room {i}", "room_box", [round(v / k, 1) for v in r["bbox"]], d_room))
+        if poly is not None:
             if m:
                 shape = affine_transform(poly, [m[0], m[1], m[3], m[4], m[2], m[5]])
             if mpp:
-                conf = round(scale["confidence"] * (0.7 if r["outline"] == "wall_segmentation" else 0.3), 2)
-                claims.append(("net_area_m2", round(px_src * mpp * mpp, 2), None, "m2", "measured_outline",
-                               len(sources) - 1, conf))
+                quality = outline_confidence(r)
+                conf = scale["confidence"] * quality
+                area = area_px * mpp * mpp
+                if r["area"]:
+                    dev = area / r["area"] - 1
+                    attrs["measured_vs_printed"] = round(dev, 3)
+                    if abs(dev) <= AGREE and not from_printed:
+                        conf = max(conf, 0.9)             # (a scale taken from these very areas proves nothing)
+                    elif abs(dev) > 0.10:
+                        flags.append("disagrees_with_printed_area")
+                        if quality <= OUTLINE_CONF["flagged"]:
+                            conf = min(conf, 0.3)         # (an undoubted outline: as likely the label was misread)
+                attrs["outline_confidence"] = quality
+                claims.append(("net_area_m2", round(area, 2), None, "m2", "measured_outline", len(sources) - 1, round(conf, 2)))
+                claims.append(("perimeter_m", round(poly.length * mpp, 2), None, "m", "measured_outline", len(sources) - 1,
+                               round(conf, 2)))
+        if method != "none":
+            attrs["outline_flags"] = flags
         recs.append(dict(kind="room", ifc_class="IfcSpace", number=r["number"], label=label,
                          label_norm=vocab.room_type(label), zone=None, geom=shape, attrs=attrs, sources=sources,
                          claims=claims))

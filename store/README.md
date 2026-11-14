@@ -43,6 +43,7 @@ Tests: `python -m pytest tests -q` (scratch database, no API key). After any cha
 | `JSTORE_DATA_DIR`, `JSTORE_DATASET_DIR` | `.data`, `/data/dataset` | store directory; folder `POST /files/register` may reach |
 | `JSTORE_SHELL` | `on` | `off` removes the last-resort shell from the agent |
 | `JSTORE_SQL_MAX_ROWS`, `JSTORE_MAX_TURNS`, `JSTORE_MAX_UPLOAD_MB`, `JSTORE_MAX_CONCURRENT`, `JSTORE_INGEST_WORKERS` | 200, 30, 500, 4, 2 | limits |
+| `JSTORE_ROOM_OUTLINE`, `JSTORE_ROOM_OUTLINE_BUDGET_S`, `JSTORE_ROOM_OUTLINE_MODEL` | `gemini` with a `GEMINI_API_KEY`, else `segmentation`; 150; `gemini-4-carbon` | room outlines on scans: polygon drawn by Gemini and snapped to the drawn lines, or wall segmentation only; seconds the outlines may take per image (the rest keeps the segmentation outline; never more than `JSTORE_INTERPRET_TIMEOUT_S` minus 30, and a plan of 100+ rooms needs about 110 s, so keep that limit at 300 as in docker-compose, not the code default 180); model. About one call per room, at most 16 at once per ingest worker |
 | `JSTORE_APPLY_SCHEMA` | `1` | create / update tables, views and the reader role when the API starts |
 | `JSTORE_CORS_ORIGINS` | `https?://(localhost\|127\.0\.0\.1)(:\d+)?` | browser origins that may call the API (regular expression) |
 
