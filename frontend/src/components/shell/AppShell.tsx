@@ -11,10 +11,13 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
+import { SPLIT_QUERY } from "@/features/plan/shared"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { cn } from "@/lib/utils"
 
 import { Wordmark } from "./Wordmark"
+
+export { SPLIT_QUERY }
 
 export type AppShellSlots = {
   /** Drawing title, shown next to the wordmark. */
@@ -33,10 +36,9 @@ export type AppShellSlots = {
   composer?: ReactNode
   /** Overlay inside the sidebar (reasoning tree). Rendered over the chat region. */
   sidebarOverlay?: ReactNode
+  /** Whether `sidebarOverlay` is currently active and should mark the underlying chat region `inert`. */
+  sidebarOverlayOpen?: boolean
 }
-
-/** Desktop split from this width up; below it the chat is a sticky bottom panel. */
-export const SPLIT_QUERY = "(min-width: 900px)"
 
 function AgentTitle() {
   return <>{useUi().tu("agent_title")}</>
@@ -64,17 +66,22 @@ function Header({ title, headerActions }: Pick<AppShellSlots, "title" | "headerA
 function PlanRegion({ toolbar, stage, credit }: Pick<AppShellSlots, "toolbar" | "stage" | "credit">) {
   const { tu } = useUi()
   return (
-    <section aria-label={tu("shell_region")} className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-muted/40">
+    <main
+      id="main"
+      tabIndex={-1}
+      aria-label={tu("shell_region")}
+      className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-muted/40 outline-none"
+    >
       <div className="flex shrink-0 items-center gap-2 border-b bg-background px-3 py-2" data-slot="toolbar">
         {toolbar}
       </div>
-      <div className="relative min-h-0 flex-1" data-slot="stage">
+      <div className="relative min-h-36 flex-1 overflow-hidden" data-slot="stage">
         {stage}
       </div>
       <div className="shrink-0 border-t bg-background px-3 py-1.5 text-xs text-muted-foreground" data-slot="credit">
         {credit}
       </div>
-    </section>
+    </main>
   )
 }
 
@@ -82,13 +89,15 @@ function Sidebar({
   chat,
   composer,
   sidebarOverlay,
+  sidebarOverlayOpen,
   className,
   expand,
-}: Pick<AppShellSlots, "chat" | "composer" | "sidebarOverlay"> & {
+}: Pick<AppShellSlots, "chat" | "composer" | "sidebarOverlay" | "sidebarOverlayOpen"> & {
   className?: string
   expand?: { expanded: boolean; onToggle: () => void }
 }) {
   const { tu } = useUi()
+  const overlayActive = sidebarOverlayOpen ?? Boolean(sidebarOverlay)
   return (
     <aside aria-label={tu("agent_title")} className={cn("flex h-full min-h-0 min-w-0 flex-col bg-background", className)}>
       <div className="flex h-11 shrink-0 items-center justify-between border-b pr-1 pl-4">
@@ -114,6 +123,7 @@ function Sidebar({
           role="region"
           aria-label={tu("shell_conversation")}
           tabIndex={0}
+          inert={overlayActive || undefined}
         >
           {chat}
         </div>
@@ -134,26 +144,38 @@ function Sidebar({
 }
 
 export function AppShell(props: AppShellSlots) {
+  const { tu } = useUi()
   const wide = useMediaQuery(SPLIT_QUERY, true)
   const [chatExpanded, setChatExpanded] = useState(false)
-  const { title, headerActions, toolbar, stage, credit, chat, composer, sidebarOverlay } = props
+  const { title, headerActions, toolbar, stage, credit, chat, composer, sidebarOverlay, sidebarOverlayOpen } = props
 
   return (
     <div className="flex h-dvh w-full flex-col overflow-hidden bg-background">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:inline-flex focus:min-h-10 focus:min-w-10 focus:items-center focus:rounded-md focus:bg-primary focus:px-3 focus:text-xs focus:font-semibold focus:text-primary-foreground focus:shadow-md focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        {tu("skip_to_main")}
+      </a>
       <Header title={title} headerActions={headerActions} />
       {wide ? (
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-          <ResizablePanel minSize={360}>
+          <ResizablePanel minSize={320}>
             <PlanRegion toolbar={toolbar} stage={stage} credit={credit} />
           </ResizablePanel>
           <ResizableHandle withHandle />
           <ResizablePanel
             defaultSize={420}
-            minSize={340}
+            minSize={320}
             maxSize="55%"
             groupResizeBehavior="preserve-pixel-size"
           >
-            <Sidebar chat={chat} composer={composer} sidebarOverlay={sidebarOverlay} />
+            <Sidebar
+              chat={chat}
+              composer={composer}
+              sidebarOverlay={sidebarOverlay}
+              sidebarOverlayOpen={sidebarOverlayOpen}
+            />
           </ResizablePanel>
         </ResizablePanelGroup>
       ) : (
@@ -163,9 +185,10 @@ export function AppShell(props: AppShellSlots) {
             chat={chat}
             composer={composer}
             sidebarOverlay={sidebarOverlay}
+            sidebarOverlayOpen={sidebarOverlayOpen}
             expand={{ expanded: chatExpanded, onToggle: () => setChatExpanded((v) => !v) }}
             className={cn(
-              "flex-none border-t shadow-[0_-1px_0_var(--border)] transition-[height] duration-200",
+              "max-h-[calc(100%-13rem)] flex-none border-t shadow-[0_-1px_0_var(--border)] transition-[height] duration-200 motion-reduce:transition-none",
               chatExpanded ? "h-[75dvh]" : "h-[58dvh]"
             )}
           />

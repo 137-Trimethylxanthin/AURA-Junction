@@ -8,6 +8,7 @@ import {
 import { toast } from "sonner"
 import { Spinner } from "@/components/ui/spinner"
 import { Toaster } from "@/components/ui/sonner"
+import { MOBILE_QUERY } from "@/features/plan/shared"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { presenter } from "@/api/library"
 import { tu } from "@/i18n/uiLang"
@@ -56,7 +57,7 @@ function PageTransition() {
 }
 
 export function RootLayout() {
-  const narrow = useMediaQuery("(max-width: 899px)")
+  const narrow = useMediaQuery(MOBILE_QUERY)
   usePresenterLink()
   return (
     <>

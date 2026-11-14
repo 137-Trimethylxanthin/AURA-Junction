@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import { useUi } from "@/i18n/uiLang"
 import { Link, useParams } from "react-router"
 import { AlertTriangleIcon, CloudOffIcon, FileQuestionIcon } from "lucide-react"
+import { myProjects } from "@/api/library"
 import { AppShell } from "@/components/shell"
 import { SiteHeader } from "@/components/shell/SiteHeader"
 import { Button } from "@/components/ui/button"
@@ -24,6 +25,12 @@ import {
   SidebarOverlay,
 } from "@/features/chat"
 import { Credit, PlanStage, PlanToolbar } from "@/features/plan"
+import { CommandPaletteDialog } from "@/features/shortcuts/CommandPaletteDialog"
+import { ShortcutHelpDialog } from "@/features/shortcuts/ShortcutHelpDialog"
+import {
+  hydrateActiveProject,
+  useWorkspaceShortcuts,
+} from "@/features/shortcuts/useWorkspaceShortcuts"
 import { useTitle } from "@/hooks/use-title"
 import { BUNDLED_DRAWING_ID } from "@/data/ids"
 import {
@@ -60,6 +67,9 @@ export default function Workspace() {
     }
   }, [])
   useEffect(() => {
+    // Prime local project membership BEFORE `loadDrawing` so same-project floor switches keep chat turns & cached drawings.
+    const saved = myProjects.forDrawing(drawingId)
+    if (saved && saved.floors.length >= 2) actions().setActiveProject(saved)
     void actions().loadDrawing(drawingId)
     return () => actions().stopLoading()
   }, [drawingId])
@@ -68,6 +78,21 @@ export default function Workspace() {
     load.id === drawingId && load.state === "ready" && drawing.id === drawingId
   useTitle(ready ? drawing.title : "Drawing")
   const sourceKind = useAppStore((s) => (s.session.source.state === 'ready' ? s.session.source.kind : null))
+  const traceOpen = useAppStore((s) => s.ui.traceOpen)
+
+  // Hydrate House / Project bundle context from localStorage (`aura.projects`), `/projects`, or sibling plans.
+  useEffect(() => {
+    const sync = () => {
+      void hydrateActiveProject({
+        drawingId,
+        drawing: ready ? drawing : undefined,
+        sourceKind,
+      })
+    }
+    sync()
+    return myProjects.subscribe(sync)
+  }, [drawingId, ready, drawing, sourceKind])
+
   // After a reload: bring back this drawing's last conversation from the API (kept by id in localStorage).
   useEffect(() => {
     if (ready && sourceKind === 'api') void actions().restoreConversation()
@@ -83,6 +108,7 @@ export default function Workspace() {
     )
   return (
     <TooltipProvider delayDuration={400}>
+      <WorkspaceShortcutsBinding />
       <AppShell
         title={<DrawingTitle />}
         headerActions={<HeaderActions />}
@@ -92,9 +118,17 @@ export default function Workspace() {
         chat={<ChatPanel />}
         composer={<Composer />}
         sidebarOverlay={<SidebarOverlay />}
+        sidebarOverlayOpen={traceOpen}
       />
+      <CommandPaletteDialog />
+      <ShortcutHelpDialog />
     </TooltipProvider>
   )
+}
+
+function WorkspaceShortcutsBinding() {
+  useWorkspaceShortcuts()
+  return null
 }
 
 function LoadState({ load }: { load: DrawingLoad }) {
