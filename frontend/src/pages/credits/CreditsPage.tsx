@@ -1,11 +1,12 @@
-import { PageFrame, useTitle } from "@/pages/landing/chrome"
+import { useTitle } from "@/hooks/use-title"
+import { PageFrame } from "@/pages/landing/chrome"
 import { LICENSE_URL, THIRD_PARTY_URL } from "@/pages/landing/links"
 import { ProsePage, ProseSection, Rows } from "@/pages/landing/Prose"
 
 const KIT_URL = "https://www.ifcwiki.org/index.php?title=KIT_IFC_Examples"
 
 export default function CreditsPage() {
-  useTitle("Credits and licences · AURA")
+  useTitle("Credits and licences")
   return (
     <PageFrame>
       <ProsePage
@@ -169,8 +170,11 @@ export default function CreditsPage() {
 
         <ProseSection title="Models">
           <p>
-            Answer checks and drawings without CAD data use the Google Gemini
-            API. Geometry answers use no model at all.
+            Routine CAD and IFC takeoffs use AURA’s deterministic geometry
+            engine and spend no model calls at all. Answer spot-checks,
+            drawings without CAD data (PDFs and scans), and open-ended
+            blueprint questions use the Google Gemini API, with every call and
+            cost shown on the answer card.
           </p>
         </ProseSection>
 

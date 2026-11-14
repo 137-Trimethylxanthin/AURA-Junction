@@ -3,6 +3,7 @@ import type { UiKey } from "@/i18n/strings"
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -16,11 +17,12 @@ import {
   FileUpIcon,
   FileWarningIcon,
   KeyRoundIcon,
+  LayersIcon,
   Trash2Icon,
   TriangleAlertIcon,
 } from "lucide-react"
 import { ApiError, deleteDrawing, getDrawingStatus } from "@/api/client"
-import type { DrawingStatus } from "@/api/contract"
+import type { DrawingStatus, Lang } from "@/api/contract"
 import {
   ACCEPT,
   UPLOAD_CAPS,
@@ -66,11 +68,30 @@ import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 
 /** How often an upload that is still being processed is polled. */
-export const UPLOAD_POLL_MS = 1500
+const UPLOAD_POLL_MS = 1500
 /** An upload still queued or processing this long after it was sent is reported as stuck and no longer polled. */
-export const UPLOAD_DEADLINE_MS = 3 * 60_000
+const UPLOAD_DEADLINE_MS = 3 * 60_000
 /** Files taken from one drop or pick; the rest are listed as not uploaded. */
-export const UPLOAD_BATCH = 5
+const UPLOAD_BATCH = 5
+
+const BUNDLE_COPY: Record<Lang, string> = {
+  en: "Bundle into house project",
+  fr: "Regrouper en projet maison",
+  fi: "Yhdistä taloprojektiksi",
+  de: "Als Hausprojekt bündeln",
+}
+
+export interface ReadyUploadSummary {
+  id: string
+  name: string
+}
+
+export interface UploadPanelProps {
+  base: string | null
+  onReadyUploadsChange?: (uploads: ReadyUploadSummary[]) => void
+  onBundleUploads?: (uploadIds: string[]) => void
+  onProjectsDiscovered?: () => void
+}
 
 type Row = StoredUpload & {
   phase: "uploading" | DrawingStatus | "expired" | "too_slow"
@@ -88,8 +109,51 @@ let uploadSeq = 0
 /** Files named by the rejection lines (a batch overflow line names several files). */
 const rejectedCount = (r: { n?: number }[]) => r.reduce((k, x) => k + (x.n ?? 1), 0)
 
+/** Discover server-created multi-page PDF projects once a PDF upload finishes processing. */
+async function discoverServerProjects(base: string, onProjectsDiscovered?: () => void) {
+  try {
+    const resp = await fetch(`${base.replace(/\/+$/, "")}/projects`)
+    if (!resp.ok) return
+    const body: unknown = await resp.json()
+    const projects =
+      body && typeof body === "object" && Array.isArray((body as { projects?: unknown }).projects)
+        ? (body as { projects: unknown[] }).projects
+        : []
+    if (!projects.length) return
+    const raw = globalThis.localStorage?.getItem("aura.projects")
+    const current: unknown[] = raw ? (JSON.parse(raw) as unknown[]) : []
+    const existingIds = new Set(
+      Array.isArray(current)
+        ? current
+            .map((p) => (p && typeof p === "object" ? (p as { id?: unknown }).id : undefined))
+            .filter((x): x is string => typeof x === "string")
+        : []
+    )
+    const fresh = projects.filter(
+      (p) =>
+        !!p &&
+        typeof p === "object" &&
+        typeof (p as { id?: unknown }).id === "string" &&
+        Array.isArray((p as { floors?: unknown }).floors) &&
+        !existingIds.has((p as { id: string }).id)
+    )
+    if (fresh.length > 0) {
+      globalThis.localStorage?.setItem(
+        "aura.projects",
+        JSON.stringify([...fresh, ...(Array.isArray(current) ? current : [])])
+      )
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("aura:projects"))
+      }
+      onProjectsDiscovered?.()
+    }
+  } catch {
+    /* ignore network / 404 / storage errors */
+  }
+}
+
 /** The user's own uploads: stored ids + delete tokens, with live status from the API. */
-function useUploads(base: string) {
+function useUploads(base: string, onProjectsDiscovered?: () => void) {
   const [rows, setRows] = useState<Row[]>(() =>
     myUploads.list().map((u) => ({ ...u, phase: "queued" as const }))
   )
@@ -103,7 +167,7 @@ function useUploads(base: string) {
   }, [])
 
   const poll = useCallback(
-    (id: string, createdAt: string) => {
+    (id: string, createdAt: string, fileName?: string) => {
       const sent = Date.parse(createdAt)
       const started = Date.now()
       // Still queued/processing this long after upload: stuck.
@@ -126,6 +190,9 @@ function useUploads(base: string) {
             progress: st.progress,
             error: st.error,
           })
+          if (st.status === "ready" && fileName?.toLowerCase().endsWith(".pdf")) {
+            void discoverServerProjects(base, onProjectsDiscovered)
+          }
           if (pending)
             timers.current.set(
               id,
@@ -155,13 +222,13 @@ function useUploads(base: string) {
       }
       void tick()
     },
-    [base, patch]
+    [base, patch, onProjectsDiscovered]
   )
 
   useEffect(() => {
     alive.current = true
     const map = timers.current
-    for (const u of myUploads.list()) poll(u.id, u.created_at)
+    for (const u of myUploads.list()) poll(u.id, u.created_at, u.name)
     return () => {
       alive.current = false
       for (const t of map.values()) clearTimeout(t)
@@ -170,7 +237,7 @@ function useUploads(base: string) {
   }, [poll])
 
   const start = useCallback(
-    async (file: File) => {
+    async (file: File): Promise<string | null> => {
       const temp = `local-${Date.now()}-${++uploadSeq}`
       const row: Row = {
         id: temp,
@@ -193,7 +260,7 @@ function useUploads(base: string) {
           created_at: row.created_at,
         }
         myUploads.add(stored)
-        if (!alive.current) return
+        if (!alive.current) return res.drawing_id
         setRows((rs) =>
           rs.map((r) =>
             r.id === temp
@@ -201,12 +268,14 @@ function useUploads(base: string) {
               : r
           )
         )
-        poll(res.drawing_id, stored.created_at)
+        poll(res.drawing_id, stored.created_at, file.name)
+        return res.drawing_id
       } catch (e) {
         setRows((rs) => rs.filter((r) => r.id !== temp))
         toast.error(tuNow("up_toast_failed", { name: file.name }), {
           description: uploadErrorText(e),
         })
+        return null
       }
     },
     [base, patch, poll]
@@ -218,10 +287,12 @@ function useUploads(base: string) {
         await deleteDrawing({ baseUrl: base }, r.id, r.delete_token)
       } catch (e) {
         // Already gone on the server counts as deleted.
-        if (!(
-          e instanceof ApiError &&
-          (e.code === "unknown_drawing" || e.status === 404)
-        )) {
+        if (
+          !(
+            e instanceof ApiError &&
+            (e.code === "unknown_drawing" || e.status === 404)
+          )
+        ) {
           toast.error(tuNow("up_toast_delete_failed", { name: r.name }), {
             description: uploadErrorText(e),
           })
@@ -370,7 +441,12 @@ function UsageNote() {
 }
 
 /** Upload card. `base` is the API base; without one the panel explains why uploads are off. */
-export function UploadPanel({ base }: { base: string | null }) {
+export function UploadPanel({
+  base,
+  onReadyUploadsChange,
+  onBundleUploads,
+  onProjectsDiscovered,
+}: UploadPanelProps) {
   const { tu } = useUi()
   return (
     <Card size="sm" role="region" aria-labelledby="upload-title">
@@ -384,7 +460,12 @@ export function UploadPanel({ base }: { base: string | null }) {
       <CardContent className="flex flex-col gap-3">
         {base ? (
           <TooltipProvider delayDuration={400}>
-            <Uploader base={base} />
+            <Uploader
+              base={base}
+              onReadyUploadsChange={onReadyUploadsChange}
+              onBundleUploads={onBundleUploads}
+              onProjectsDiscovered={onProjectsDiscovered}
+            />
           </TooltipProvider>
         ) : (
           <>
@@ -401,17 +482,63 @@ export function UploadPanel({ base }: { base: string | null }) {
   )
 }
 
-function Uploader({ base }: { base: string }) {
-  const { tu, tn } = useUi()
-  const { rows, start, remove } = useUploads(base)
+function Uploader({
+  base,
+  onReadyUploadsChange,
+  onBundleUploads,
+  onProjectsDiscovered,
+}: {
+  base: string
+  onReadyUploadsChange?: (uploads: ReadyUploadSummary[]) => void
+  onBundleUploads?: (uploadIds: string[]) => void
+  onProjectsDiscovered?: () => void
+}) {
+  const { lang, tu, tn } = useUi()
+  const { rows, start, remove } = useUploads(base, onProjectsDiscovered)
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
   /** One line per file that was not uploaded (file name, reason). */
   const [rejection, setRejection] = useState<{ name: string; reason: string; n?: number }[]>([])
+  /** Quick-toggle offered when 2+ files are dropped/picked in one batch. */
+  const [batchIds, setBatchIds] = useState<string[]>([])
+  const [bundleWhenReady, setBundleWhenReady] = useState(false)
+  const autoBundledBatchRef = useRef("")
+
   const hasPresenter = useSyncExternalStore(
     presenter.subscribe,
     () => !!presenter.get()
   )
+
+  const readyUploads = useMemo(
+    () =>
+      rows
+        .filter((r) => r.phase === "ready" && !r.leaving)
+        .map((r) => ({ id: r.id, name: r.name })),
+    [rows]
+  )
+
+  const readySignature = readyUploads.map((u) => `${u.id}:${u.name}`).join("|")
+  useEffect(() => {
+    onReadyUploadsChange?.(readyUploads)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readySignature, onReadyUploadsChange])
+
+  // Auto-open the project bundler once all files in a 2+ batch finish processing when toggled on.
+  useEffect(() => {
+    if (!bundleWhenReady || batchIds.length < 2 || !onBundleUploads) return
+    const batchKey = batchIds.join(",")
+    if (autoBundledBatchRef.current === batchKey) return
+    const batchRows = rows.filter((r) => batchIds.includes(r.id))
+    const anyPending = batchRows.some(
+      (r) => r.phase === "uploading" || r.phase === "queued" || r.phase === "processing"
+    )
+    if (anyPending) return
+    const readyBatchIds = batchRows.filter((r) => r.phase === "ready").map((r) => r.id)
+    if (readyBatchIds.length >= 2) {
+      autoBundledBatchRef.current = batchKey
+      onBundleUploads(readyBatchIds)
+    }
+  }, [bundleWhenReady, batchIds, rows, onBundleUploads])
 
   const take = (files: FileList | null) => {
     const all = Array.from(files ?? [])
@@ -431,11 +558,30 @@ function Uploader({ base }: { base: string }) {
         reason: tn("up_batch", extra.length, { max: UPLOAD_BATCH }),
       })
     setRejection(out)
+    if (ok.length < 2) {
+      setBatchIds([])
+      setBundleWhenReady(false)
+    }
     // One after another, so the server's per-IP limits see a steady trickle, not a burst.
     void (async () => {
-      for (const f of ok) await start(f)
+      const uploadedIds: string[] = []
+      for (const f of ok) {
+        const id = await start(f)
+        if (id) uploadedIds.push(id)
+      }
+      if (uploadedIds.length >= 2) {
+        setBatchIds(uploadedIds)
+      }
     })()
   }
+
+  const batchStillProcessing =
+    batchIds.length >= 2 &&
+    rows.some(
+      (r) =>
+        batchIds.includes(r.id) &&
+        (r.phase === "uploading" || r.phase === "queued" || r.phase === "processing")
+    )
 
   return (
     <>
@@ -454,7 +600,7 @@ function Uploader({ base }: { base: string }) {
           take(e.dataTransfer.files)
         }}
         className={cn(
-          "flex flex-col items-center gap-3 rounded-lg border border-dashed border-input/60 px-4 py-6 text-center transition-colors",
+          "flex flex-col items-center gap-3 rounded-lg border border-dashed border-input px-4 py-6 text-center transition-colors",
           over && "border-foreground bg-muted"
         )}
       >
@@ -462,8 +608,14 @@ function Uploader({ base }: { base: string }) {
         <div className="flex flex-col gap-1">
           <p className="text-sm text-foreground">{tu("drop_here")}</p>
           <p className="text-xs text-muted-foreground">
-            <span className="num">{tu("up_dxf_cap", { mb: UPLOAD_CAPS.dxf.bytes / MB })}</span>{" "}
-            {tu("for_everyone", { n: UPLOAD_BATCH })}
+            <span className="num">
+              {tu("up_caps_line", {
+                dxf: UPLOAD_CAPS.dxf.bytes / MB,
+                ifc: UPLOAD_CAPS.ifc.bytes / MB,
+                img: UPLOAD_CAPS.image.bytes / MB,
+              })}
+            </span>{" "}
+            · {tu("for_everyone", { n: UPLOAD_BATCH })}
           </p>
         </div>
         <Button variant="outline" onClick={() => input.current?.click()}>
@@ -537,9 +689,35 @@ function Uploader({ base }: { base: string }) {
       {rows.length ? (
         <div className="flex flex-col gap-2">
           <Separator />
-          <h3 className="text-xs font-medium text-muted-foreground">
-            {tu("your_uploads")}
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-xs font-medium text-muted-foreground">
+              {tu("your_uploads")}
+            </h3>
+            {onBundleUploads && batchStillProcessing ? (
+              <Button
+                type="button"
+                variant={bundleWhenReady ? "default" : "outline"}
+                aria-pressed={bundleWhenReady}
+                onClick={() => setBundleWhenReady((v) => !v)}
+                className="min-h-10 text-xs"
+                data-bundle-uploads-toggle
+              >
+                <LayersIcon data-icon="inline-start" />
+                {BUNDLE_COPY[lang]}
+              </Button>
+            ) : onBundleUploads && readyUploads.length >= 2 ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onBundleUploads(readyUploads.map((u) => u.id))}
+                className="min-h-10 text-xs"
+                data-bundle-uploads
+              >
+                <LayersIcon data-icon="inline-start" />
+                {BUNDLE_COPY[lang]}
+              </Button>
+            ) : null}
+          </div>
           <ul className="flex flex-col gap-2" aria-label={tu("your_uploads")}>
             {rows.map((r) => (
               <li key={r.uid ?? r.id} data-upload={r.phase} className={r.leaving ? "exit-fall" : "enter-rise"}>
