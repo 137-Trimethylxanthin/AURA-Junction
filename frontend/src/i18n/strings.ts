@@ -150,6 +150,13 @@ const en = {
   show_more: 'Show more',
   stopped_title: 'Stopped',
   agent_note_found: 'Estimated from the drawing by the blueprint agent.',
+  // 1.2 color-coded groups, directional links & multi-plan project scope
+  where_project: 'across all {n} floors',
+  where_project_any: 'across all floors',
+  groups_legend: 'Color groups ({n})',
+  leads_to: '→ {target}',
+  jump_to_floor: 'Open {floor}',
+  clear_group_focus: 'All groups',
 }
 
 export type StringKey = keyof typeof en
@@ -290,6 +297,12 @@ const fr: Dict = {
   show_more: 'Afficher plus',
   stopped_title: 'Arrêté',
   agent_note_found: 'Estimé à partir du plan par l’agent.',
+  where_project: 'sur les {n} étages',
+  where_project_any: 'sur tous les étages',
+  groups_legend: 'Groupes couleur ({n})',
+  leads_to: '→ {target}',
+  jump_to_floor: 'Ouvrir {floor}',
+  clear_group_focus: 'Tous les groupes',
 }
 
 const fi: Dict = {
@@ -427,6 +440,12 @@ const fi: Dict = {
   show_more: 'Näytä lisää',
   stopped_title: 'Pysäytetty',
   agent_note_found: 'Piirustusagentin arvio pohjapiirroksesta.',
+  where_project: 'kaikissa {n} kerroksessa',
+  where_project_any: 'kaikissa kerroksissa',
+  groups_legend: 'Väriryhmät ({n})',
+  leads_to: '→ {target}',
+  jump_to_floor: 'Avaa {floor}',
+  clear_group_focus: 'Kaikki ryhmät',
 }
 
 const de: Dict = {
@@ -564,6 +583,12 @@ const de: Dict = {
   show_more: 'Mehr anzeigen',
   stopped_title: 'Abgebrochen',
   agent_note_found: 'Vom Plan-Agenten aus der Zeichnung geschätzt.',
+  where_project: 'über alle {n} Geschosse',
+  where_project_any: 'über alle Geschosse',
+  groups_legend: 'Farbgruppen ({n})',
+  leads_to: '→ {target}',
+  jump_to_floor: '{floor} öffnen',
+  clear_group_focus: 'Alle Gruppen',
 }
 
 export const STRINGS: Record<Lang, Dict> = { en, fr, fi, de }
