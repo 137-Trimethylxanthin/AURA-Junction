@@ -166,8 +166,10 @@ def run(db: DB, drawing_key: str) -> dict:
     #   pdf_rooms.interpret(db, f)     rooms from the vector linework and texts of a PDF page
     #   raster_rooms.interpret(db, f)  rooms from the pixels and OCR of a scan
     #   symbols.interpret(db, f)       doors, windows and fixtures detected on the page image of a PDF or scan
+    #   raster_plan.interpret(db, f)   walls, a nominal scale where the sheet states none, openings on the wall line
     # They decide themselves whether there is something to add (e.g. nothing when the twin already gave it).
-    for name, formats in (("pdf_rooms", ("pdf",)), ("raster_rooms", RASTER), ("symbols", ("pdf",) + RASTER)):
+    for name, formats in (("pdf_rooms", ("pdf",)), ("raster_rooms", RASTER), ("symbols", ("pdf",) + RASTER),
+                          ("raster_plan", RASTER)):
         try:
             mod = importlib.import_module(f"jstore.interpret.{name}")
         except ModuleNotFoundError as e:

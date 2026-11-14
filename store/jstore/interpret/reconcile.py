@@ -15,7 +15,8 @@ import collections
 from ..db import DB
 
 TOLERANCE = 0.02
-METHOD = {"printed": 0, "stored_quantity": 1, "ocr": 2, "measured_outline": 3, "measured_geometry": 3, "detected": 5}
+METHOD = {"printed": 0, "stored_quantity": 1, "ocr": 2, "measured_outline": 3, "measured_geometry": 3, "detected": 5,
+          "nominal_outline": 6}      # measured under an estimated scale (raster_plan): approximate, last
 FORMAT = {"dxf": 0, "dwg": 0, "ifc": 1, "pdf": 2, "svg": 2, "png": 3, "jpg": 3}
 
 

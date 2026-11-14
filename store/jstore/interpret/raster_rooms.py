@@ -884,6 +884,8 @@ def interpret(db: DB, f: dict) -> dict:
     from ..pipeline import store_dir
     t0 = time.time()
     deadline = t0 + TIMEOUT_S
+    from . import raster_plan
+    raster_plan.drop_nominal_frame(db, f["file_id"])      # an estimated scale of an earlier run is not a stated one
     prior = _prior(db, f)
     if prior["other"]:
         return _nothing(db, f, f"the drawing already has {prior['other']} rooms from a CAD, IFC or PDF source")
@@ -1086,6 +1088,14 @@ def interpret(db: DB, f: dict) -> dict:
             attrs.update(outline_px=round(area_px), barrier=r.get("barrier"), box_fit=r.get("fit"),
                          geom="outline of the pixel region between the walls")
             sources.append(("region", f"room {i}", "outline", [round(v / k, 1) for v in r["bbox"]], d_room))
+            # the outline in page pixels, kept so that raster_plan can place the room and derive walls from it
+            attrs["outline_detection"] = db.one(
+                """insert into jstore.raster_detection (file_id, page_no, class, x0, y0, x1, y1, detector, attrs, geom)
+                   values (:f, 0, 'room_outline', cast(:x0 as float8), cast(:y0 as float8), cast(:x1 as float8),
+                           cast(:y1 as float8), :det, cast(:a as jsonb), st_geomfromtext(:w)) returning id""",
+                f=f["file_id"], x0=poly.bounds[0], y0=poly.bounds[1], x1=poly.bounds[2], y1=poly.bounds[3],
+                det=f"raster_rooms {VERSION} segmentation", a=js(dict(name=r["name"], number=r["number"],
+                                                                      method="wall_segmentation")), w=poly.wkt)["id"]
         elif method == "gemini_box":                      # evidence of where the room is, not an outline
             flags.append("box_only")
             attrs["geom"] = "none: only the box Gemini drew around the room is known (source role room_box)"

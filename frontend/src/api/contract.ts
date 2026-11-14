@@ -121,7 +121,7 @@ export interface RoomPoly {
   points: [Pct, Pct][]
   label_at: [Pct, Pct]
   /** 1.1: 'outline' when no area is printed and it comes from the room outline. Absent means printed. */
-  area_source?: 'printed' | 'outline'
+  area_source?: 'printed' | 'outline' | 'estimate'
   /** Present only for rooms that support what-if resizing. */
   rect?: PctRect & { w_m: number; h_m: number }
 }
@@ -482,7 +482,7 @@ export interface AnswerNote {
 
 export type Answer =
   | { kind: 'count'; value: number; subject: Subject }
-  | { kind: 'area'; value: number; unit: 'm2' }
+  | { kind: 'area'; value: number; unit: 'm2'; approximate?: boolean }
   | { kind: 'abstain'; reason: AbstainReason; where_to_find?: string }
   /** 1.1: a measured quantity given as is (IFC wall length, net side area, net volume); never recomputed. */
   | { kind: 'quantity'; value: number; unit: 'm' | 'm2' | 'm3' }
@@ -1068,7 +1068,7 @@ function isRoomPoly(v: unknown): v is RoomPoly {
     Array.isArray(v.points) &&
     v.points.every(isPair) &&
     isPair(v.label_at) &&
-    (v.area_source === undefined || isOneOf(v.area_source, ['printed', 'outline'] as const)) &&
+    (v.area_source === undefined || isOneOf(v.area_source, ['printed', 'outline', 'estimate'] as const)) &&
     (v.rect === undefined || (isRect(v.rect) && isNum(v.rect.w_m) && isNum(v.rect.h_m)))
   )
 }

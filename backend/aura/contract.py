@@ -191,6 +191,7 @@ class AnswerArea(_M):
     kind: Literal["area"] = "area"
     value: float
     unit: Literal["m2"] = "m2"
+    approximate: bool | None = None  # measured under an estimated scale (a scan that states none): show "≈"
 
 
 class AnswerAbstain(_M):
@@ -447,7 +448,7 @@ class RoomPoly(_Open):
     points: list[tuple[float, float]]
     label_at: tuple[float, float]
     rect: RoomRect | None = None
-    area_source: Literal["printed", "outline"] | None = None
+    area_source: Literal["printed", "outline", "estimate"] | None = None
 
 
 class Credit(_Open):

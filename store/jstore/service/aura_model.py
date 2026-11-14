@@ -211,6 +211,15 @@ class Model:
     page_files: set = field(default_factory=set)          # and the files that show it on every page; None: any page
     linework: tuple[str, int | str, Affine] | None = None  # (file_id, page or space, file coords -> percent)
     frames: dict[tuple[str, int], Affine] = field(default_factory=dict)   # pages in the drawing's shared frame
+    walls: list = field(default_factory=list)             # an image plan: its wall polygons in percent (raster_plan)
+    nominal: bool = False                                 # an image plan without a stated scale: metres are an estimate
+
+    @property
+    def vector_scan(self) -> bool:
+        """An image plan with a vector model of its own (walls or room polygons): plan.svg is drawn from it."""
+        b = self.base
+        return (b is not None and self.linework is None and b.format in ("png", "jpg") and b.image is not None
+                and (bool(self.walls) or any(len(r["points"]) >= 3 for r in self.rooms)))
 
     def on_page(self, file_id: str, page_no: int, box: list[float] | None) -> dict | None:
         """A box in the coordinates of one of the drawing's files as a rectangle in percent of the page shown:
@@ -326,7 +335,7 @@ def storey_index(db: DB, key: str | None = None) -> dict[str, list[Storey]]:
     plans = db.run(f"""select distinct f.drawing_key, f.storey from jstore.source_file f
                        where f.format <> 'ifc' and f.storey is not null and {cond} and exists (
                          select 1 from jstore.page p join jstore.frame fr using (file_id, page_no)
-                         where p.file_id = f.file_id and p.image is not null and fr.method not in ('scale_text', 'pixel_scale'))""", **kw)
+                         where p.file_id = f.file_id and p.image is not null and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale'))""", **kw)
     out: dict[str, list[Storey]] = {}
     by_guid: dict[tuple[str, str], Storey] = {}
     for r in rows:
@@ -413,17 +422,17 @@ def pick_base(db: DB, key: str, only: set[str] | None = None) -> Base | None:
     pages = [p for p in pages if len(p["to_image"] or []) == 6 and inv(p["to_image"])]
     if only is not None:
         pages = [p for p in pages if p["file_id"] in only and p["m"] and len(p["m"]) == 6 and inv(p["m"])
-                 and p["method"] not in ("scale_text", "pixel_scale")]
+                 and p["method"] not in ("scale_text", "pixel_scale", "nominal_scale")]
         if not pages:
             return None
     if not pages:
         return _unrendered_cad(db, key)
-    shared = any(p["m"] and p["method"] not in ("scale_text", "pixel_scale") for p in pages) or bool(db.one(
+    shared = any(p["m"] and p["method"] not in ("scale_text", "pixel_scale", "nominal_scale") for p in pages) or bool(db.one(
         """select 1 from jstore.frame fr join jstore.source_file f using (file_id)
-           where f.drawing_key = :k and fr.method not in ('scale_text', 'pixel_scale') limit 1""", k=key))
+           where f.drawing_key = :k and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale') limit 1""", k=key))
 
     def usable(p: dict) -> bool:  # a scale-only frame places nothing relative to a drawing that has a shared frame
-        return bool(p["m"]) and len(p["m"]) == 6 and inv(p["m"]) is not None and (p["method"] not in ("scale_text", "pixel_scale") or not shared)
+        return bool(p["m"]) and len(p["m"]) == 6 and inv(p["m"]) is not None and (p["method"] not in ("scale_text", "pixel_scale", "nominal_scale") or not shared)
 
     def score(p: dict) -> tuple:
         framed = usable(p)
@@ -434,7 +443,7 @@ def pick_base(db: DB, key: str, only: set[str] | None = None) -> Base | None:
     return Base(file_id=p["file_id"], page_no=p["page_no"], format=p["format"], name=p["name"], image=p["image"],
                 w=int(p["image_w"]), h=int(p["image_h"]), to_image=tuple(p["to_image"]),
                 frame=tuple(p["m"]) if usable(p) else None, frame_method=p["method"] if usable(p) else None,
-                registered=usable(p) and p["method"] not in ("scale_text", "pixel_scale"))
+                registered=usable(p) and p["method"] not in ("scale_text", "pixel_scale", "nominal_scale"))
 
 
 def _unrendered_cad(db: DB, key: str, width: int = 2000) -> Base | None:
@@ -444,7 +453,7 @@ def _unrendered_cad(db: DB, key: str, width: int = 2000) -> Base | None:
     p = db.one("""select fr.file_id, fr.page_no, fr.m, fr.method, pg.name, f.format
                   from jstore.frame fr join jstore.source_file f using (file_id)
                   join jstore.page pg on pg.file_id = fr.file_id and pg.page_no = fr.page_no
-                  where f.drawing_key = :k and f.format in ('dxf', 'dwg') and fr.method not in ('scale_text', 'pixel_scale')
+                  where f.drawing_key = :k and f.format in ('dxf', 'dwg') and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale')
                   order by fr.page_no, f.format, fr.file_id limit 1""", k=key)
     if p is None or len(p["m"]) != 6 or inv(p["m"]) is None:
         return None
@@ -547,9 +556,11 @@ def load(db: DB, key: str) -> dict | None:
                        where kind = 'room' and property = 'net_area_m2' order by entity_id, format"""):
         values.setdefault(s["entity_id"], []).append(dict(value=s["value"], unit=s["unit"], method=s["method"],
                                                           rank=s["rank"], format=s["format"]))
-    d.update(srcs=srcs, values=values, frames={})
+    d.update(srcs=srcs, values=values, frames={}, walls=[])
+    if any(f["format"] in ("png", "jpg") for f in files) and db.one("select to_regclass('q.walls') as v")["v"]:
+        d["walls"] = db.run("select entity_id, geom from q.walls order by entity_id")
     for fr in db.run("""select fr.file_id, fr.page_no, fr.m from jstore.frame fr join jstore.source_file f using (file_id)
-                        where f.drawing_key = :k and fr.method not in ('scale_text', 'pixel_scale')""", k=key):
+                        where f.drawing_key = :k and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale')""", k=key):
         if len(fr["m"]) == 6:
             d["frames"][(fr["file_id"], fr["page_no"])] = tuple(fr["m"])
     return d
@@ -701,6 +712,7 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
                     unit=r["apartment"] or None, area_m2=round(area, 2) if area is not None else None,
                     outdoor=not r["is_indoor"], points=pts, label_at=at,
                     area_source=(None if area is None else
+                                 "estimate" if str(r["area_source"] or "").startswith("nominal") else
                                  "outline" if str(r["area_source"] or "").startswith("measured") else "printed"),
                     entity_id=r["entity_id"], room_type=r["room_type"], storey=r["storey"], area_method=r["area_source"],
                     n_sources=r["n_sources"], agreement=r["agreement"], is_duplicate=r["is_duplicate"],
@@ -735,6 +747,16 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
     for a in m.apartments:
         m.by_entity[a["entity_id"]] = dict(kind="apartment", entity_id=a["entity_id"], unit=a["apartment"], label=a["label"])
     m.linework = None if m.synthetic else _linework(db, m)
+    if base is not None and base.format in ("png", "jpg") and frame_to_pct is not None and m.linework is None:
+        m.nominal = base.frame_method == "nominal_scale"
+        for w in data.get("walls") or []:
+            g = _geom(w["geom"])
+            if g is None or not any(s["file_id"] == base.file_id for s in srcs.get(w["entity_id"], [])):
+                continue
+            g = transform(g, frame_to_pct)
+            g = g if g.is_valid else g.buffer(0)
+            if not g.is_empty:
+                m.walls.append(g)
     return m
 
 
@@ -750,7 +772,7 @@ def _linework(db: DB, m: Model) -> tuple[str, int | str, Affine] | None:
     if base.frame is not None and base.registered:  # a raster in the shared frame: draw its CAD twin
         twin = db.one("""select fr.file_id, fr.m, p.name from jstore.frame fr join jstore.source_file f using (file_id)
                          join jstore.page p on p.file_id = fr.file_id and p.page_no = fr.page_no
-                         where f.drawing_key = :k and f.format in ('dxf', 'dwg') and fr.method not in ('scale_text', 'pixel_scale') and fr.page_no = 0
+                         where f.drawing_key = :k and f.format in ('dxf', 'dwg') and fr.method not in ('scale_text', 'pixel_scale', 'nominal_scale') and fr.page_no = 0
                          order by f.format, fr.file_id limit 1""", k=m.key)
         if twin and len(twin["m"]) == 6:
             return (twin["file_id"], twin["name"] or "model", mul(mul(base.to_pct, inv(base.frame)), tuple(twin["m"])))
@@ -903,7 +925,7 @@ def drawing_doc(m: Model, project_meta: dict | None = None) -> dict:
         images = dict(rebuilt=f"/drawings/{did}/plan.svg")
     elif m.linework is not None and m.placed > 0:        # the plan rebuilt from the store over the page it was read from
         images = dict(rebuilt=f"/drawings/{did}/plan.svg", original=f"/drawings/{did}/original.png", original_alignment="exact")
-    elif base is not None and m.placed > 0 and base.format in ("png", "jpg"):   # a scan: its own picture, annotated
+    elif m.vector_scan:                                  # an image plan: the vector plan drawn from its model, beside the scan
         images = dict(rebuilt=f"/drawings/{did}/plan.svg", original=f"/drawings/{did}/original.png", original_alignment="exact")
     else:
         images = dict(rebuilt=f"/drawings/{did}/original.png")
@@ -1019,6 +1041,124 @@ def _scan_data_uri(base: Base, max_side: int = 2400) -> str | None:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
+# The layers of an image plan's vector drawing.  The 3D view reads them by these exact styles (the same ones as the
+# plan.svg of a CAD bundle): walls by their fill, windows by fill + stroke, doors and fixtures by their stroke.
+WALL_FILL, WINDOW_STROKE, DOOR_STROKE, FIXTURE_STROKE = "#2f343c", "#374151", "#4b5563", "#6b7280"
+ESTIMATE_NOTE = "Scale estimated from door and fixture sizes: lengths and areas are approximate"
+
+
+def area_text(r: dict) -> str | None:
+    """A room's area as printed on the plan: an area measured under an estimated scale is marked approximate."""
+    if r["area_m2"] is None:
+        return None
+    return f"≈ {r['area_m2']:.0f} m²" if r.get("area_source") == "estimate" else f"{r['area_m2']:.2f} m²"
+
+
+def _scan_plan_svg(m: Model) -> str:
+    """An image plan redrawn from the store's model of it, in the percent space of the scan: walls as filled
+    polygons, rooms tinted with name and area, doors (opening, leaf, swing), windows and fixtures as symbols."""
+    base = m.base
+    H = SVG_W * base.h / base.w
+    sx, sy = SVG_W / 100.0, H / 100.0
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {SVG_W:g} {H:.2f}" '
+           f'font-family="Helvetica, Arial, sans-serif" data-plan="vector-scan" data-scale="{"nominal" if m.nominal else "stated"}">',
+           '<rect width="100%" height="100%" fill="#ffffff"/>']
+
+    def d_of(g) -> str:
+        parts = []
+        for geom in getattr(g, "geoms", [g]):
+            if geom.geom_type != "Polygon":
+                continue
+            for ring in [geom.exterior, *geom.interiors]:
+                parts.append("M" + " ".join(f"{x * sx:.1f},{y * sy:.1f}" for x, y in ring.coords[:-1]) + "Z")
+        return "".join(parts)
+
+    out.append('<g data-layer="rooms">')
+    for r in m.rooms:
+        if len(r["points"]) >= 3:
+            pts = " ".join(f"{x * sx:.1f},{y * sy:.1f}" for x, y in r["points"])
+            out.append(f'<polygon points="{pts}" fill="{"#f4f1e6" if r["outdoor"] else "#e8f0f8"}" stroke="#b6c2d0" stroke-width="0.6"/>')
+    out.append('</g><g data-layer="walls">')
+    glass = [i["shape"] for i in m.items if i["kind"] == "window" and i.get("shape") is not None
+             and i["shape"].geom_type in ("Polygon", "MultiPolygon")]
+    cut = shapely.union_all(glass) if glass else None    # a window is an opening of the wall it sits in
+    for g in m.walls:
+        if cut is not None:
+            g = g.difference(cut)
+        for geom in getattr(g, "geoms", [g]):
+            d = d_of(geom)
+            if d:
+                out.append(f'<path d="{d}" fill="{WALL_FILL}" fill-rule="evenodd"/>')
+    solid = shapely.union_all(m.walls) if m.walls else None
+    doors, windows, fixtures = [], [], []
+    polys = [shapely.Polygon(r["points"]) for r in m.rooms if len(r["points"]) >= 3]
+    indoors = shapely.union_all([p if p.is_valid else p.buffer(0) for p in polys]).buffer(1.0) if polys else None
+    for it in m.items:
+        g, b = it.get("shape"), it["box"]
+        if not b or it["subject"] == "label":
+            continue
+        x, y, w, h = b["x"] * sx, b["y"] * sy, b["w"] * sx, b["h"] * sy
+        if it["kind"] == "window":
+            d = d_of(g) if g is not None and g.geom_type in ("Polygon", "MultiPolygon") else ""
+            windows.append(f'<path d="{d or f"M{x:.1f},{y:.1f}h{w:.1f}v{h:.1f}h{-w:.1f}Z"}" fill="#ffffff" stroke="{WINDOW_STROKE}" stroke-width="0.8"/>')
+            a, c = ((x, y + h / 2), (x + w, y + h / 2)) if w >= h else ((x + w / 2, y), (x + w / 2, y + h))
+            windows.append(f'<path d="M{a[0]:.1f},{a[1]:.1f}L{c[0]:.1f},{c[1]:.1f}" fill="none" stroke="{WINDOW_STROKE}" stroke-width="0.5"/>')
+        elif it["kind"] == "door":
+            doors.append(f'<path d="M{x:.1f},{y:.1f}h{w:.1f}v{h:.1f}h{-w:.1f}Z" fill="none" stroke="{DOOR_STROKE}" stroke-width="0.5"/>')
+            # the leaf stands open at the hinge, across the wall, on the side that is not wall; the arc is its swing
+            along_x = w >= h
+            n = max(w, h)
+            hinge = (x, y + h / 2) if along_x else (x + w / 2, y)
+            best = None
+            for sign in (1, -1):
+                off = sign * (n + min(w, h) / 2)
+                tip = (hinge[0], hinge[1] + off) if along_x else (hinge[0] + off, hinge[1])
+                inside = solid is not None and bool(shapely.contains_xy(solid, tip[0] / sx, tip[1] / sy))
+                if best is None or (best[2] and not inside):
+                    best = (tip, sign, inside)
+            tip, sign, _ = best
+            end = (x + w, y + h / 2 + sign * h / 2) if along_x else (x + w / 2 + sign * w / 2, y + h)
+            start = (hinge[0], hinge[1] + sign * h / 2) if along_x else (hinge[0] + sign * w / 2, hinge[1])
+            sweep = 1 if (sign > 0) != along_x else 0
+            doors.append(f'<path d="M{start[0]:.1f},{start[1]:.1f}L{tip[0]:.1f},{tip[1]:.1f}" fill="none" stroke="{DOOR_STROKE}" stroke-width="1"/>')
+            doors.append(f'<path d="M{tip[0]:.1f},{tip[1]:.1f}A{n:.1f},{n:.1f} 0 0 {sweep} {end[0]:.1f},{end[1]:.1f}" fill="none" '
+                         f'stroke="{DOOR_STROKE}" stroke-width="0.5"/>')
+        elif indoors is None or shapely.contains_xy(indoors, b["x"] + b["w"] / 2, b["y"] + b["h"] / 2):
+            r = min(w, h) * 0.18                     # (a fixture detected outside every room is not part of the plan)
+            d = (f"M{x + r:.1f},{y:.1f}h{w - 2 * r:.1f}l{r:.1f},{r:.1f}v{h - 2 * r:.1f}l{-r:.1f},{r:.1f}h{-(w - 2 * r):.1f}"
+                 f"l{-r:.1f},{-r:.1f}v{-(h - 2 * r):.1f}Z")
+            fixtures.append(f'<path d="{d}" fill="none" stroke="{FIXTURE_STROKE}" stroke-width="0.7"/>')
+            fixtures.append(f'<path d="M{x + w * 0.25:.1f},{y + h * 0.25:.1f}h{w * 0.5:.1f}v{h * 0.5:.1f}h{-w * 0.5:.1f}Z" fill="none" '
+                            f'stroke="{FIXTURE_STROKE}" stroke-width="0.4"/>')
+    out += ['</g><g data-layer="windows">', *windows, '</g><g data-layer="doors">', *doors,
+            '</g><g data-layer="fixtures">', *fixtures, '</g><g data-layer="labels">']
+    for r in m.rooms:
+        if len(r["points"]) < 3:
+            continue
+        xs, ys = [p[0] * sx for p in r["points"]], [p[1] * sy for p in r["points"]]
+        x, y = r["label_at"][0] * sx, r["label_at"][1] * sy
+        lines = [(r["num"], 700)] if r["num"] else []
+        if r["name"] and r["name"] != "Room":
+            lines.append((r["name"][:28], 400))
+        if area_text(r):
+            lines.append((area_text(r), 400))
+        if not lines:
+            continue
+        longest = max(len(t) for t, _ in lines)          # the label fits the room: by its longest line and its lines
+        size = max(3.0, min(11.0, (max(xs) - min(xs)) / (0.56 * longest + 1), (max(ys) - min(ys)) / (1.3 * len(lines) + 0.5)))
+        y -= (len(lines) - 1) * size * 0.6
+        for text, weight in lines:
+            out.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size:.1f}" font-weight="{weight}" text-anchor="middle" '
+                       f'dominant-baseline="middle" fill="#0f172a" stroke="#ffffff" stroke-width="{size * 0.22:.1f}" '
+                       f'paint-order="stroke">{html.escape(text)}</text>')
+            y += size * 1.2
+    if m.nominal:
+        out.append(f'<text x="6" y="{H - 6:.1f}" font-size="9" fill="#64748b" stroke="#ffffff" stroke-width="2" '
+                   f'paint-order="stroke">{html.escape(ESTIMATE_NOTE)}</text>')
+    out.append("</g></svg>")
+    return "\n".join(out)
+
+
 def plan_svg(db: DB, m: Model) -> str:
     """The drawing rebuilt from the store's geometry, in the percent space of the base image: the strokes of the
     vector file in grey, rooms tinted with number, name and area, doors, windows and fixtures in colour."""
@@ -1038,6 +1178,8 @@ def plan_svg(db: DB, m: Model) -> str:
                     parts.append(f"M{pts}" + ("Z" if geom.geom_type == "Polygon" else ""))
         return "".join(parts)
 
+    if m.vector_scan:
+        return _scan_plan_svg(m)
     scan = _scan_data_uri(base) if base is not None and m.linework is None and base.format in ("png", "jpg") else None
     if scan:                                         # a scan has no strokes to redraw: its picture is the linework
         out.append(f'<image href="{scan}" x="0" y="0" width="{SVG_W:g}" height="{SVG_W * h / w:.2f}" '

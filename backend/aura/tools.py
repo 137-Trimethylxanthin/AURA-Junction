@@ -279,12 +279,22 @@ class BundleEngine:
             if scope.get("kind") == "room" and rooms:
                 r0 = rooms[0]
                 summary = f"Room {r0['room_id']} ({r0['name']}), net area {ev[0]['area_m2']:.2f} m²."
+                if r0.get("area_source") == "estimate" and not ev[0].get("edited"):
+                    summary = (f"Room {r0['room_id']} ({r0['name']}), net area ≈ {ev[0]['area_m2']:.0f} m² (estimate: "
+                               "the drawing states no scale, so the outline was measured under a scale estimated "
+                               "from door and fixture sizes).")
             else:
                 summary = (f"Sum of {len(parts)} net room areas {where} = {value:.2f} m²"
                            + (f"; {n_out} outdoor left out" if n_out else "")
                            + (f"; {n_unknown} without a printed area left out" if n_unknown else "")
                            + ".")
-            return {"answer": {"kind": "area", "value": value, "unit": "m2"}, "value": value,
+            est = sum(1 for r, e in zip(rooms, ev, strict=False)
+                      if e["included"] and not e.get("edited") and r.get("area_source") == "estimate")
+            if est and scope.get("kind") != "room":
+                summary += (f" Approximate: {est} of these areas are estimates, measured under a scale estimated from "
+                            "door and fixture sizes because the drawing states none.")
+            return {"answer": {"kind": "area", "value": value, "unit": "m2"} | ({"approximate": True} if est else {}),
+                    "value": value,
                     "numbers": [value, *parts], "evidence": {"boxes": [], "rooms": ev},
                     "summary": summary} | self._method(family)
         raise ValueError(f"unknown family {family!r}")

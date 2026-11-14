@@ -323,6 +323,9 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     inc_ids = [room_eid(r.room_id) for r in included]
     used = [o for o in overrides or [] if any(r.room_id == o["room_id"] for r in rooms)]
     k = scope.get("kind", "floor")
+    # areas measured under an estimated scale (a scan that states none) make the answer approximate
+    estimates = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
+    approx = any(r.room_id in estimates and not getattr(r, "edited", False) for r in included)
     canonical = ("What is the net floor area of all numbered indoor rooms" if k == "floor" else
                  f"What is the total area of rooms labelled {scope['label']}" if k == "label" else
                  f"What is the net floor area inside {scope.get('label')}" if k == "region" else
@@ -360,7 +363,7 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     if tr.links:
         ev_dict["links"] = [lk.model_dump(exclude_none=True) for lk in tr.links]
     body = _base(question, lang, scope) | {
-        "answer": {"kind": "area", "value": value, "unit": "m2"},
+        "answer": {"kind": "area", "value": value, "unit": "m2"} | ({"approximate": True} if approx else {}),
         "evidence": ev_dict,
         "canonical_en": canonical,
         "method": tr.method,
