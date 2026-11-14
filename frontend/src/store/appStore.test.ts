@@ -1,5 +1,9 @@
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { describe, expect, it } from 'vitest'
 import { createSource } from '@/api/source'
+import { Command, CommandDialog, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { bundledDrawing } from '@/data/drawing'
 import { limitsOf, markLabel, nextLabel, overlayOpen, shouldIgnoreShortcut } from '@/features/plan/shared'
 import { deriveAnswer } from '@/lib/answer'
@@ -274,7 +278,7 @@ describe('plan shared helpers & shortcut guards', () => {
     expect(shouldIgnoreShortcut({ target: div })).toBe(false)
     tipWrap.remove()
 
-    // Non-tooltip popover wrapper MUST block shortcuts
+    // Non-tooltip popover wrapper MUST block shortcuts while open, but NOT once data-state="closed"
     const popWrap = document.createElement('div')
     popWrap.setAttribute('data-radix-popper-content-wrapper', '')
     const pop = document.createElement('div')
@@ -283,7 +287,103 @@ describe('plan shared helpers & shortcut guards', () => {
     document.body.appendChild(popWrap)
     expect(overlayOpen()).toBe(true)
     expect(shouldIgnoreShortcut({ target: div })).toBe(true)
+    pop.setAttribute('data-state', 'closed')
+    expect(overlayOpen()).toBe(false)
+    expect(shouldIgnoreShortcut({ target: div })).toBe(false)
     popWrap.remove()
+
+    // Closing dialog (data-state="closed") must NOT block shortcuts; open dialog MUST block
+    const dlg = document.createElement('div')
+    dlg.setAttribute('role', 'dialog')
+    dlg.setAttribute('data-state', 'closed')
+    document.body.appendChild(dlg)
+    expect(overlayOpen()).toBe(false)
+    dlg.setAttribute('data-state', 'open')
+    expect(overlayOpen()).toBe(true)
+    dlg.remove()
+
+    // Descendant inside contenteditable="true" and ARIA combobox MUST block shortcuts
+    const ce = document.createElement('div')
+    ce.setAttribute('contenteditable', 'true')
+    const ceSpan = document.createElement('span')
+    ce.appendChild(ceSpan)
+    document.body.appendChild(ce)
+    expect(shouldIgnoreShortcut({ target: ceSpan })).toBe(true)
+    ce.remove()
+
+    const combo = document.createElement('div')
+    combo.setAttribute('role', 'combobox')
+    document.body.appendChild(combo)
+    expect(shouldIgnoreShortcut({ target: combo })).toBe(true)
+    combo.remove()
+
     div.remove()
+  })
+
+  it('CommandDialog portals title inside dialog-content and enforces 40px targets', () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    if (!globalThis.ResizeObserver) {
+      globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver
+    }
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = () => {}
+    }
+
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    const inner = [
+      createElement(CommandInput, { key: 'in', placeholder: 'Search…' }),
+      createElement(
+        CommandList,
+        { key: 'list' },
+        createElement(
+          CommandGroup,
+          { heading: 'Actions' },
+          createElement(
+            CommandItem,
+            { value: 'fit' },
+            'Fit drawing',
+            createElement(KbdGroup, null, createElement(Kbd, null, '0')),
+          ),
+        ),
+      ),
+    ]
+
+    const tree = (open: boolean, wrapCommand = false) =>
+      createElement(
+        CommandDialog,
+        { open, title: 'Command switcher', description: 'Jump to action', showCloseButton: true },
+        wrapCommand ? createElement(Command, null, ...inner) : inner,
+      )
+
+    act(() => {
+      root.render(tree(false))
+    })
+    expect(document.querySelector('[data-slot="dialog-title"]')).toBeNull()
+
+    for (const wrap of [false, true]) {
+      act(() => {
+        root.render(tree(true, wrap))
+      })
+      const content = document.querySelector('[data-slot="dialog-content"]')
+      expect(content).not.toBeNull()
+      expect(content!.querySelectorAll('[data-slot="command"]')).toHaveLength(1)
+      expect(content!.querySelector('[data-slot="dialog-title"]')?.textContent).toBe('Command switcher')
+      expect(content!.querySelector('[data-slot="dialog-close"]')?.getAttribute('data-size')).toBe('icon')
+      expect(content!.querySelector('[data-slot="input-group"]')?.className).toContain('h-10!')
+      expect(content!.querySelector('[data-slot="command-item"]')?.className).toContain('min-h-10')
+      expect(content!.querySelector('[data-slot="kbd"]')?.textContent).toBe('0')
+    }
+
+    act(() => {
+      root.unmount()
+    })
+    host.remove()
   })
 })

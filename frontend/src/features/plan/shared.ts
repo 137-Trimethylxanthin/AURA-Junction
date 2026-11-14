@@ -37,8 +37,13 @@ export const roomTitle = (r: Pick<RoomPoly, 'name' | 'num'>) => `${r.name} ${r.n
 
 /** True when an editable element has focus (keyboard shortcuts must not fire there). */
 export function isEditable(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+  if (!(target instanceof Element)) return false
+  if (target instanceof HTMLElement && target.isContentEditable) return true
+  return Boolean(
+    target.closest(
+      'input, textarea, select, [contenteditable="true"], [contenteditable=""], [role="textbox"], [role="combobox"], [role="searchbox"]',
+    ),
+  )
 }
 
 /** Metres with 2–3 decimals (4.135, 3.60). */
@@ -75,10 +80,18 @@ export function limitsOf(room: RoomPoly): { maxW: number; maxH: number } {
 /** A menu, dialog, listbox or non-tooltip popover is open somewhere: it owns Escape and single-key hotkeys. */
 export function overlayOpen(): boolean {
   if (typeof document === 'undefined') return false
-  if (document.querySelector('[role=menu],[role=dialog],[role=alertdialog],[role=listbox]')) return true
+  if (
+    document.querySelector(
+      '[role=menu]:not([data-state="closed"]),[role=dialog]:not([data-state="closed"]),[role=alertdialog]:not([data-state="closed"]),[role=listbox]:not([data-state="closed"])',
+    )
+  ) {
+    return true
+  }
   const poppers = document.querySelectorAll('[data-radix-popper-content-wrapper]')
   for (const el of poppers) {
-    if (!el.querySelector('[data-slot="tooltip-content"],[role="tooltip"]')) return true
+    if (el.querySelector('[data-slot="tooltip-content"],[role="tooltip"]')) continue
+    if (el.querySelector('[data-state="closed"]')) continue
+    return true
   }
   return false
 }
