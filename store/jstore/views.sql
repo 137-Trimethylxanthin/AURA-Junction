@@ -70,12 +70,17 @@ create view q.rooms as
 select e.entity_id, e.drawing_key as drawing, e.storey, e.number, e.label, e.label_norm as room_type,
        e.zone as apartment,
        a.value as area_m2, a.method as area_source,
+       -- the preferred perimeter claim (scans: measured on the room outline), else the length of the outline itself
+       -- (entity.geom is in metres)
+       coalesce(p.value, case when geometrytype(e.geom) in ('POLYGON', 'MULTIPOLYGON')
+                              then round(st_perimeter(e.geom)::numeric, 3)::double precision end) as perimeter_m,
        coalesce((e.attrs->>'indoor')::boolean, true) as is_indoor,
        coalesce(a.n_sources, 0) as n_sources, a.agreement,
        e.duplicate_of is not null as is_duplicate,
        e.geom
 from jstore.entity e
 left join q.facts a on a.entity_id = e.entity_id and a.property = 'net_area_m2'
+left join q.facts p on p.entity_id = e.entity_id and p.property = 'perimeter_m'
 where e.kind = 'room' and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
 
 create view q.apartments as

@@ -34,7 +34,7 @@ services:
       JSTORE_DSN: postgresql://postgres:${JSTORE_DB_PASSWORD:-jstore}@db:5432/${JSTORE_DB_NAME:-postgres}
       JSTORE_DATA_DIR: /data/store
       JSTORE_DATASET_DIR: /data/dataset
-      JSTORE_INTERPRET_TIMEOUT_S: ${JSTORE_INTERPRET_TIMEOUT_S:-300}   # per drawing; the Gemini readers take up to ~200 s
+      JSTORE_INTERPRET_TIMEOUT_S: ${JSTORE_INTERPRET_TIMEOUT_S:-300}   # per drawing; the Gemini readers take up to ~250 s (labels 85, room outlines 150)
     volumes:
       - store:/data/store
       - ${JSTORE_DATASET_HOST_DIR:-/root/junction/dataset-preview/junction-dataset-preview}:/data/dataset:ro
