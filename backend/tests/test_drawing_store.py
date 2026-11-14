@@ -121,3 +121,27 @@ def test_jobs_hand_every_parsed_page_to_the_store(tmp_path):
         did = upload_pdf(c, make_pdf(["EG", "1. OG"]), "two.pdf").json()["drawing_id"]
         assert wait_status(c, did)["status"] == "ready"
         assert len(seen) == 2  # both pages of the PDF
+
+
+def test_store_workers_get_the_store_environment_even_after_a_scrubbed_parse(tmp_path, monkeypatch):
+    """parse_worker makes every later spawn start with a scrubbed environment; the store's pool
+    must still see JSTORE_DSN (else jstore silently uses its default credentials)."""
+    from aura import drawing_store as DS
+    from aura import parse_worker
+
+    monkeypatch.setenv("JSTORE_DSN", "postgresql://u:p@127.0.0.1:1/x")
+    import multiprocessing as mp
+    if __import__("os").path.exists("/usr/bin/env"):
+        mp.get_context("spawn").set_executable(parse_worker._launcher())
+    try:
+        with DS.make_pool(1) as pool:
+            got = pool.submit(_env_of, "JSTORE_DSN").result(timeout=60)
+    finally:
+        import sys
+        mp.get_context("spawn").set_executable(sys.executable)
+    assert got == "postgresql://u:p@127.0.0.1:1/x"
+
+
+def _env_of(name: str) -> str | None:
+    import os
+    return os.environ.get(name)

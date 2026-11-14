@@ -589,7 +589,10 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
             r.scope = context["scope"] if context["scope"].get("kind") != "region" else None
             r.matched.append("follow-up")
 
-    if d.drawing.get("kind") == "raster" and (family := score_family_of(question)) is not None:
+    # An image upload without an index is scored on the image; one the drawing store indexed
+    # (evidence_method set) answers from its rooms and items like any other drawing.
+    if (d.drawing.get("kind") == "raster" and not d.drawing.get("evidence_method")
+            and (family := score_family_of(question)) is not None):
         return await _score(svc, d, question, lang, caller, stats, family)
 
     ref = resolve_reference(r, question, history, d)

@@ -21,7 +21,6 @@ calls, cost_usd, error?}; state is registered | materialised | partial | failed.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -67,6 +66,29 @@ def configure_env(settings: Settings) -> None:
     os.environ["JSTORE_SHELL"] = "off"
     # The ingest workers cap their data segment at 4 GB; one OCR/OpenCV thread per core breaks that cap.
     os.environ.setdefault("OMP_NUM_THREADS", "4")
+
+
+WORKER_ENV_KEYS = ("GEMINI_API_KEY", "OMP_NUM_THREADS", "PATH", "HOME", "LANG", "TMPDIR")
+
+
+def worker_env() -> dict[str, str]:
+    """The environment an ingest worker needs (DSN, data dir, Gemini key for symbol detection)."""
+    return {k: v for k, v in os.environ.items() if k.startswith("JSTORE_") or k in WORKER_ENV_KEYS}
+
+
+def init_worker(env: dict[str, str]) -> None:
+    """Pool initializer. Our parse jobs make every spawn in this process start through a scrubbed
+    launcher (parse_worker.start: multiprocessing's executable is process-global), so the store
+    workers would start without JSTORE_DSN and silently use jstore's default credentials. The
+    environment arrives here through spawn's pipe, before any jstore import in the worker."""
+    os.environ.update(env)
+
+
+def make_pool(workers: int):
+    import concurrent.futures as cf
+    import multiprocessing
+    return cf.ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"),
+                                  initializer=init_worker, initargs=(worker_env(),))
 
 
 def interpret_job(drawing_key: str) -> dict:
@@ -165,7 +187,8 @@ class DrawingStore:
         self.ingestor: Any = None
         self.jsettings: Any = None
         self.tasks: set[asyncio.Task] = set()
-        self.interpreting: dict[str, Any] = {}  # file_id -> future of a resumed interpretation
+        # store_upload is check-then-insert: two uploads with the same bytes at once would race.
+        self.register_lock = asyncio.Lock()
 
     @property
     def mode(self) -> str:
@@ -188,6 +211,7 @@ class DrawingStore:
                                        dataset_dir=(self.s.store_data_dir / "dataset").resolve(),
                                        ingest_workers=self.s.store_workers, shell=False, apply_schema=False)
             self.ingestor = Ingestor(self.jsettings)
+            self.ingestor.pool = make_pool(self.s.store_workers)  # see init_worker
             self.ok = True
         except Exception as e:  # noqa: BLE001 - Postgres down or schema error: quick mode, never a crash
             log.warning("drawing store unavailable, quick mode: %s", type(e).__name__)
@@ -255,7 +279,8 @@ class DrawingStore:
         try:
             await asyncio.to_thread(shutil.copy2, src, tmp)
             from jstore.service import files as jfiles
-            row = await asyncio.to_thread(jfiles.store_upload, self.jsettings, tmp, original_name)
+            async with self.register_lock:
+                row = await asyncio.to_thread(jfiles.store_upload, self.jsettings, tmp, original_name)
         except Exception as e:  # noqa: BLE001 - the upload stays usable from our parse
             log.warning("store register failed for %s: %s", drawing_id, type(e).__name__)
             await self._set_store_meta(drawing_id, state="failed", error="register", t0=time.time())
@@ -295,8 +320,15 @@ class DrawingStore:
                 self.ingestor.jobs[file_id] = self._interpret_pool().submit(interpret_job, key)
             fut = self.ingestor.jobs.get(file_id)
             if fut is not None:
-                with contextlib.suppress(Exception):
-                    await asyncio.wrap_future(fut)
+                try:
+                    res = await asyncio.wrap_future(fut)
+                    log.info("store ingest %s: %s", file_id, {k: v for k, v in (res or {}).items()
+                                                              if k in ("status", "seconds", "error")})
+                except Exception as e:  # noqa: BLE001 - the worker's failure is recorded on the row
+                    log.warning("store ingest %s failed in the worker: %s: %s", file_id,
+                                type(e).__name__, str(e)[:300])
+            else:
+                log.warning("store ingest %s: no job started (status %s)", file_id, status)
             status, _ = await self._db_status(file_id)
             if status == "interpreted":
                 await self.materialise(drawing_id, file_id, key)
@@ -312,10 +344,7 @@ class DrawingStore:
 
     def _interpret_pool(self):
         if self.ingestor.pool is None:
-            import concurrent.futures as cf
-            import multiprocessing
-            self.ingestor.pool = cf.ProcessPoolExecutor(
-                self.s.store_workers, mp_context=multiprocessing.get_context("spawn"))
+            self.ingestor.pool = make_pool(self.s.store_workers)
         return self.ingestor.pool
 
     # -- materialise
