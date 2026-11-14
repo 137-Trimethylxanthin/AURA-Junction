@@ -159,16 +159,24 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
     subject = tr.subject or "room"
     value = int(tr.value or 0)
     plural = noun(subject, 2)
-    gold = None if overrides or scope.get("kind") == "region" else gold_for(
-        d, lang, "count", subject, scope, value)
+    gold = None if overrides or scope.get("kind") == "region" or tr.method == "vision" else (
+        gold_for(d, lang, "count", subject, scope, value))
     trace: list[dict] = [question_node(question, lang),
                          intent_node(f"count · {plural} · {scope_text(scope)}", intent_tag,
                                      intent_conf),
                          PICK_SOURCE]
+    vision = tr.method == "vision"
+    if vision:
+        trace[2] = {"id": "source", "parent": "q", "title": "Pick the best source",
+                    "tag": "router", "kind": "model",
+                    "body": "This drawing is an image with no CAD geometry, so Gemini found the "
+                            "boxes on the image once at upload. The count is a model estimate."}
     if tr.boxes or subject not in ("room", "apartment"):
         ids = [b.id for b in tr.boxes]
-        trace.append({"id": "read", "parent": "source", "title": "Read the layer",
-                      "tag": f"DXF · {subject} layer", "body": tr.summary, "kind": "exact",
+        trace.append({"id": "read", "parent": "source",
+                      "title": "Boxes found on the image" if vision else "Read the layer",
+                      "tag": "Gemini detection · estimate" if vision else f"DXF · {subject} layer",
+                      "body": tr.summary, "kind": "model" if vision else "exact",
                       "evidence_ids": ids, "tool": tool_meta(tr)})
         if scope.get("kind", "floor") != "floor":
             trace.append({"id": "scope", "parent": "source", "title": "Apply the scope",
@@ -179,7 +187,10 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                           "kind": "exact", "evidence_ids": ids})
         answer_ids = ids
         check_ids = ids
-        answer_body = f"{value} {noun(subject, value)}. Each one is drawn on the plan for you to check."
+        answer_body = (f"About {value} {noun(subject, value)}. Model estimate from {value} boxes "
+                       "found, check the boxes." if vision else
+                       f"{value} {noun(subject, value)}. Each one is drawn on the plan for you to "
+                       "check.")
         canonical = f"How many {plural} are drawn {where_en(scope)}"
     else:
         all_ids = [room_eid(r.room_id) for r in tr.rooms]
@@ -197,8 +208,9 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
         else:
             canonical = f"How many numbered rooms are {where_en(scope)}"
     trace.append(check_placeholder(answer_ids))
-    trace.append({"id": "answer", "parent": "q", "title": "Answer", "tag": "count",
-                  "body": answer_body, "kind": "exact", "evidence_ids": answer_ids})
+    trace.append({"id": "answer", "parent": "q", "title": "Answer",
+                  "tag": "estimate" if vision else "count", "body": answer_body,
+                  "kind": "model" if vision else "exact", "evidence_ids": answer_ids})
     body = _base(question, lang, scope) | {
         "answer": {"kind": "count", "value": value, "subject": subject},
         "evidence": {"boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],

@@ -1,5 +1,7 @@
 import { ApiError, TransportError, getDrawing, getDrawingStatus, getHealth, postAsk, type FetchLike } from './client'
-import type { AskRequest, AskResponse, Drawing, DrawingStatusBody } from './contract'
+import type { AskRequest, AskResponse, ChatEvent, Drawing, DrawingStatusBody, Lang, Override, Scope } from './contract'
+import { ChatUnavailable, getConversation, streamChat } from './stream'
+import type { Conversation } from './contract'
 import { ask as askLocal } from './local'
 import { BUNDLED_DRAWING_ID } from '@/data/ids'
 
@@ -33,6 +35,22 @@ export interface Source {
   drawing(id: string): Promise<Drawing>
   /** GET /drawings/:id/status. */
   drawingStatus(id: string): Promise<DrawingStatusBody>
+  /**
+   * One chat turn. With the API: POST /chat, streaming events to `onEvent` (falls back to /ask when the server has
+   * no /chat). Locally: the bundled answer, with no events. Rejects like `ask`, plus an AbortError on `signal`.
+   */
+  chat(req: ChatTurnRequest, onEvent: (e: ChatEvent) => void, signal?: AbortSignal): Promise<AskResult>
+  /** GET /conversations/:id (API only; null when unknown or local). */
+  conversation(id: string): Promise<Conversation | null>
+}
+
+export interface ChatTurnRequest {
+  drawing_id: string
+  question: string
+  conversation_id?: string
+  scope?: Scope
+  overrides?: Override[]
+  lang_hint?: Lang
 }
 
 export interface SourceOptions {
@@ -60,6 +78,8 @@ export function createSource(opts: SourceOptions = {}): Source {
     ? { kind: 'local', state: 'waking' }
     : { kind: 'local', state: 'ready', reason: 'no_api_url' }
   let probing: Promise<SourceStatus> | null = null
+  /** Set once the server shows it has no /chat; later turns go straight to /ask. */
+  let chatUnavailable = false
 
   const set = (s: SourceStatus) => {
     status = s
@@ -115,6 +135,59 @@ export function createSource(opts: SourceOptions = {}): Source {
     subscribe(fn) {
       listeners.add(fn)
       return () => listeners.delete(fn)
+    },
+    async conversation(id) {
+      await init()
+      if (status.kind !== 'api' || !baseUrl) return null
+      return getConversation({ baseUrl, fetch: opts.fetch }, id)
+    },
+    async chat(turn, onEvent, signal) {
+      await init()
+      const askReq: AskRequest = {
+        drawing_id: turn.drawing_id,
+        question: turn.question,
+        ...(turn.scope ? { scope: turn.scope } : {}),
+        ...(turn.overrides ? { overrides: turn.overrides } : {}),
+        ...(turn.lang_hint ? { lang_hint: turn.lang_hint } : {}),
+      }
+      if (status.kind === 'local' || !baseUrl || chatUnavailable) return this.ask(askReq)
+      let response: AskResponse | undefined
+      let seen = false
+      try {
+        await streamChat(
+          {
+            drawing_id: turn.drawing_id,
+            message: turn.question,
+            ...(turn.conversation_id ? { conversation_id: turn.conversation_id } : {}),
+            ...(turn.scope ? { scope: turn.scope } : {}),
+            ...(turn.overrides ? { overrides: turn.overrides } : {}),
+            ...(turn.lang_hint ? { lang_hint: turn.lang_hint } : {}),
+          },
+          {
+            baseUrl,
+            fetch: opts.fetch,
+            signal,
+            onEvent(e) {
+              seen = true
+              if (e.event === 'answer') response = e.data.response
+              if (e.event === 'error') throw new ApiError(e.data.error, 200, e.data.code, e.data)
+              onEvent(e)
+            },
+          },
+        )
+      } catch (e) {
+        if (e instanceof ChatUnavailable) {
+          chatUnavailable = true
+          return this.ask(askReq)
+        }
+        if (e instanceof TransportError && !seen && turn.drawing_id === BUNDLED_DRAWING_ID && !signal?.aborted) {
+          set({ kind: 'local', state: 'ready', reason: 'fell_back' })
+          return { response: local(askReq), fellBack: true }
+        }
+        throw e
+      }
+      if (!response) throw new ApiError('The answer stream ended without an answer', 200, 'invalid_response')
+      return { response, fellBack: false }
     },
     async ask(req) {
       await init()

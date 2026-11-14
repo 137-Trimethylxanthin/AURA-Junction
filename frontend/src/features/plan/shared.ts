@@ -5,6 +5,10 @@ import { noun } from '@/lib/format'
 /** Rendered drawing aspect (width / height of drawing.images.rebuilt). */
 export const PLAN_ASPECT = 1221 / 1220
 
+/** Width / height of a drawing's rendered image (uploads are rarely square). */
+export const planAspect = (d: { frame: { px: [number, number] } }): number =>
+  d.frame.px[0] > 0 && d.frame.px[1] > 0 ? d.frame.px[0] / d.frame.px[1] : PLAN_ASPECT
+
 /** Pointer position in % of the stage element, clamped to 0–100. */
 export function pctPoint(stage: HTMLElement, clientX: number, clientY: number): [number, number] {
   const r = stage.getBoundingClientRect()

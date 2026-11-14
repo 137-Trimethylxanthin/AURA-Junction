@@ -303,7 +303,12 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
                     return None
                 full["key"] = key
                 svc.checks.put(key, d.id, subject, full)
-    sliced = slice_check(full, built.check_ids)
+    vision = d.drawing.get("kind") == "raster"
+    sliced = slice_check(full, built.check_ids, image="upload" if vision else "dataset_png")
+    if sliced is not None and vision:
+        # On raster the check only ranks boxes for the user; it never filters or "agrees"
+        # (the CubiCasa eval showed filtering removed real boxes).
+        sliced.pop("agreed", None)
     if sliced is None:
         return None
     stats["check_calls"] = 0 if cached else 1
@@ -322,9 +327,12 @@ def _check_node(check: dict, cached: bool, stats: dict, subject: str) -> dict:
     p_lc = check["per_box"][lc]
     agreed = check.get("agreed")
     total = check["total"]
+    image = "uploaded image" if check.get("image") == "upload" else "dataset image"
     parts = [(f"Gemini Decisions looked at {total} drawn {A.noun(subject, total)} as zoomed tiles "
-              "of the dataset image.")]
-    if agreed is not None:
+              f"of the {image}.")]
+    if agreed is None:
+        parts.append("On an image the check only ranks the boxes; it removes none.")
+    else:
         parts.append(f"{agreed} of {total} agreed (score above the known-negative anchors, "
                      f"{check['anchors_max']:.2f}, by 0.05).")
     parts.append(f"Least certain: {lc} at {p_lc:.2f}; check that one first.")

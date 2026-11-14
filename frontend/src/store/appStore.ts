@@ -1,5 +1,5 @@
 import { createStore, type StoreApi } from 'zustand/vanilla'
-import type { AskResponse, Drawing, Lang, Override, PctRect, Scope } from '@/api/contract'
+import type { AskResponse, AskRoute, Box, ChatEvent, Drawing, EvidenceRoom, Lang, Override, PctRect, RankedCheck, Scope, TraceNode } from '@/api/contract'
 import { ApiError, TransportError } from '@/api/client'
 import { createSource, type Source, type SourceStatus } from '@/api/source'
 import { BUNDLED_DRAWING_ID, bundledDrawing } from '@/data/drawing'
@@ -29,6 +29,8 @@ export interface AgentTurn {
   /** The user turn this answers. */
   replyTo: string
   status: 'pending' | 'done' | 'error'
+  /** Live state while a streamed (/chat) answer arrives; kept after it finishes for the step list. */
+  stream?: StreamState
   response?: AskResponse
   error?: { message: string; code?: string; status?: number }
   /** This turn was answered locally after the API failed (show a toast once). */
@@ -39,7 +41,63 @@ export interface AgentTurn {
   feedback: Feedback
 }
 
+/** What the /chat stream has told us so far about one answer. */
+export interface StreamState {
+  phase: 'sent' | 'understood' | 'working' | 'checking'
+  understood?: { canonical_en: string; detected_lang?: Lang; route?: AskRoute }
+  /** Tool-call trace nodes in arrival order. */
+  nodes: TraceNode[]
+  /** Ids of nodes whose result has arrived. */
+  resolved: string[]
+  /** Evidence collected from tool results (lit on the plan before the answer lands). */
+  evidence: { boxes: Box[]; rooms: EvidenceRoom[] }
+  check?: RankedCheck
+}
+
 export type Turn = UserTurn | AgentTurn
+
+const CONVERSATION_KEY = (drawingId: string) => `aura.conversation.${drawingId}`
+const readConversation = (drawingId: string): string | null => {
+  try {
+    return globalThis.localStorage?.getItem(CONVERSATION_KEY(drawingId)) ?? null
+  } catch {
+    return null
+  }
+}
+const writeConversation = (drawingId: string, id: string | null) => {
+  try {
+    if (id) globalThis.localStorage?.setItem(CONVERSATION_KEY(drawingId), id)
+    else globalThis.localStorage?.removeItem(CONVERSATION_KEY(drawingId))
+  } catch {
+    /* storage unavailable: the conversation lives for this page only */
+  }
+}
+
+/** Fold one chat event into the stream state (pure; exported for tests). */
+export function reduceStream(st: StreamState, e: ChatEvent): StreamState {
+  switch (e.event) {
+    case 'understood':
+      return { ...st, phase: 'understood', understood: e.data }
+    case 'tool_call':
+      return { ...st, phase: 'working', nodes: [...st.nodes.filter((n) => n.id !== e.data.node.id), e.data.node] }
+    case 'tool_result': {
+      const ids = new Set(st.evidence.boxes.map((b) => b.id))
+      const rooms = new Set(st.evidence.rooms.map((r) => r.room_id))
+      return {
+        ...st,
+        resolved: st.resolved.includes(e.data.node_id) ? st.resolved : [...st.resolved, e.data.node_id],
+        evidence: {
+          boxes: [...st.evidence.boxes, ...(e.data.evidence.boxes ?? []).filter((b) => !ids.has(b.id))],
+          rooms: [...st.evidence.rooms, ...(e.data.evidence.rooms ?? []).filter((r) => !rooms.has(r.room_id))],
+        },
+      }
+    }
+    case 'check':
+      return { ...st, phase: 'checking', check: e.data.check }
+    default:
+      return st
+  }
+}
 
 export interface Mark {
   id: string
@@ -73,7 +131,7 @@ export interface DrawingLoad {
 export const POLL_MS = 1500
 
 export interface AppState {
-  session: { source: SourceStatus; drawing: Drawing; lang: Lang; load: DrawingLoad }
+  session: { source: SourceStatus; drawing: Drawing; lang: Lang; load: DrawingLoad; conversationId: string | null }
   turns: Turn[]
   ui: {
     activeTurnId: string | null
@@ -99,6 +157,12 @@ export interface AppState {
   stopLoading(): void
   // turns
   ask(text: string, opts?: AskOptions): Promise<string>
+  /** Stop the answer that is streaming (the card says it was stopped; nothing is guessed). */
+  cancel(): void
+  /** Restore the drawing's last conversation from the API (after a reload); no-op when there are turns. */
+  restoreConversation(): Promise<void>
+  /** Forget the conversation: a fresh start on the same drawing. */
+  newConversation(): void
   setActive(turnId: string | null): void
   setListOpen(turnId: string, open: boolean): void
   toggleCanonical(turnId: string): void
@@ -187,6 +251,8 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
 
     /** Each loadDrawing call takes a ticket; results of an older ticket are ignored. */
     let ticket = 0
+    /** The answer currently streaming; a new question or Stop aborts it. */
+    let inflight: AbortController | null = null
     let pollTimer: ReturnType<typeof setTimeout> | undefined
     const setLoad = (load: DrawingLoad) => set((s) => ({ session: { ...s.session, load } }))
     /** Swap in a ready drawing; a different drawing starts a clean conversation. */
@@ -194,7 +260,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       set((s) => {
         const session = { ...s.session, drawing: d, load: { id: d.id, state: 'ready' } as DrawingLoad }
         if (s.session.drawing.id === d.id) return { session }
-        return { session, turns: [], undoStack: [], ui: freshUi() }
+        return { session: { ...session, conversationId: null }, turns: [], undoStack: [], ui: freshUi() }
       })
     const loadError = (id: string, e: unknown): DrawingLoad => {
       if (e instanceof ApiError && e.code === 'unknown_drawing') return { id, state: 'not_found' }
@@ -204,7 +270,13 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
     }
 
     return {
-      session: { source: source.status(), drawing: initial, lang: 'en', load: { id: initial.id, state: 'ready' } },
+      session: {
+        source: source.status(),
+        drawing: initial,
+        lang: 'en',
+        load: { id: initial.id, state: 'ready' },
+        conversationId: null,
+      },
       turns: [],
       ui: freshUi(),
       undoStack: [],
@@ -282,29 +354,115 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
           listOpen: true,
           showCanonical: false,
           feedback: null,
+          // With the API the answer streams: show the step list (and Stop) from the first moment.
+          ...(source.status().kind === 'api'
+            ? { stream: { phase: 'sent' as const, nodes: [], resolved: [], evidence: { boxes: [], rooms: [] } } }
+            : {}),
         }
         set((st) => ({
           turns: [...st.turns.map((x) => (x.role === 'agent' ? { ...x, listOpen: false } : x)), user, pending],
           ui: { ...st.ui, activeTurnId: pending.id, selectedEvidenceId: null, hoveredEvidenceIds: [], attachedMarkId: null },
         }))
+        inflight?.abort()
+        const ctrl = new AbortController()
+        inflight = ctrl
+        const drawingId = get().session.drawing.id
         try {
-          const { response, fellBack } = await source.ask({
-            drawing_id: get().session.drawing.id,
-            question: text,
-            ...(scope ? { scope } : {}),
-            ...(opts.overrides?.length ? { overrides: opts.overrides } : {}),
-            lang_hint: get().session.lang,
-          })
+          const { response, fellBack } = await source.chat(
+            {
+              drawing_id: drawingId,
+              question: text,
+              ...(get().session.conversationId ? { conversation_id: get().session.conversationId! } : {}),
+              ...(scope ? { scope } : {}),
+              ...(opts.overrides?.length ? { overrides: opts.overrides } : {}),
+              lang_hint: get().session.lang,
+            },
+            (e) => {
+              if (ctrl.signal.aborted) return
+              if (e.event === 'turn') {
+                writeConversation(drawingId, e.data.conversation_id)
+                set((st) => ({ session: { ...st.session, conversationId: e.data.conversation_id } }))
+                return
+              }
+              patchAgent(pending.id, (x) => ({
+                stream: reduceStream(x.stream ?? { phase: 'sent', nodes: [], resolved: [], evidence: { boxes: [], rooms: [] } }, e),
+              }))
+            },
+            ctrl.signal,
+          )
+          if (ctrl.signal.aborted) throw new DOMException('Stopped', 'AbortError')
           patchAgent(pending.id, () => ({ status: 'done', response, ...(fellBack ? { fellBack: true } : {}) }))
           set((st) => ({ session: { ...st.session, lang: response.detected_lang } }))
         } catch (e) {
+          if (inflight === ctrl) inflight = null
+          if (ctrl.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
+            patchAgent(pending.id, () => ({ status: 'error', error: { message: t(get().session.lang, 'stopped'), code: 'cancelled' } }))
+            return pending.id
+          }
           const error =
             e instanceof ApiError
               ? { message: e.message, code: e.code, status: e.status }
               : { message: e instanceof Error ? e.message : 'Something went wrong' }
           patchAgent(pending.id, () => ({ status: 'error', error }))
         }
+        if (inflight === ctrl) inflight = null
         return pending.id
+      },
+
+      cancel() {
+        inflight?.abort()
+        inflight = null
+      },
+
+      async restoreConversation() {
+        const s = get()
+        if (s.turns.length) return
+        const drawingId = s.session.drawing.id
+        const id = readConversation(drawingId)
+        if (!id) return
+        let conv
+        try {
+          conv = await source.conversation(id)
+        } catch {
+          return
+        }
+        if (get().turns.length || get().session.drawing.id !== drawingId) return
+        if (!conv) {
+          writeConversation(drawingId, null)
+          return
+        }
+        const turns: Turn[] = []
+        for (const ct of conv.turns) {
+          const user: UserTurn = { id: nextId('u'), role: 'user', text: ct.message, lang: detect(ct.message) }
+          const agent: AgentTurn = {
+            id: nextId('a'),
+            role: 'agent',
+            replyTo: user.id,
+            status: ct.response ? 'done' : 'error',
+            ...(ct.response
+              ? { response: ct.response }
+              : { error: { message: ct.error?.error ?? t(get().session.lang, 'something_wrong'), code: ct.error?.code } }),
+            toggles: emptyToggles(),
+            listOpen: false,
+            showCanonical: false,
+            feedback: null,
+          }
+          turns.push(user, agent)
+        }
+        const last = [...turns].reverse().find((x): x is AgentTurn => x.role === 'agent' && x.status === 'done')
+        if (last) last.listOpen = true
+        set((st) => ({
+          turns,
+          session: { ...st.session, conversationId: conv.id },
+          ui: { ...st.ui, activeTurnId: last?.id ?? null },
+        }))
+      },
+
+      newConversation() {
+        inflight?.abort()
+        inflight = null
+        writeConversation(get().session.drawing.id, null)
+        set((st) => ({ turns: [], undoStack: [], session: { ...st.session, conversationId: null }, ui: freshUi() }))
       },
 
       setActive(turnId) {

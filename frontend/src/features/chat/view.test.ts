@@ -21,3 +21,25 @@ describe('check cost in the footer', () => {
     expect(checkParts(r, 'fr')[0]).toBe('vérification: en cache')
   })
 })
+
+import { chips } from '@/features/chat/view'
+import { deriveAnswer, emptyToggles } from '@/lib/answer'
+
+describe('check chip', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+  const d = deriveAnswer(base, emptyToggles())
+  it('a DXF upload with no image says so instead of a sample check', () => {
+    const r = { ...base, check: { method: 'decisions_api' as const, status: 'sample' as const, image: 'none' as const } }
+    expect(chips(r, d, 'en').find((c) => c.key === 'check')?.text).toBe('No independent image to check against')
+  })
+  it('a ranked check names the least certain box by its number and has no agree count', () => {
+    const r = {
+      ...base,
+      check: { method: 'decisions_api' as const, status: 'live' as const, scope: 'drawn_boxes' as const, ranking: ['win-09', 'win-01'], least_certain_id: 'win-09', agreed: 12, total: 12 },
+    }
+    const chip = chips(r, d, 'en').find((c) => c.key === 'check')!
+    expect(chip.text).toBe('Gemini checked 2 drawn boxes · least certain #9')
+    expect(chip.evidenceId).toBe('win-09')
+    expect(chip.text).not.toMatch(/agree/)
+  })
+})

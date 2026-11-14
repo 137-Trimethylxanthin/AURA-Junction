@@ -51,6 +51,20 @@ def facts() -> list[dict]:
                 'scope': f'The {len(rows)} seeded library drawings (random.Random(46639) over plans with at least 30 questions)',
                 'method': 'Same solver as the full-set run, answers compared with the dataset gold',
                 'measured': min(r['measured_at'] for r in rows)[:10]})
+    ic = load(RESULTS / 'ifc.json')
+    if ic:
+        pr = ic['probe_rules_reproduced']
+        out.append({
+            'id': 'ifc-full', 'label': 'IFC building models answered from the model file',
+            'value': pct(ic['correct'], ic['questions']), 'numerator': ic['correct'], 'denominator': ic['questions'],
+            'n': ic['questions'], 'n_unit': 'questions', 'model_calls': ic['calls'], 'cost_usd': ic['cost_usd'],
+            'scope': f"Every English question on the {ic['files']} IFC models in the dataset (counts, room and storey "
+                     'areas, wall lengths and volumes)',
+            'method': 'IfcOpenShell quantities and geometry, computed in code, no model',
+            'measured': ic['measured_at'][:10],
+            'caveat': (f"Two rules were added after inspecting the misses on this same set; with the original rules "
+                       f"the result is {pr['correct']:,}/{pr['questions']:,} ({pct(pr['correct'], pr['questions'])})."),
+        })
     cc = load(RESULTS / 'cubicasa.json')
     if cc:
         det = cc['detection']

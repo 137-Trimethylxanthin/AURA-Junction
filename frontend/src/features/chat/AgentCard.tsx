@@ -18,6 +18,7 @@ import { t } from '@/i18n/strings'
 import { fmtCount, noun } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { actions, selectDrawing, useAppStore, useDerived, type AgentTurn } from '@/store'
+import { StreamSteps } from './StreamSteps'
 import { chips, footerParts, rows, sentence, valueParts, type Chip, type Row } from './view'
 
 const CHIP_TONE: Record<Chip['tone'], string> = {
@@ -41,7 +42,29 @@ const mouseOnly = (fn: () => void) => (e: React.PointerEvent) => {
   if (e.pointerType === 'mouse') fn()
 }
 
-function ChipPill({ chip }: { chip: Chip }) {
+function ChipPill({ chip, turnId }: { chip: Chip; turnId: string }) {
+  if (chip.evidenceId) {
+    const id = chip.evidenceId
+    // The least-certain chip locates its box on the plan.
+    return (
+      <button
+        type="button"
+        title={chip.title}
+        data-chip={chip.key}
+        data-tone={chip.tone}
+        onClick={() => actions().select(turnId, id)}
+        className={cn(
+          'relative inline-flex min-h-6 max-w-full items-center gap-1 rounded-2xl border bg-transparent px-2.5 py-0.5 text-left text-xs font-medium [overflow-wrap:anywhere] transition-colors',
+          // 40 px hit area without growing the chip.
+          'before:absolute before:inset-x-0 before:top-1/2 before:min-h-10 before:-translate-y-1/2',
+          '[@media(hover:hover)]:hover:bg-info-surface',
+          CHIP_OUTLINE[chip.tone],
+        )}
+      >
+        {chip.text}
+      </button>
+    )
+  }
   return (
     <span
       title={chip.title}
@@ -360,8 +383,14 @@ export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lan
           <Skeleton aria-hidden className="h-11 w-20" />
           <Skeleton aria-hidden className="h-5 w-24" />
         </div>
-        <Skeleton aria-hidden className="h-4 w-3/4" />
-        <p className="text-sm text-muted-foreground">{t(userLang, 'pending')}</p>
+        {turn.stream ? (
+          <StreamSteps turn={turn} lang={userLang} />
+        ) : (
+          <>
+            <Skeleton aria-hidden className="h-4 w-3/4" />
+            <p className="text-sm text-muted-foreground">{t(userLang, 'pending')}</p>
+          </>
+        )}
       </CardShell>
     )
 
@@ -426,7 +455,7 @@ export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lan
       </div>
       <div className="flex flex-wrap gap-1.5">
         {chipList.map((c) => (
-          <ChipPill key={c.key} chip={c} />
+          <ChipPill key={c.key} chip={c} turnId={turn.id} />
         ))}
       </div>
       {derived.changed ? (

@@ -267,3 +267,93 @@ def test_served_model_json_answers_equal_fresh_load():
         for f in swiss.FAMILIES:
             for sc in scopes:
                 assert swiss.answer(served, f, sc) == swiss.answer(fresh, f, sc), (e['id'], f, sc)
+
+
+# ------------------------------------------------------------------------------------------
+# IFC (needs the `ifc` extra and the dataset)
+# ------------------------------------------------------------------------------------------
+
+IFC_DIR = DATA / 'data' / 'ifc_models'
+FZK = IFC_DIR / 'kit-fzk-haus_ac20-fzk-haus.ifc'
+
+
+def _ifc_or_skip():
+    pytest.importorskip('ifcopenshell')
+    if not FZK.exists():
+        pytest.skip('dataset not present')
+
+
+@pytest.mark.dataset
+def test_ifc_fzk_haus_all_english_gold():
+    _ifc_or_skip()
+    from aura.solvers import ifc
+    from eval.ifc_full import model_stem, route
+    m = ifc.load(FZK, geometry=False)
+    storeys = {s['name'] for s in m.storeys}
+    n = 0
+    with open(DATA / 'questions.jsonl', encoding='utf-8') as f:
+        for line in f:
+            if 'kit-fzk-haus' not in line:
+                continue
+            r = json.loads(line)
+            if model_stem(r['path']) != FZK.stem or not r['question'].startswith(('How', 'What')):
+                continue
+            _, fam, scope = route(r['question'], storeys)
+            assert _ok(ifc.answer(m, fam, scope)['value'], r), r['question']
+            n += 1
+    assert n >= 15
+
+
+@pytest.mark.dataset
+def test_ifc_library_served_model_and_evidence():
+    _ifc_or_skip()
+    from aura.solvers import ifc
+    lib = json.loads(LIBRARY.read_text(encoding='utf-8')) if LIBRARY.exists() else {}
+    for e in lib.get('ifc', []):
+        d = BACKEND / 'build' / 'drawings-ifc-staging' / e['id']
+        if not (d / 'model.json').exists():
+            pytest.skip('run scripts/preprocess.py first')
+        served = ifc.IfcModel.from_json(json.loads((d / 'model.json').read_text(encoding='utf-8')))
+        drawing = json.loads((d / 'drawing.json').read_text(encoding='utf-8'))
+        assert drawing['kind'] == 'ifc' and drawing['frame']['px'] == served.frame['px']
+        for fam in ('door', 'window'):
+            res = ifc.answer(served, fam)
+            assert len(res['evidence']['boxes']) == res['value'], (e['id'], fam)  # UI recount = answer
+            assert all(0 <= b['x'] and 0 <= b['y'] and b['x'] + b['w'] <= 100.001 and b['y'] + b['h'] <= 100.001
+                       for b in res['evidence']['boxes'])
+        a = ifc.answer(served, 'area')
+        assert round(sum(r['area_m2'] for r in a['evidence']['rooms']), 2) == a['value']
+        for r in drawing['rooms']:
+            assert all(0 <= x <= 100 and 0 <= y <= 100 for x, y in r['points'])
+        g = json.loads((d / 'gold.json').read_text(encoding='utf-8'))
+        assert g and all(row['match'] for row in g), e['id']
+
+
+@pytest.mark.dataset
+@pytest.mark.parametrize('stem,gold', [
+    ('bsc-duplex_duplex-electrical-20121207', 28), ('bsc-duplex_duplex-mep-20110907', 28),
+    ('bsc-clinic_clinic-electrical', 1120), ('bsc-chesapeake-bay-bridge-tunnel_chesapeake-bay-bridge-tunnel-4x3', 783),
+    ('bimspeed-barlad_ro-arc-m3-e-pth-0000', 494)])
+def test_ifc_light_fixture_rule(stem, gold):
+    """Rule added after the probe: light fixtures (IfcLightFixture, or IFC2X3 flow terminals typed as such)."""
+    _ifc_or_skip()
+    from aura.solvers import ifc
+    m = ifc.load(IFC_DIR / f'{stem}.ifc', geometry=False)
+    assert ifc.answer(m, 'light', {'kind': 'model'})['value'] == gold
+    assert ifc.load(IFC_DIR / f'{stem}.ifc', geometry=False, probe_rules=True).elements['light'] == []
+
+
+@pytest.mark.dataset
+def test_ifc_zero_footprint_area_rule():
+    """Rule added after the probe: duplex hallways have footprint area 0 in IfcOpenShell; the projected
+    outline gives the gold 6.89 m², and the Level 2 total becomes 114.25 (gold) instead of 100.47."""
+    _ifc_or_skip()
+    from aura.solvers import ifc
+    p = IFC_DIR / 'bsc-duplex_duplex-a-20110907.ifc'
+    m = ifc.load(p, geometry=False)
+    for name in ('Hallway (A201)', 'Hallway (B201)'):
+        v = ifc.answer(m, 'area', {'kind': 'room', 'room': name, 'storey': 'Level 2'})['value']
+        assert abs(v - 6.89) <= 0.02 * 6.89, (name, v)
+    assert abs(ifc.answer(m, 'area', {'kind': 'floor', 'storey': 'Level 2'})['value'] - 114.25) <= 0.02 * 114.25
+    old = ifc.load(p, geometry=False, probe_rules=True)
+    assert ifc.answer(old, 'area', {'kind': 'room', 'room': 'Hallway (A201)', 'storey': 'Level 2'})['value'] == 0

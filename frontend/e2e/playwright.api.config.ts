@@ -11,7 +11,7 @@ const OUT = 'node_modules/.aura-e2e-api'
 
 export default defineConfig({
   testDir: '.',
-  testMatch: ['api.spec.ts', 'api.library.spec.ts'],
+  testMatch: ['api.spec.ts', 'api.library.spec.ts', 'api.chat.spec.ts'],
   fullyParallel: true,
   reporter: 'list',
   outputDir: '../test-results/api-run',

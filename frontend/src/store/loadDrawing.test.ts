@@ -137,3 +137,64 @@ describe('local answers are only for the bundled drawing', () => {
     expect(turn && 'response' in turn ? turn.response : undefined).toBeUndefined()
   })
 })
+
+describe('streamed answers', () => {
+  it('fold events into the turn, keep the conversation id, and finish with the answer', async () => {
+    const base = createSource({ baseUrl: null })
+    const seen: string[] = []
+    const response = await base.ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+    const src: Source = {
+      ...base,
+      status: () => ({ kind: 'api', state: 'ready' }),
+      async chat(req, onEvent) {
+        seen.push(req.conversation_id ?? '-')
+        onEvent({ event: 'turn', data: { conversation_id: 'c-9', turn_id: 't' } })
+        onEvent({ event: 'understood', data: { detected_lang: 'en', canonical_en: 'How many windows', route: 'template' } })
+        onEvent({ event: 'tool_call', data: { node: { id: 'read', title: 'Read', tag: 'DXF', body: '', kind: 'exact' } } })
+        expect(store.getState().turns.at(-1)).toMatchObject({ status: 'pending', stream: { phase: 'working' } })
+        onEvent({ event: 'tool_result', data: { node_id: 'read', evidence: response.response.evidence, summary: '' } })
+        return response
+      },
+    }
+    const store = createAppStore({ source: src })
+    const id = await store.getState().ask('How many windows?')
+    const turn = store.getState().turns.find((t) => t.id === id)
+    expect(turn).toMatchObject({ status: 'done', stream: { resolved: ['read'], understood: { canonical_en: 'How many windows' } } })
+    expect(store.getState().session.conversationId).toBe('c-9')
+    await store.getState().ask('and doors?')
+    expect(seen).toEqual(['-', 'c-9'])
+  })
+
+  it('Stop ends a streaming answer with no number', async () => {
+    const base = createSource({ baseUrl: null })
+    const src: Source = {
+      ...base,
+      chat: (_req, _on, signal) =>
+        new Promise((_r, reject) => signal?.addEventListener('abort', () => reject(new DOMException('Stopped', 'AbortError')))),
+    }
+    const store = createAppStore({ source: src })
+    const p = store.getState().ask('How many windows?')
+    store.getState().cancel()
+    const id = await p
+    const turn = store.getState().turns.find((t) => t.id === id)
+    expect(turn).toMatchObject({ status: 'error', error: { code: 'cancelled' } })
+    expect(turn && 'response' in turn ? turn.response : undefined).toBeUndefined()
+  })
+
+  it('restores a conversation after a reload', async () => {
+    const base = createSource({ baseUrl: null })
+    const r = await base.ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+    localStorage.setItem('aura.conversation.swiss-46639', 'c-5')
+    const src: Source = {
+      ...base,
+      conversation: async (id) => ({ contract_version: '1.1', id, drawing_id: 'swiss-46639', turns: [{ turn_id: 't', message: 'How many windows?', response: r.response }] }),
+    }
+    const store = createAppStore({ source: src })
+    await store.getState().restoreConversation()
+    expect(store.getState().turns.map((t) => t.role)).toEqual(['user', 'agent'])
+    expect(store.getState().session.conversationId).toBe('c-5')
+    store.getState().newConversation()
+    expect(store.getState().turns).toHaveLength(0)
+    expect(localStorage.getItem('aura.conversation.swiss-46639')).toBeNull()
+  })
+})

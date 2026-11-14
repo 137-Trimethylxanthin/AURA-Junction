@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/empty"
 import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import {
   ChatPanel,
   Composer,
@@ -36,14 +37,18 @@ export default function Workspace() {
     void actions().initSource()
     // Warm the code-split tools once the plan has painted, so the first use does not wait on the network.
     const warm = () => {
-      void import('@/features/plan/CompareLayer')
-      void import('@/features/plan/WhatIf')
-      void import('@/features/trace/TracePanel')
-      void import('@/features/plugins/PluginsSheet')
+      void import("@/features/plan/CompareLayer")
+      void import("@/features/plan/WhatIf")
+      void import("@/features/trace/TracePanel")
+      void import("@/features/plugins/PluginsSheet")
     }
-    const id = 'requestIdleCallback' in window ? window.requestIdleCallback(warm, { timeout: 2000 }) : setTimeout(warm, 800)
+    const id =
+      "requestIdleCallback" in window
+        ? window.requestIdleCallback(warm, { timeout: 2000 })
+        : setTimeout(warm, 800)
     return () => {
-      if ('cancelIdleCallback' in window) window.cancelIdleCallback(id as number)
+      if ("cancelIdleCallback" in window)
+        window.cancelIdleCallback(id as number)
       else clearTimeout(id)
     }
   }, [])
@@ -55,6 +60,11 @@ export default function Workspace() {
   const ready =
     load.id === drawingId && load.state === "ready" && drawing.id === drawingId
   useTitle(ready ? drawing.title : "Drawing")
+  const sourceKind = useAppStore((s) => (s.session.source.state === 'ready' ? s.session.source.kind : null))
+  // After a reload: bring back this drawing's last conversation from the API (kept by id in localStorage).
+  useEffect(() => {
+    if (ready && sourceKind === 'api') void actions().restoreConversation()
+  }, [ready, sourceKind, drawingId])
 
   if (!ready)
     return (
@@ -65,16 +75,18 @@ export default function Workspace() {
       />
     )
   return (
-    <AppShell
-      title={<DrawingTitle />}
-      headerActions={<HeaderActions />}
-      toolbar={<PlanToolbar />}
-      stage={<PlanStage />}
-      credit={<Credit />}
-      chat={<ChatPanel />}
-      composer={<Composer />}
-      sidebarOverlay={<SidebarOverlay />}
-    />
+    <TooltipProvider delayDuration={400}>
+      <AppShell
+        title={<DrawingTitle />}
+        headerActions={<HeaderActions />}
+        toolbar={<PlanToolbar />}
+        stage={<PlanStage />}
+        credit={<Credit />}
+        chat={<ChatPanel />}
+        composer={<Composer />}
+        sidebarOverlay={<SidebarOverlay />}
+      />
+    </TooltipProvider>
   )
 }
 

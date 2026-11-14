@@ -106,7 +106,9 @@ def _footprint(shape_geom):
 
 
 def load(ifc_path: str | Path, storey: str | None = None, drawing_id: str | None = None,
-         geometry: bool = True) -> IfcModel:
+         geometry: bool = True, probe_rules: bool = False) -> IfcModel:
+    """probe_rules=True drops the two rules added after the probe (light fixtures, zero-footprint area
+    fallback), to reproduce the probe's 1,691/1,699."""
     import ifcopenshell
     import ifcopenshell.geom
     import ifcopenshell.util.element as ue
@@ -137,7 +139,7 @@ def load(ifc_path: str | Path, storey: str | None = None, drawing_id: str | None
         try:
             sh = ifcopenshell.geom.create_shape(gs, e)
             a = us.get_footprint_area(sh.geometry)
-            if not a:  # 0 for some spaces (duplex hallways); the projected outline still has an area
+            if not a and not probe_rules:  # 0 for some spaces (duplex hallways); the projected outline still has an area
                 fp = _footprint(sh.geometry)
                 a = fp.area if fp is not None else a
             return a
@@ -154,6 +156,9 @@ def load(ifc_path: str | Path, storey: str | None = None, drawing_id: str | None
 
     elements: dict[str, list[dict]] = {}
     for fam, c in CLS.items():
+        if probe_rules and fam == 'light':
+            elements[fam] = []
+            continue
         if c in ('IfcSanitaryTerminal', 'IfcLightFixture') and f.schema == 'IFC2X3':
             # IFC2X3 has no such entity: a flow terminal typed by the matching type (probe rule for sanitary;
             # the same rule for light fixtures is new, see eval/results/ifc.json)
@@ -256,9 +261,14 @@ def _abstain(rid, family, scope, reason, summary):
             'value': None, 'numbers': [], 'evidence': {'boxes': [], 'rooms': [], 'rows': []}, 'summary': summary}
 
 
+BOX_PAD = 0.1  # metres around a footprint, so thin window/door footprints stay visible and clickable
+
+
 def _bbox_pct(model: IfcModel, poly) -> dict:
     xs = [p[0] for p in poly]; ys = [p[1] for p in poly]
-    x0, y0 = model.pct(min(xs), max(ys)); x1, y1 = model.pct(max(xs), min(ys))
+    x0, y0 = model.pct(min(xs) - BOX_PAD, max(ys) + BOX_PAD)
+    x1, y1 = model.pct(max(xs) + BOX_PAD, min(ys) - BOX_PAD)
+    x0, y0, x1, y1 = max(x0, 0.0), max(y0, 0.0), min(x1, 100.0), min(y1, 100.0)
     return {'x': x0, 'y': y0, 'w': round(x1 - x0, 2), 'h': round(y1 - y0, 2)}
 
 

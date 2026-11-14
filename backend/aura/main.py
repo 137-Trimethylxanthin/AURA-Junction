@@ -29,7 +29,13 @@ from aura import tools, uploads
 from aura.budget import Budget, RequestRecord
 from aura.cache import AnswerCache, CheckCache
 from aura.config import Settings, get_settings, models_enabled
-from aura.contract import CONTRACT_VERSION, AskRequest, ChatRequest, DrawingSummary
+from aura.contract import (
+    CONTRACT_VERSION,
+    AskRequest,
+    ChatRequest,
+    DrawingSummary,
+    RewriteRequest,
+)
 from aura.csvout import evidence_csv
 from aura.gemini.client import GeminiClient, Transport
 from aura.jobs import Jobs
@@ -118,6 +124,7 @@ def create_app(
                                   uploads_dir=settings.uploads_dir)
         jobs = Jobs(writer, **(job_options or {}))
         jobs.on_done = registry.evict
+        jobs.after_raster = _raster_hook(client)
         app.state.jobs = jobs
         app.state.svc = Services(settings=settings, budget=budget, client=client,
                                  registry=registry, store=store, writer=writer,
@@ -286,8 +293,9 @@ def create_app(
              json.dumps({"kind": kind})))
         meta = {"title": title, "created_at": _iso(now),
                 "expires_at": _iso(now + settings.upload_ttl_s)}
-        request.app.state.jobs.submit(acc.drawing_id, "dxf" if kind == "dxf" else "raster",
-                                      acc.src, acc.dir, meta)
+        request.app.state.jobs.submit(
+            acc.drawing_id, "dxf" if kind == "dxf" else "raster", acc.src, acc.dir, meta,
+            {"presenter": presenter, "ip_hash": client_ip_hash(request, settings)})
         return JSONResponse({"contract_version": CONTRACT_VERSION, "drawing_id": acc.drawing_id,
                              "delete_token": acc.delete_token, "status": "queued"},
                             status_code=202)
@@ -346,6 +354,38 @@ def create_app(
         return StreamingResponse(_sse(gen), media_type="text/event-stream",
                                  headers={"cache-control": NO_STORE, "x-accel-buffering": "no"})
 
+    @app.post("/rewrite")
+    async def post_rewrite(body: RewriteRequest, request: Request):
+        """Rambling text / voice transcript → question blocks for the user to confirm.
+        One flash-lite call, reported in `calls`/`cost_usd`; nothing is answered here."""
+        from aura.agent.rewrite import rewrite
+        from aura.budget import BudgetError
+        from aura.gemini.client import GeminiError
+        from aura.pipeline import ensure_ready
+
+        s = svc(request)
+        ensure_ready(s, body.drawing_id)
+        d = s.registry.get(body.drawing_id)
+        if d is None:
+            return _err("unknown_drawing", f"Unknown drawing '{body.drawing_id}'", 404)
+        if not s.models_usable():
+            return _err("budget_exhausted", "Models are off or the budget is used up; "
+                                            "type the question instead.", 429)
+        caller = caller_of(request)
+        try:
+            async with asyncio.timeout(30):
+                r = await rewrite(s.client, d, body.text, ip_hash=caller.ip_hash,  # type: ignore[arg-type]
+                                  presenter=caller.presenter)
+        except BudgetError as e:
+            code = "rate_limited" if e.code == "rate_limited" else "budget_exhausted"
+            return _err(code, str(e), 429)
+        except (GeminiError, TimeoutError):
+            return _err("timeout", "The rewrite model did not answer in time.", 504)
+        return {"contract_version": CONTRACT_VERSION, "drawing_id": d.id,
+                "detected_lang": r.detected_lang, "blocks": r.blocks,
+                "not_answerable": r.not_answerable, "calls": r.calls,
+                "cost_usd": round(r.cost_usd, 8), "tokens": r.tokens, "model": r.model}
+
     @app.get("/conversations/{conv_id}")
     async def get_conversation(conv_id: str, request: Request):
         st = svc(request).store
@@ -394,6 +434,57 @@ def create_app(
         return body
 
     return app
+
+
+DETECT_MAX_SIDE = 2048
+
+
+def _detect_image(path: Path) -> tuple[bytes, str]:
+    """The upload as sent to detection: at most 2048 px per side (box_2d is relative)."""
+    import io
+
+    from PIL import Image
+
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        if max(im.size) > DETECT_MAX_SIDE:
+            im.thumbnail((DETECT_MAX_SIDE, DETECT_MAX_SIDE))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG", optimize=True)
+        return buf.getvalue(), "image/png"
+
+
+def _raster_hook(client: GeminiClient | None):
+    """After a raster upload is parsed: one detection call (budget purpose 'raster_detect';
+    presenter token or AURA_RASTER_PUBLIC_CAP), stored as raster.json. Answers are then served
+    from it at 0 calls."""
+
+    async def hook(drawing_id: str, out: Path, ctx: dict) -> str | None:
+        from aura.budget import BudgetError
+        from aura.gemini.client import GeminiError
+        from aura.solvers import raster
+
+        if client is None or not client.available():
+            return "Image analysis is not available on this server (no model key)."
+        data, mime = await asyncio.to_thread(_detect_image, out / "original.png")
+        try:
+            r = await raster.detect(client, data, mime_type=mime, presenter=ctx.get("presenter",
+                                    False), ip_hash=ctx.get("ip_hash"))
+        except BudgetError as e:
+            return f"Detection was not run: {e}"
+        except GeminiError as e:
+            return f"Detection failed: {e}"
+        (out / "raster.json").write_text(json.dumps(r, ensure_ascii=False))
+        dp = out / "drawing.json"
+        drawing = json.loads(dp.read_text())
+        drawing["capabilities"] = list(raster.SUBJECTS)
+        drawing["detection"] = {"model": r["model"], "input_tokens": r["input_tokens"],
+                                "output_tokens": r["output_tokens"], "cost_usd": r["cost_usd"],
+                                "latency_ms": r["latency_ms"]}
+        dp.write_text(json.dumps(drawing, ensure_ascii=False))
+        return None
+
+    return hook
 
 
 def _copy_to(src, dest: Path) -> None:

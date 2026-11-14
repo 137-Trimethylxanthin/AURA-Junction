@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test"
 export default defineConfig({
   testDir: "e2e",
   // Needs the API build (e2e/playwright.api.config.ts); not a skip here, so the expected-skip count stays meaningful.
-  testIgnore: "api.library.spec.ts",
+  testIgnore: ["api.library.spec.ts", "api.chat.spec.ts"],
   fullyParallel: true,
   reporter: "list",
   use: { baseURL: "http://localhost:4173", trace: "retain-on-failure" },

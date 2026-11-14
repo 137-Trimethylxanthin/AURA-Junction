@@ -5,7 +5,7 @@ import { isBoxRejected, isRoomIncluded, roomEvidenceId } from '@/lib/answer'
 import { fmtArea } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { actions, useActiveTurn, useAppStore, useAppStoreShallow } from '@/store'
-import { PLAN_ASPECT, roomTitle, subjectLabel } from './shared'
+import { planAspect, roomTitle, subjectLabel } from './shared'
 import { doubleLeaves, placeBadges } from './badges'
 
 const hoverIn = (ids: string[]) => (e: PointerEvent) => {
@@ -26,9 +26,11 @@ export function EvidenceLayer({ stageW }: { stageW: number }) {
     hovered: s.ui.hoveredEvidenceIds,
   }))
 
-  const resp = turn?.status === 'done' ? turn.response : undefined
+  // While a streamed answer arrives, the evidence of each finished tool call lights up already (not yet toggleable).
+  const streaming = turn?.status === 'pending' && turn.stream ? turn.stream : undefined
+  const resp = turn?.status === 'done' ? turn.response : streaming ? { evidence: streaming.evidence } : undefined
   if (!turn || !resp) return null
-  const interactive = tool === 'select'
+  const interactive = tool === 'select' && !streaming
   return (
     <>
       {resp.evidence.rooms.length > 0 ? (
@@ -56,6 +58,8 @@ export function EvidenceLayer({ stageW }: { stageW: number }) {
           lang={lang}
           interactive={interactive}
           stageW={stageW}
+          aspect={planAspect(drawing)}
+          leastCertain={(turn.response?.check ?? streaming?.check)?.least_certain_id}
         />
       ) : null}
     </>
@@ -75,6 +79,10 @@ interface BoxLayerProps {
   interactive: boolean
   /** Stage width in px: badges are a fixed 24 px, so collisions depend on the zoom. */
   stageW: number
+  /** Stage width / height (the drawing's image aspect). */
+  aspect: number
+  /** The box the Gemini check is least sure about: check it first. */
+  leastCertain?: string
 }
 
 const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
@@ -83,8 +91,8 @@ const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
   // Double doors: two boxes with the same rectangle. Their badges go outside the box on opposite sides.
   const { firstLeaf, secondLeaf } = useMemo(() => doubleLeaves(p.boxes), [p.boxes])
   const badgeAt = useMemo(
-    () => placeBadges(p.boxes, p.stageW, p.stageW / PLAN_ASPECT, firstLeaf, secondLeaf),
-    [p.boxes, p.stageW, firstLeaf, secondLeaf],
+    () => placeBadges(p.boxes, p.stageW, p.stageW / p.aspect, firstLeaf, secondLeaf),
+    [p.boxes, p.stageW, p.aspect, firstLeaf, secondLeaf],
   )
 
   const items = p.boxes.map((b, i) => {
@@ -105,13 +113,15 @@ const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
         const what = `${subjectLabel(b.subject, p.lang)} ${n}${leaf2 ? ' (second copy in the CAD file; the dataset counts both)' : ''}`
         const where = room ? ` in ${roomTitle(room)}` : ''
         const state = rejected ? 'rejected' : 'counted'
+        const least = b.id === p.leastCertain
         const next = isSel ? (rejected ? 'Press again to count it' : 'Press again to reject it') : 'Press to select'
         return (
           <button
             key={b.id}
             type="button"
             data-evidence-id={b.id}
-            aria-label={`${what}${where}, ${state}. ${next}`}
+            aria-label={`${what}${where}, ${state}${least ? ', least certain in the Gemini check' : ''}. ${next}`}
+            data-least-certain={least || undefined}
             aria-pressed={isSel}
             tabIndex={p.interactive ? 0 : -1}
             onClick={tap(b.id)}
@@ -126,6 +136,8 @@ const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
               'focus-visible:ring-3 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background',
               rejected ? 'border-dashed border-warning bg-warning/10' : 'border-info bg-info/15 hover:bg-info/30',
               hot && (rejected ? 'z-[3] bg-warning/20 ring-4 ring-warning/30' : 'z-[3] bg-info/35 ring-4 ring-info/30'),
+              // Least certain in the check: a dashed halo in the evidence colour, so it is found first.
+              least && !rejected && 'outline-2 outline-offset-2 outline-info outline-dashed',
             )}
           >
             {isSel ? (

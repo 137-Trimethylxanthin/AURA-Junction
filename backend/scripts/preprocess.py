@@ -17,10 +17,11 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
+from aura.render import ifc as rifc
 from aura.render import png as rpng
 from aura.render.drawing import build_drawing
 from aura.render.svg import render_svg
-from aura.solvers import swiss
+from aura.solvers import ifc, swiss
 
 DEFAULT_DATA = BACKEND.parent / 'data' / 'junction-dataset'
 OUT = BACKEND / 'build'
@@ -128,6 +129,84 @@ def process(stem: str, data: Path, qlines, overlays: bool = True) -> dict:
                            'printed': None if al['printed_s'] is None else round(al['printed_s'], 3)}}
 
 
+IFC_ROOT = 'ifc_models'
+# New drawing kinds go to staging until L2's loader supports them; L2 moves them into build/drawings.
+IFC_STAGING = 'drawings-ifc-staging'
+
+
+def ifc_gold_rows(model, qlines):
+    """Gold rows for an IFC storey plan: our paraphrase, the solver's value, contract-style scope."""
+    sys.path.insert(0, str(BACKEND / 'eval'))
+    from ifc_full import route as ifc_route
+    storeys = {s['name'] for s in model.storeys}
+    rows = []
+    for i, (line, r) in enumerate(qlines):
+        if not r['question'].startswith(('How', 'What')):
+            continue
+        rt = ifc_route(r['question'], storeys)
+        if rt is None or rt[1] is None:
+            continue
+        _, fam, scope = rt
+        if scope.get('storey') not in (None, model.storey):
+            continue
+        res = ifc.answer(model, fam, scope)
+        pred = res['value']
+        tol = 'exact' if r['type'] == 'count' else '2pct'
+        ok = pred is not None and (pred == r['answer'] if tol == 'exact' else abs(pred - r['answer']) <= 0.02 * abs(r['answer']))
+        if fam == 'area' and scope['kind'] == 'room':
+            room = ifc.find_room(model, scope['room'])
+            cscope = {'kind': 'room', 'room_id': room['room_id']} if room else {'kind': 'room', 'room': scope['room']}
+            para = f"What is the net floor area of room {scope['room']}"
+        elif scope['kind'] == 'model':
+            cscope, para = {'kind': 'model'}, f'How many {ifc.PLURAL[fam]} are in the whole model'
+        elif fam in ifc.COUNT_FAMILIES:
+            cscope, para = {'kind': 'floor'}, f'How many {ifc.PLURAL[fam]} are on this storey'
+        else:
+            cscope = {'kind': 'floor'}
+            para = {'area': 'What is the net floor area of all rooms on this storey'}.get(
+                fam, f"What is the total {fam.replace('_', ' ')} on this storey")
+        kind = res['answer']['kind'] if res['answer']['kind'] != 'abstain' else ('count' if tol == 'exact' else 'area')
+        ans = {'kind': kind}
+        if kind == 'count':
+            ans['subject'] = fam
+        if kind == 'quantity':
+            ans['unit'] = ifc.TOTAL_UNIT[fam]
+        row = {'dataset_qid': f'questions.jsonl:{line}'}
+        nxt = qlines[i + 1] if i + 1 < len(qlines) else None
+        if nxt and nxt[0] == line + 1 and not nxt[1]['question'].startswith(('How', 'What')):
+            row['dataset_qid_local'] = f'questions.jsonl:{nxt[0]}'
+        row.update(question_en=para, answer=ans, scope=cscope, value=r['answer'], tolerance=tol,
+                   solver_family=fam, solver_value=pred, match=bool(ok))
+        rows.append(row)
+    return rows
+
+
+def process_ifc(entry: dict, data: Path, qlines) -> dict:
+    model = ifc.load(data / 'data' / IFC_ROOT / f"{entry['model']}.ifc", storey=entry['storey'],
+                     drawing_id=entry['id'])
+    d = OUT / IFC_STAGING / model.id  # staging: build/drawings is the served library (lead's rule)
+    d.mkdir(parents=True, exist_ok=True)
+    gold = ifc_gold_rows(model, qlines)
+    measured = dt.datetime.now(dt.UTC).isoformat(timespec='seconds')
+    facts = {'gold_total': len(gold), 'correct': sum(g['match'] for g in gold), 'measured_at': measured,
+                 'languages': ['en']}
+    img = rifc.raster(model)
+    rpng.thumbnail(img).save(d / 'thumb.png', optimize=True)
+    drawing = rifc.build_drawing(model, facts=facts, thumbnail='thumb.png')
+    ev = {s: ifc.boxes(model, s) or [] for s in ifc.BOX_SUBJECTS}
+    drawing['evidence'] = ev
+    drawing['gold'] = [{k: v for k, v in g.items() if k not in ('solver_family', 'solver_value', 'match')} for g in gold]
+    write_json(d / 'drawing.json', drawing)
+    (d / 'plan.svg').write_text(rifc.render_svg(model), encoding='utf-8')
+    write_json(d / 'model.json', model.to_json())
+    write_json(d / 'gold.json', gold)
+    write_json(d / 'evidence.json', ev)
+    (OUT / 'overlays').mkdir(parents=True, exist_ok=True)
+    rpng.overlay(img, ev['window'] + ev['door'], drawing['rooms']).save(OUT / 'overlays' / f'{model.id}.png', optimize=True)
+    return {'id': model.id, 'gold': facts, 'counts': {s: len(v) for s, v in ev.items()}, 'rooms': len(drawing['rooms']),
+                'frame': model.frame['px']}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', default=str(DEFAULT_DATA))
@@ -152,9 +231,33 @@ def main():
         summary.append(rep)
         g = rep['gold']
         print(f"{rep['id']:12s} gold {g['correct']}/{g['gold_total']} rooms {rep['rooms']} {rep['counts']} align {rep['align']}")
+    if not a.ids or any(i.startswith('ifc-') for i in a.ids):
+        ifc_entries = [e for e in lib.get('ifc', []) if not a.ids or e['id'] in a.ids]
+        plans = {e['plan']: e for e in ifc_entries}
+        iq = {e['id']: [] for e in ifc_entries}
+        with open(data / 'questions.jsonl', encoding='utf-8') as f:
+            for i, l in enumerate(f, 1):
+                if '/ifc_models/' in l:
+                    r = json.loads(l)
+                    e = plans.get(Path(r['path']).name)
+                    if e:
+                        iq[e['id']].append((i, r))
+        for e in ifc_entries:
+            rep = process_ifc(e, data, iq[e['id']])
+            summary.append(rep)
+            g = rep['gold']
+            print(f"{rep['id']:60s} gold {g['correct']}/{g['gold_total']} rooms {rep['rooms']} {rep['counts']} px {rep['frame']}")
     tot = sum(r['gold']['correct'] for r in summary), sum(r['gold']['gold_total'] for r in summary)
     print(f'TOTAL gold {tot[0]}/{tot[1]} = {100 * tot[0] / tot[1]:.2f} %')
-    write_json(OUT / 'drawings' / 'index.json', [{'id': r['id'], 'facts': r['gold']} for r in summary])
+    # index.json lists every built drawing (bundled, Swiss library, IFC library); a partial run updates its rows
+    for sub, entries_ in (('drawings', [lib['bundled']] + lib['drawings']), (IFC_STAGING, lib.get('ifc', []))):
+        ip = OUT / sub / 'index.json'
+        order = [e['id'] for e in entries_]
+        idx = {r['id']: r for r in (json.loads(ip.read_text(encoding='utf-8')) if ip.exists() else [])}
+        idx.update({r['id']: {'id': r['id'], 'facts': r['gold']} for r in summary if r['id'] in order})
+        if any(r['id'] in order for r in summary):  # only touch the index this run built for
+            ip.parent.mkdir(parents=True, exist_ok=True)
+            write_json(ip, [idx[i] for i in order if i in idx])
 
 
 if __name__ == '__main__':

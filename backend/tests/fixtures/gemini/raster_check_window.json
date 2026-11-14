@@ -1,0 +1,265 @@
+{
+ "source": "recorded",
+ "note": "Live tile check of the raster detection boxes on the uploaded Swiss PNG (ranking only on raster). Image bytes stripped.",
+ "recorded_at": "2026-11-14T02:29:52+0200",
+ "path": "/decisions",
+ "request": {
+  "model": "gemini-decision-1",
+  "input": [
+   {
+    "type": "text",
+    "text": "Zoomed tiles cut from one architectural floor plan. Each tile has one magenta rectangle marking a candidate object.\n"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 1:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:620a0b32faf4f67f",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 2:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:92de387d47b0bde8",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 3:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:58dee85123ec940c",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 4:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:a4d89b2708ac1cb0",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 5:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:d47914e01293587b",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 6:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:62be6d7a1464cc48",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 7:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:3d70cb49ca8bed69",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 8:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:04fc3b85dc7e70ed",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 9:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:72684921643a187b",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 10:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:285dd6a8ad88510b",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 11:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:8f969f881d8d3def",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 12:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:96445f6fb673ded7",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   }
+  ],
+  "questions": {
+   "b01": {
+    "type": "noul",
+    "instructions": "In tile 1, does the magenta rectangle mark a window?"
+   },
+   "b02": {
+    "type": "noul",
+    "instructions": "In tile 2, does the magenta rectangle mark a window?"
+   },
+   "b03": {
+    "type": "noul",
+    "instructions": "In tile 3, does the magenta rectangle mark a window?"
+   },
+   "b04": {
+    "type": "noul",
+    "instructions": "In tile 4, does the magenta rectangle mark a window?"
+   },
+   "b05": {
+    "type": "noul",
+    "instructions": "In tile 5, does the magenta rectangle mark a window?"
+   },
+   "b06": {
+    "type": "noul",
+    "instructions": "In tile 6, does the magenta rectangle mark a window?"
+   },
+   "b07": {
+    "type": "noul",
+    "instructions": "In tile 7, does the magenta rectangle mark a window?"
+   },
+   "b08": {
+    "type": "noul",
+    "instructions": "In tile 8, does the magenta rectangle mark a window?"
+   },
+   "b09": {
+    "type": "noul",
+    "instructions": "In tile 9, does the magenta rectangle mark a window?"
+   },
+   "b10": {
+    "type": "noul",
+    "instructions": "In tile 10, does the magenta rectangle mark a window?"
+   },
+   "b11": {
+    "type": "noul",
+    "instructions": "In tile 11, does the magenta rectangle mark a window?"
+   },
+   "b12": {
+    "type": "noul",
+    "instructions": "In tile 12, does the magenta rectangle mark a window?"
+   }
+  }
+ },
+ "status": 200,
+ "response": {
+  "answers": {
+   "b09": {
+    "confidence": 0.6706898380619389,
+    "noul": 0.6706898380619389,
+    "type": "noul"
+   },
+   "b05": {
+    "confidence": 0.7610873674059621,
+    "noul": 0.7610873674059621,
+    "type": "noul"
+   },
+   "b12": {
+    "confidence": 0.7638295551080648,
+    "noul": 0.7638295551080648,
+    "type": "noul"
+   },
+   "b07": {
+    "confidence": 0.6094111862354136,
+    "noul": 0.6094111862354136,
+    "type": "noul"
+   },
+   "b04": {
+    "confidence": 0.6829426996511232,
+    "noul": 0.6829426996511232,
+    "type": "noul"
+   },
+   "b10": {
+    "confidence": 0.7428816839746458,
+    "noul": 0.7428816839746458,
+    "type": "noul"
+   },
+   "b01": {
+    "confidence": 0.7147644876267536,
+    "noul": 0.7147644876267536,
+    "type": "noul"
+   },
+   "b06": {
+    "confidence": 0.5183071677278952,
+    "noul": 0.5183071677278952,
+    "type": "noul"
+   },
+   "b11": {
+    "confidence": 0.6859802540851744,
+    "noul": 0.6859802540851744,
+    "type": "noul"
+   },
+   "b08": {
+    "confidence": 0.5258160808058954,
+    "noul": 0.4741839191941046,
+    "type": "noul"
+   },
+   "b03": {
+    "confidence": 0.5272926179242283,
+    "noul": 0.5272926179242283,
+    "type": "noul"
+   },
+   "b02": {
+    "confidence": 0.529122718000856,
+    "noul": 0.47087728199914397,
+    "type": "noul"
+   }
+  },
+  "usage": {
+   "total_tokens": 7138,
+   "total_input_tokens": 7138,
+   "input_tokens_by_modality": [
+    {
+     "modality": "text",
+     "tokens": 790
+    },
+    {
+     "modality": "image",
+     "tokens": 6348
+    }
+   ],
+   "total_output_tokens": 0
+  }
+ }
+}

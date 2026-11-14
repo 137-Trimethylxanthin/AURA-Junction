@@ -397,7 +397,7 @@ function Measured() {
         className={cn(
           "grid gap-4",
           RESULTS.length > 1 && "lg:grid-cols-2",
-          RESULTS.length > 2 && "xl:grid-cols-3"
+          RESULTS.length === 3 && "xl:grid-cols-3"
         )}
       >
         {RESULTS.map((f) => (

@@ -117,3 +117,32 @@ def test_provenance_numbers_and_words():
     # rounding of a tool value is fine; the user's room number is allowed via the question
     kept, _ = filter_prose("Room 3.04 has 17.0 m².", {17.04, 3.04})
     assert kept == "Room 3.04 has 17.0 m²."
+
+
+def test_rewrite_blocks_recorded(tmp_path):
+    with _app(tmp_path) as c:
+        r = c.post("/rewrite", json={"drawing_id": "swiss-46639", "text": (
+            "uh so I'm renovating, how many sinks are there in both flats together, and the "
+            "bedroom 3.05 how big is it, also is the ceiling high enough for a loft bed")})
+        assert r.status_code == 200
+        b = r.json()
+        assert b["calls"] == 1 and b["cost_usd"] > 0 and b["model"] == "gemini-3.1-flash-lite"
+        assert [x["scope"] for x in b["blocks"]] == [{"kind": "floor"},
+                                                     {"kind": "room", "room_id": "3.05"}]
+        assert all(x["routable"] for x in b["blocks"])
+        assert b["not_answerable"] == ["is the ceiling high enough for a loft bed"]
+        # Confirming a block: /ask with the block's question AND scope (scope wins).
+        a = c.post("/ask", json={"drawing_id": "swiss-46639", "question": b["blocks"][0]["question"],
+                                 "scope": b["blocks"][0]["scope"]}).json()
+        assert a["answer"] == {"kind": "count", "value": 5, "subject": "washbasin"}
+        de = c.post("/rewrite", json={"drawing_id": "swiss-46639", "text":
+                                      "Wie viele Fenster hat die Wohnung B und wie gross ist die Küche?"}).json()
+        assert de["detected_lang"] == "de"
+        assert de["blocks"][1]["scope"] == {"kind": "label", "label": "Cuisine"}
+
+
+def test_rewrite_refused_when_models_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("AURA_MODELS", "off")
+    with _app(tmp_path) as c:
+        r = c.post("/rewrite", json={"drawing_id": "swiss-46639", "text": "how many doors"})
+        assert r.status_code == 429 and r.json()["code"] == "budget_exhausted"

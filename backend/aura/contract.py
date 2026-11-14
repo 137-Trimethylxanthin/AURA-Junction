@@ -132,6 +132,11 @@ class ChatRequest(_Open):
     lang_hint: Lang | None = None
 
 
+class RewriteRequest(_Open):
+    drawing_id: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=2000)
+
+
 # ---- answer -----------------------------------------------------------------------------
 
 

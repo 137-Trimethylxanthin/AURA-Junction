@@ -239,6 +239,33 @@ class BundleEngine:
                 for r in self._rooms(scope or {"kind": "floor"})]
 
 
+class RasterEngine:
+    """Model-estimate door/window counts from raster.json (L1's solvers.raster), 0 calls."""
+
+    def __init__(self, result: dict):
+        from aura.solvers import raster
+
+        self.raster = raster
+        self.result = result
+
+    def supports(self, subject: str) -> bool:
+        return subject in self.raster.SUBJECTS
+
+    def capabilities(self) -> list[str]:
+        return list(self.raster.SUBJECTS)
+
+    def answer(self, family: str, scope: dict, overrides: list[dict] | None) -> dict:
+        return self.raster.answer(self.result, family, scope)
+
+    def find_text(self, pattern: str) -> dict:
+        return {"answer": {"kind": "abstain", "reason": "not_on_drawing"}, "value": None,
+                "numbers": [], "texts": [], "evidence": {"boxes": [], "rooms": []},
+                "summary": "Printed text is not read from uploaded images."}
+
+    def room_list(self, scope: dict | None) -> list[dict]:
+        return []
+
+
 class SwissEngine:
     """L1's solver over model.json."""
 
@@ -291,7 +318,7 @@ class LoadedDrawing:
     def public_drawing(self) -> dict:
         """Drawing as served: contract fields only (evidence/gold/texts stripped)."""
         out = {k: v for k, v in self.drawing.items()
-               if k not in ("evidence", "gold", "texts", "anchors")}
+               if k not in ("evidence", "gold", "texts", "anchors", "detection")}
         out.setdefault("capabilities", self.engine.capabilities())
         out.setdefault("kind", "cad_dxf")
         out.setdefault("source", self.source)
@@ -368,7 +395,9 @@ def load_dir(p: Path, drawing_id: str | None = None) -> LoadedDrawing:
         g = json.loads((p / "gold.json").read_text())
         gold = g.get("gold", g) if isinstance(g, dict) else g
     engine: Engine
-    if (p / "model.json").is_file():
+    if (p / "raster.json").is_file():
+        engine = RasterEngine(json.loads((p / "raster.json").read_text()))
+    elif (p / "model.json").is_file():
         from aura.solvers import swiss
 
         engine = SwissEngine(swiss.SwissModel.from_json(json.loads((p / "model.json").read_text())))
@@ -412,11 +441,12 @@ def _to_result(d: LoadedDrawing, tool: str, args: dict, raw: dict, ms: int,
         boxes=boxes,
         rooms=rooms,
         summary=str(raw.get("summary", "")),
-        method="cad_geometry",
+        method=raw.get("method", "cad_geometry"),
         supported=supported,
         ms=ms,
-        meta={"abstain": ans.get("reason")} if is_abstain else
-             ({"texts": raw.get("texts", [])} if kind == "text" else {}),
+        meta=({"abstain": ans.get("reason")} if is_abstain else
+              ({"texts": raw.get("texts", [])} if kind == "text" else {}))
+             | ({"estimate": True, "measured": raw.get("measured")} if raw.get("estimate") else {}),
     )
 
 

@@ -1,0 +1,379 @@
+{
+ "source": "recorded",
+ "note": "Live tile check of the raster detection boxes on the uploaded Swiss PNG (ranking only on raster). Image bytes stripped.",
+ "recorded_at": "2026-11-14T02:29:51+0200",
+ "path": "/decisions",
+ "request": {
+  "model": "gemini-decision-1",
+  "input": [
+   {
+    "type": "text",
+    "text": "Zoomed tiles cut from one architectural floor plan. Each tile has one magenta rectangle marking a candidate object.\n"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 1:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:0a630497cecc948d",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 2:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:5f63704b0e84a033",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 3:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:661b391d9522eae8",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 4:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:cbe6cfa56c423023",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 5:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:af3459ba731c9bcc",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 6:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:6e5fcc63a4f41e39",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 7:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:fa7559f7ac033643",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 8:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:5d786caaa505505f",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 9:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:3a1c40af173a0cbf",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 10:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:a9c8b7572e7dbed9",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 11:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:18609f2f8011fd2f",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 12:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:34d85a0f77eea28c",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 13:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:f296a7c7a6dddd61",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 14:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:6a16d5b1d33b6543",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 15:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:31f2eef5ac501828",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 16:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:f9f026ecedb3a66b",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 17:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:01b6475f69f7d420",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   },
+   {
+    "type": "text",
+    "text": "\nTile 18:\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:c7e2b318f4ab67a4",
+    "mime_type": "image/png",
+    "resolution": "medium"
+   }
+  ],
+  "questions": {
+   "b01": {
+    "type": "noul",
+    "instructions": "In tile 1, does the magenta rectangle mark a door?"
+   },
+   "b02": {
+    "type": "noul",
+    "instructions": "In tile 2, does the magenta rectangle mark a door?"
+   },
+   "b03": {
+    "type": "noul",
+    "instructions": "In tile 3, does the magenta rectangle mark a door?"
+   },
+   "b04": {
+    "type": "noul",
+    "instructions": "In tile 4, does the magenta rectangle mark a door?"
+   },
+   "b05": {
+    "type": "noul",
+    "instructions": "In tile 5, does the magenta rectangle mark a door?"
+   },
+   "b06": {
+    "type": "noul",
+    "instructions": "In tile 6, does the magenta rectangle mark a door?"
+   },
+   "b07": {
+    "type": "noul",
+    "instructions": "In tile 7, does the magenta rectangle mark a door?"
+   },
+   "b08": {
+    "type": "noul",
+    "instructions": "In tile 8, does the magenta rectangle mark a door?"
+   },
+   "b09": {
+    "type": "noul",
+    "instructions": "In tile 9, does the magenta rectangle mark a door?"
+   },
+   "b10": {
+    "type": "noul",
+    "instructions": "In tile 10, does the magenta rectangle mark a door?"
+   },
+   "b11": {
+    "type": "noul",
+    "instructions": "In tile 11, does the magenta rectangle mark a door?"
+   },
+   "b12": {
+    "type": "noul",
+    "instructions": "In tile 12, does the magenta rectangle mark a door?"
+   },
+   "b13": {
+    "type": "noul",
+    "instructions": "In tile 13, does the magenta rectangle mark a door?"
+   },
+   "b14": {
+    "type": "noul",
+    "instructions": "In tile 14, does the magenta rectangle mark a door?"
+   },
+   "b15": {
+    "type": "noul",
+    "instructions": "In tile 15, does the magenta rectangle mark a door?"
+   },
+   "b16": {
+    "type": "noul",
+    "instructions": "In tile 16, does the magenta rectangle mark a door?"
+   },
+   "b17": {
+    "type": "noul",
+    "instructions": "In tile 17, does the magenta rectangle mark a door?"
+   },
+   "b18": {
+    "type": "noul",
+    "instructions": "In tile 18, does the magenta rectangle mark a door?"
+   }
+  }
+ },
+ "status": 200,
+ "response": {
+  "answers": {
+   "b13": {
+    "confidence": 0.6884219293502285,
+    "noul": 0.31157807064977144,
+    "type": "noul"
+   },
+   "b04": {
+    "confidence": 0.807643481083493,
+    "noul": 0.19235651891650699,
+    "type": "noul"
+   },
+   "b14": {
+    "confidence": 0.5391727513015752,
+    "noul": 0.46082724869842484,
+    "type": "noul"
+   },
+   "b15": {
+    "confidence": 0.6841673603673614,
+    "noul": 0.6841673603673614,
+    "type": "noul"
+   },
+   "b08": {
+    "confidence": 0.8670589477857692,
+    "noul": 0.8670589477857692,
+    "type": "noul"
+   },
+   "b18": {
+    "confidence": 0.7613516932790875,
+    "noul": 0.7613516932790875,
+    "type": "noul"
+   },
+   "b05": {
+    "confidence": 0.8247860905583557,
+    "noul": 0.8247860905583557,
+    "type": "noul"
+   },
+   "b02": {
+    "confidence": 0.8697705311702701,
+    "noul": 0.8697705311702701,
+    "type": "noul"
+   },
+   "b17": {
+    "confidence": 0.7306261884388034,
+    "noul": 0.7306261884388034,
+    "type": "noul"
+   },
+   "b03": {
+    "confidence": 0.5262970870649994,
+    "noul": 0.5262970870649994,
+    "type": "noul"
+   },
+   "b01": {
+    "confidence": 0.7203068322842957,
+    "noul": 0.7203068322842957,
+    "type": "noul"
+   },
+   "b09": {
+    "confidence": 0.7795435930979162,
+    "noul": 0.7795435930979162,
+    "type": "noul"
+   },
+   "b16": {
+    "confidence": 0.7840529127558301,
+    "noul": 0.7840529127558301,
+    "type": "noul"
+   },
+   "b11": {
+    "confidence": 0.7824561050892246,
+    "noul": 0.7824561050892246,
+    "type": "noul"
+   },
+   "b06": {
+    "confidence": 0.7510075077172089,
+    "noul": 0.7510075077172089,
+    "type": "noul"
+   },
+   "b12": {
+    "confidence": 0.8164967896140184,
+    "noul": 0.8164967896140184,
+    "type": "noul"
+   },
+   "b10": {
+    "confidence": 0.862503164172981,
+    "noul": 0.862503164172981,
+    "type": "noul"
+   },
+   "b07": {
+    "confidence": 0.6699533543760787,
+    "noul": 0.33004664562392133,
+    "type": "noul"
+   }
+  },
+  "usage": {
+   "total_tokens": 10684,
+   "total_input_tokens": 10684,
+   "input_tokens_by_modality": [
+    {
+     "modality": "text",
+     "tokens": 1162
+    },
+    {
+     "modality": "image",
+     "tokens": 9522
+    }
+   ],
+   "total_output_tokens": 0
+  }
+ }
+}

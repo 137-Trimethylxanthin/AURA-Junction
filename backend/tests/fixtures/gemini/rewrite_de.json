@@ -1,0 +1,54 @@
+{
+ "source": "recorded",
+ "note": "Live POST /rewrite on gemini-3.1-flash-lite against the bundled swiss-46639 drawing file.",
+ "recorded_at": "2026-11-14T02:33:12+0200",
+ "path": "/models/gemini-3.1-flash-lite:generateContent",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Rewrite the user's message about a construction floor plan into separate, plain English questions that the drawing could answer: counts (windows, doors, washbasins, WCs, bathtubs, showers, rooms by label, apartments) or net floor areas (whole floor, an apartment, a room number, rooms with a label). Keep only what the user asked. Use the drawing's own apartment letters, room numbers and room labels: apartments [A, B]; room labels [, Bain, Chambre à coucher, Couloir, Cuisine, Réduit, Séjour/repas, Terrasse]. Return JSON: {\"detected_lang\": \"en|fr|fi|de|it|other\", \"questions\": [{\"question\": str, \"intent\": \"count|area\", \"subject\": \"window|door|washbasin|wc|bathtub|shower|room|apartment|none\", \"scope\": \"floor|unit <letter>|room <number>|label <printed label>\"}], \"not_answerable\": [parts of the message a floor plan cannot answer, in the user's words]}. Do not answer the questions and do not write any number that is not in the user's message.\n\nMessage:\nWie viele Fenster hat die Wohnung B und wie gross ist die Küche?"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "temperature": 0,
+   "responseMimeType": "application/json"
+  }
+ },
+ "status": 200,
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "text": "{\n  \"detected_lang\": \"de\",\n  \"questions\": [\n    {\n      \"question\": \"Wie viele Fenster hat die Wohnung B?\",\n      \"intent\": \"count\",\n      \"subject\": \"window\",\n      \"scope\": \"unit B\"\n    },\n    {\n      \"question\": \"Wie gross ist die Küche in der Wohnung B?\",\n      \"intent\": \"area\",\n      \"subject\": \"room\",\n      \"scope\": \"label Cuisine\"\n    }\n  ],\n  \"not_answerable\": []\n}",
+       "thoughtSignature": "EnMKcQFpFH0T8R0gUAvDqxkUQ5oFbAZIxDUo7wMojfLG8u+ydVeokongJMSOIYssTa/RYp5rm5YAoVv8FWVS7gUqMhwOLAFKS6IOiJdgDJaZJs1selYqutYBmojaLoekKn0A0O8oS0Wlu3yubjxvDROrF0xI"
+      }
+     ],
+     "role": "model"
+    },
+    "finishReason": "STOP",
+    "index": 0
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 268,
+   "candidatesTokenCount": 123,
+   "totalTokenCount": 391,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 268
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "SKz3arr0Drqu3boP24HSyA0"
+ }
+}

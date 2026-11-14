@@ -7,7 +7,6 @@ import {
 } from "react"
 import { Link } from "react-router"
 import { toast } from "sonner"
-import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import {
   CloudOffIcon,
   FileCheckIcon,
@@ -58,6 +57,7 @@ import { Spinner } from "@/components/ui/spinner"
 import {
   Tooltip,
   TooltipContent,
+  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Progress } from "@/components/ui/progress"
@@ -338,7 +338,9 @@ export function UploadPanel({ base }: { base: string | null }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {base ? (
-          <Uploader base={base} />
+          <TooltipProvider delayDuration={400}>
+            <Uploader base={base} />
+          </TooltipProvider>
         ) : (
           <>
             <Alert data-uploads-off>
@@ -359,7 +361,6 @@ export function UploadPanel({ base }: { base: string | null }) {
 
 function Uploader({ base }: { base: string }) {
   const { rows, start, remove } = useUploads(base)
-  const reduce = useReducedMotion()
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
   const [rejection, setRejection] = useState<string | null>(null)
@@ -475,27 +476,15 @@ function Uploader({ base }: { base: string }) {
             Your uploads
           </h3>
           <ul className="flex flex-col gap-2" aria-label="Your uploads">
-            <AnimatePresence initial={false} mode="popLayout">
-              {rows.map((r) => (
-                <motion.li
-                  key={r.uid ?? r.id}
-                  layout={!reduce}
-                  data-upload={r.phase}
-                  initial={
-                    reduce ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.98 }
-                  }
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.98 }}
-                  transition={
-                    reduce
-                      ? { duration: 0.12 }
-                      : { type: "spring", bounce: 0, duration: 0.3 }
-                  }
-                >
-                  <UploadRow r={r} onDelete={(x) => void remove(x)} />
-                </motion.li>
-              ))}
-            </AnimatePresence>
+            {rows.map((r) => (
+              <li
+                key={r.uid ?? r.id}
+                data-upload={r.phase}
+                className="enter-rise"
+              >
+                <UploadRow r={r} onDelete={(x) => void remove(x)} />
+              </li>
+            ))}
           </ul>
         </div>
       ) : null}

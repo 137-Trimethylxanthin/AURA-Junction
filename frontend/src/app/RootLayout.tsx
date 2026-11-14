@@ -8,7 +8,6 @@ import {
 import { toast } from "sonner"
 import { Spinner } from "@/components/ui/spinner"
 import { Toaster } from "@/components/ui/sonner"
-import { TooltipProvider } from "@/components/ui/tooltip"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { presenter } from "@/api/library"
 
@@ -55,11 +54,11 @@ export function RootLayout() {
   const narrow = useMediaQuery("(max-width: 899px)")
   usePresenterLink()
   return (
-    <TooltipProvider delayDuration={400}>
+    <>
       <PageTransition />
       <Toaster position={narrow ? "bottom-center" : "bottom-right"} />
       <ScrollRestoration />
-    </TooltipProvider>
+    </>
   )
 }
 

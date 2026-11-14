@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { motion, useReducedMotion } from "motion/react"
 import {
   RotateCwIcon,
   SearchIcon,
@@ -102,7 +101,6 @@ export default function LibraryPage() {
   const { list, retry } = useLibrary(base)
   const [query, setQuery] = useState("")
   const [kind, setKind] = useState<"all" | DrawingKind>("all")
-  const reduce = useReducedMotion()
 
   // A failed list still offers the bundled sample, which works without the server.
   const drawings = useMemo(
@@ -243,21 +241,16 @@ export default function LibraryPage() {
               >
                 {shown.map((d, i) => (
                   // Cards settle in reading order; the stagger is capped so a long library never waits.
-                  <motion.li
+                  <li
                     key={d.id}
-                    initial={reduce ? { opacity: 0 } : { opacity: 0, y: 10 }}
-                    animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
-                    transition={
-                      reduce
-                        ? { duration: 0.12 }
-                        : { type: "spring", bounce: 0, duration: 0.4, delay: Math.min(i, 8) * 0.03 }
-                    }
+                    className="enter-rise"
+                    style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
                   >
                     <DrawingCard
                       d={d}
                       offline={offline && d.id === BUNDLED_SUMMARY.id}
                     />
-                  </motion.li>
+                  </li>
                 ))}
               </ul>
             ) : (
@@ -279,7 +272,7 @@ export default function LibraryPage() {
             )}
           </section>
 
-          <aside className="order-first flex flex-col gap-4 min-[1100px]:sticky min-[1100px]:top-6 min-[1100px]:order-none min-[1100px]:max-h-[calc(100dvh-3rem)] min-[1100px]:-m-1 min-[1100px]:overflow-y-auto min-[1100px]:p-1">
+          <aside className="order-first flex flex-col gap-4 min-[1100px]:sticky min-[1100px]:top-6 min-[1100px]:order-none min-[1100px]:-m-1 min-[1100px]:max-h-[calc(100dvh-3rem)] min-[1100px]:overflow-y-auto min-[1100px]:p-1">
             <UploadPanel base={base} />
           </aside>
         </div>

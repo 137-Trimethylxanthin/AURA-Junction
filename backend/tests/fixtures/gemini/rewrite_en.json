@@ -1,0 +1,54 @@
+{
+ "source": "recorded",
+ "note": "Live POST /rewrite on gemini-3.1-flash-lite against the bundled swiss-46639 drawing file.",
+ "recorded_at": "2026-11-14T02:33:12+0200",
+ "path": "/models/gemini-3.1-flash-lite:generateContent",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Rewrite the user's message about a construction floor plan into separate, plain English questions that the drawing could answer: counts (windows, doors, washbasins, WCs, bathtubs, showers, rooms by label, apartments) or net floor areas (whole floor, an apartment, a room number, rooms with a label). Keep only what the user asked. Use the drawing's own apartment letters, room numbers and room labels: apartments [A, B]; room labels [, Bain, Chambre à coucher, Couloir, Cuisine, Réduit, Séjour/repas, Terrasse]. Return JSON: {\"detected_lang\": \"en|fr|fi|de|it|other\", \"questions\": [{\"question\": str, \"intent\": \"count|area\", \"subject\": \"window|door|washbasin|wc|bathtub|shower|room|apartment|none\", \"scope\": \"floor|unit <letter>|room <number>|label <printed label>\"}], \"not_answerable\": [parts of the message a floor plan cannot answer, in the user's words]}. Do not answer the questions and do not write any number that is not in the user's message.\n\nMessage:\nuh so I'm renovating, how many sinks are there in both flats together, and the bedroom 3.05 how big is it, also is the ceiling high enough for a loft bed"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "temperature": 0,
+   "responseMimeType": "application/json"
+  }
+ },
+ "status": 200,
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "text": "{\n  \"detected_lang\": \"en\",\n  \"questions\": [\n    {\n      \"question\": \"How many washbasins are there in apartment A and apartment B combined?\",\n      \"intent\": \"count\",\n      \"subject\": \"washbasin\",\n      \"scope\": \"floor\"\n    },\n    {\n      \"question\": \"What is the net floor area of room 3.05?\",\n      \"intent\": \"area\",\n      \"subject\": \"room\",\n      \"scope\": \"room 3.05\"\n    }\n  ],\n  \"not_answerable\": [\n    \"is the ceiling high enough for a loft bed\"\n  ]\n}",
+       "thoughtSignature": "EnMKcQFpFH0TQ0IMM2VJX6Sjq5QjxbDVrlZp2lOz+co5MgNnWfv43QmccKYTGRdI/gRXdQDgeQpEznuLu0m44Lv3gCsmNAzi3edwGkZa9OZObGePJ9TyDNqyR5DUvpOcvjvMpkocUuWA/d31EvPgHVXKgWsI"
+      }
+     ],
+     "role": "model"
+    },
+    "finishReason": "STOP",
+    "index": 0
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 294,
+   "candidatesTokenCount": 154,
+   "totalTokenCount": 448,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 294
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "R6z3apngHfSOvdIP7oKXwQQ"
+ }
+}

@@ -115,10 +115,9 @@ def test_anonymous_png_needs_presenter(client):
     assert r.status_code == 403 and r.json()["code"] == "presenter_required"
     ok = upload(client, tiny_png(), "a.png", headers={"x-aura-presenter": "pres"})
     assert ok.status_code == 202
+    # This app has no model client: detection cannot run, so the upload fails visibly.
     st = wait_status(client, ok.json()["drawing_id"])
-    assert st["status"] == "ready"
-    d = client.get(f"/drawings/{ok.json()['drawing_id']}").json()
-    assert d["kind"] == "raster" and d["source"] == "upload" and d["capabilities"] == []
+    assert st["status"] == "failed" and "not available" in st["error"]
 
 
 def test_dxf_upload_lifecycle_and_path_safety(client, tmp_path):
@@ -318,3 +317,47 @@ def test_uploads_never_listed_but_askable_by_id_over_mcp(tmp_path):
                     await m.call_tool("ask_drawing", {"drawing_id": did, "question": "doors?"})
 
         c.portal.call(after_delete)
+
+
+# ---- raster (presenter-only, model estimate) ------------------------------------------------
+
+def test_presenter_png_gets_vision_estimate_with_ranked_check(tmp_path):
+    """Replays the recorded live run: hydrogen detection on the Swiss plan PNG, then the
+    tile checks of its boxes (ranking only)."""
+    from aura.gemini.client import FakeTransport
+    from tests.conftest import FIXTURES, SWISS_IMAGE
+
+    fake = FakeTransport(FIXTURES / "gemini")
+    app = make_app(tmp_path, transport=fake, AURA_PRESENTER_TOKEN="pres")
+    with TestClient(app) as c:
+        did = upload(c, SWISS_IMAGE.read_bytes(), "plan.png",
+                     headers={"x-aura-presenter": "pres"}).json()["drawing_id"]
+        st = wait_status(c, did)
+        assert st["status"] == "ready", st
+        d = c.get(f"/drawings/{did}").json()
+        assert d["kind"] == "raster" and d["capabilities"] == ["door", "window"]
+        assert "detection" not in d
+        # Anyone holding the id may ask; the answer itself costs 0 calls.
+        b = c.post("/ask", json={"drawing_id": did,
+                                 "question": "How many doors are drawn on this floor plan?"}).json()
+        assert b["answer"] == {"kind": "count", "value": 18, "subject": "door"}
+        assert b["method"] == "vision" and "gold" not in b and b["calls"] == 0
+        ans = next(n for n in b["trace"] if n["id"] == "answer")
+        assert ans["body"].startswith("About 18 doors. Model estimate") and ans["kind"] == "model"
+        ch = b["check"]
+        assert ch["image"] == "upload" and "agreed" not in ch and ch["total"] == 18
+        assert ch["ranking"][0] == ch["least_certain_id"] and ch["calls"] == 1
+        area = c.post("/ask", json={"drawing_id": did, "question": "What is the floor area?"}).json()
+        assert area["answer"]["reason"] == "not_supported_yet"
+        detect = [p for p, _ in fake.calls if "generateContent" in p]
+        assert len(detect) == 1
+
+
+def test_raster_detection_failure_marks_upload_failed(tmp_path):
+    from aura.gemini.client import FakeTransport
+
+    app = make_app(tmp_path, transport=FakeTransport(tmp_path / "none"), AURA_PRESENTER_TOKEN="p")
+    with TestClient(app) as c:
+        did = upload(c, tiny_png(), "a.png", headers={"x-aura-presenter": "p"}).json()["drawing_id"]
+        st = wait_status(c, did)
+        assert st["status"] == "failed" and st["error"]

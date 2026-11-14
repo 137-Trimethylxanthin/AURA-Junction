@@ -17,7 +17,7 @@ import { actions, selectZoom, useAppStore } from "@/store"
 import { EvidenceLayer } from "./EvidenceLayer"
 import { MarkCapture, MarksLayer } from "./MarkTool"
 import { PlanContextMenu } from "./PlanContextMenu"
-import { PLAN_ASPECT, isEditable, overlayOpen, pctPoint } from "./shared"
+import { isEditable, overlayOpen, pctPoint, planAspect } from "./shared"
 import { useEver } from "@/hooks/use-ever"
 
 // Loaded on first use: compare and what-if are not needed for the first paint of a drawing.
@@ -46,7 +46,7 @@ function readHintSeen(): boolean {
 }
 
 /** Width of the plan at 100 %: the whole drawing fits the stage region. */
-function useFitWidth(ref: React.RefObject<HTMLDivElement | null>): number {
+function useFitWidth(ref: React.RefObject<HTMLDivElement | null>, aspect: number): number {
   const [fit, setFit] = useState(0)
   useLayoutEffect(() => {
     const el = ref.current
@@ -54,13 +54,13 @@ function useFitWidth(ref: React.RefObject<HTMLDivElement | null>): number {
     const measure = () => {
       const w = el.clientWidth - PAD * 2
       const h = el.clientHeight - PAD * 2
-      setFit(Math.max(160, Math.floor(Math.min(w, h * PLAN_ASPECT))))
+      setFit(Math.max(160, Math.floor(Math.min(w, h * aspect))))
     }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [ref])
+  }, [ref, aspect])
   return fit
 }
 
@@ -78,7 +78,7 @@ export function PlanStage() {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
-  const fit = useFitWidth(scrollRef)
+  const fit = useFitWidth(scrollRef, planAspect(drawing))
   const width = Math.round((fit * zoom) / 100)
 
   const [img, setImg] = useState<"loading" | "ok" | "error">("loading")
@@ -295,7 +295,7 @@ export function PlanStage() {
                     "shadow-[0_0_0_1px_var(--border),0_1px_3px_color-mix(in_oklch,var(--foreground)_6%,transparent)]",
                     tool === "whatif" && "cursor-default"
                   )}
-                  style={{ width, aspectRatio: "1221 / 1220" }}
+                  style={{ width, aspectRatio: `${drawing.frame.px[0]} / ${drawing.frame.px[1]}` }}
                   onClick={onStageClick}
                   data-plan-stage
                 >

@@ -52,7 +52,11 @@ export function TracePanel() {
   })
   const reduce = useReducedMotion()
   const back = useRef<HTMLButtonElement>(null)
-  const nodes = useMemo(() => flattenTrace(turn?.response?.trace ?? []), [turn?.response?.trace])
+  // A finished answer shows its full trace; a streaming one shows its tool calls as they arrive.
+  const trace = turn?.response?.trace ?? turn?.stream?.nodes
+  const streaming = turn?.status === 'pending' && !!turn.stream
+  const resolved = useMemo(() => new Set(turn?.stream?.resolved ?? []), [turn?.stream?.resolved])
+  const nodes = useMemo(() => flattenTrace(trace ?? []), [trace])
 
   useEffect(() => {
     // Remember who opened the tree so closing it returns focus there.
@@ -105,7 +109,15 @@ export function TracePanel() {
           const ids = node.evidence_ids ?? []
           const light = () => actions().hover(ids)
           return (
-            <li key={node.id} style={{ marginLeft: Math.min(depth, 4) * 18 }} className={cn(depth > 0 && 'border-l-2 pl-3')}>
+            <motion.li
+              key={node.id}
+              style={{ marginLeft: Math.min(depth, 4) * 18 }}
+              className={cn(depth > 0 && 'border-l-2 pl-3')}
+              // Steps that stream in rise into place; the finished tree renders without delay.
+              initial={streaming ? (reduce ? { opacity: 0 } : { opacity: 0, y: 6 }) : false}
+              animate={{ opacity: 1, y: 0 }}
+              transition={reduce ? { duration: 0.12 } : { type: 'spring', bounce: 0, duration: 0.3 }}
+            >
               <div
                 tabIndex={0}
                 data-trace-node={node.id}
@@ -127,14 +139,26 @@ export function TracePanel() {
                   {conf ? <span className={cn('num text-xs font-semibold', k.conf)}>{conf}</span> : null}
                 </div>
                 <p className="text-[13px] text-foreground/85">{node.body}</p>
+                {node.tool ? (
+                  <p className="num text-xs text-muted-foreground" data-tool={node.tool.name}>
+                    {node.tool.name}
+                    {streaming && !resolved.has(node.id) ? (
+                      <span className="shimmer ml-1.5" data-running>
+                        running…
+                      </span>
+                    ) : (
+                      <> · {node.tool.ms} ms</>
+                    )}
+                  </p>
+                ) : null}
                 {ids.length ? <p className="num text-xs text-muted-foreground">{ids.length} on the plan</p> : null}
               </div>
-            </li>
+            </motion.li>
           )
         })}
       </ol>
       <footer className="border-t bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground">
-        Point at a step to light what it used on the plan. Vision-check values are samples until the Gemini Decisions API is wired; geometry steps are exact.
+        Point at a step to light what it used on the plan. Geometry steps are exact; the Gemini check covers the drawn boxes only.
       </footer>
     </motion.section>
   )

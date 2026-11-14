@@ -17,6 +17,7 @@ from aura.writer import Writer
 log = logging.getLogger("aura.jobs")
 
 JOIN_TIMEOUT_S = 60.0
+DETECT_TIMEOUT_S = 120.0  # measured: median 16 s, max 57 s per image (CubiCasa eval)
 
 
 class Jobs:
@@ -28,9 +29,13 @@ class Jobs:
         self.target = target  # test hook: replaces the child entry point
         self.tasks: set[asyncio.Task] = set()
         self.on_done = None  # callback(drawing_id) after a job settles
+        # async (drawing_id, out_dir, ctx) -> error str | None; runs after a raster parse
+        # (vision detection). Never inside a web request.
+        self.after_raster = None
 
-    def submit(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict) -> None:
-        t = asyncio.create_task(self._run(drawing_id, kind, src, out, meta),
+    def submit(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict,
+               ctx: dict | None = None) -> None:
+        t = asyncio.create_task(self._run(drawing_id, kind, src, out, meta, ctx or {}),
                                 name=f"parse-{drawing_id}")
         self.tasks.add(t)
         t.add_done_callback(self.tasks.discard)
@@ -41,12 +46,18 @@ class Jobs:
             "UPDATE drawings SET status=?, progress=?, error=? WHERE id=?",
             (status, progress, error, drawing_id))
 
-    async def _run(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict) -> None:
+    async def _run(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict,
+                   ctx: dict) -> None:
         async with self.sem:
             await self._set(drawing_id, "processing", 0.1)
             t0 = time.monotonic()
             kw = {"target": self.target} if self.target else {}
-            proc, conn = parse_worker.start(kind, src, out, drawing_id, meta, **kw)
+            try:
+                proc, conn = parse_worker.start(kind, src, out, drawing_id, meta, **kw)
+            except Exception:
+                log.exception("could not start the parser")
+                await self._set(drawing_id, "failed", None, "The parser could not start.")
+                return
             try:
                 await asyncio.to_thread(proc.join, self.join_timeout_s)
                 if proc.is_alive():
@@ -58,6 +69,18 @@ class Jobs:
                     return
                 res = conn.recv() if conn.poll() else {
                     "ok": False, "error": "The parser stopped unexpectedly (memory or CPU limit)."}
+                if res.get("ok") and kind == "raster" and self.after_raster is not None:
+                    await self._set(drawing_id, "processing", 0.5)
+                    try:
+                        async with asyncio.timeout(DETECT_TIMEOUT_S):
+                            err = await self.after_raster(drawing_id, out, ctx)
+                    except TimeoutError:
+                        err = f"Detection took longer than {int(DETECT_TIMEOUT_S)} s."
+                    except Exception as e:
+                        log.exception("raster detection failed")
+                        err = f"Detection failed ({type(e).__name__})."
+                    if err:
+                        res = {"ok": False, "error": err}
                 if res.get("ok"):
                     await self._set(drawing_id, "ready", 1.0)
                 else:

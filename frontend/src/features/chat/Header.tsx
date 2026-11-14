@@ -1,6 +1,7 @@
 import { Suspense, lazy, useMemo } from "react"
-import { BlocksIcon } from "lucide-react"
+import { BlocksIcon, SquarePenIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { actions, selectActiveTurn, selectDrawing, useAppStore } from "@/store"
 import { useEver } from "@/hooks/use-ever"
 
@@ -65,8 +66,23 @@ function SessionButton() {
 
 export function HeaderActions() {
   const pluginsUsed = useEver(useAppStore((s) => s.ui.pluginsOpen))
+  const hasTurns = useAppStore((s) => s.turns.length > 0)
   return (
     <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="New conversation"
+            disabled={!hasTurns}
+            onClick={() => actions().newConversation()}
+          >
+            <SquarePenIcon />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>New conversation</TooltipContent>
+      </Tooltip>
       <SessionButton />
       <Button variant="outline" onClick={() => actions().setPluginsOpen(true)}>
         <BlocksIcon data-icon="inline-start" />

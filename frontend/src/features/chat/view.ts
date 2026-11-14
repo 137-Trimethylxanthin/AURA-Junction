@@ -62,6 +62,8 @@ export interface Chip {
   tone: ChipTone
   outline?: boolean
   title?: string
+  /** Tapping the chip locates this evidence on the plan. */
+  evidenceId?: string
 }
 
 const METHOD_KEY: Record<Exclude<Method, 'cad_geometry'>, 'method_ocr' | 'method_detector' | 'method_vision' | 'method_none'> = {
@@ -77,7 +79,10 @@ export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
   else out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'neutral' })
 
   const c = resp.check
-  if (c?.status === 'sample')
+  if (c?.image === 'none')
+    // DXF uploads: checking our own render would only check the renderer, so there is no check.
+    out.push({ key: 'check', text: t(lang, 'chip_no_image'), tone: 'neutral', outline: true })
+  else if (c?.status === 'sample')
     out.push({
       key: 'check',
       text: t(lang, 'chip_vision_sample'),
@@ -85,7 +90,21 @@ export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
       outline: true,
       title: 'Sample value. The Gemini Decisions API check is not wired yet.',
     })
-  else if (c?.status === 'live' && c.agreed !== undefined && c.total !== undefined)
+  else if (c?.status === 'live' && c.ranking?.length) {
+    // Ranked check (1.1): no fixed-threshold "agree" count; say what was checked and point at the weakest box.
+    const i = c.least_certain_id ? resp.evidence.boxes.findIndex((b) => b.id === c.least_certain_id) : -1
+    out.push({
+      key: 'check',
+      text:
+        i >= 0
+          ? t(lang, 'chip_checked_least', { n: fmtCount(c.ranking.length, lang), k: String(i + 1) })
+          : t(lang, 'chip_checked', { n: fmtCount(c.ranking.length, lang) }),
+      tone: 'info',
+      outline: true,
+      title: 'Gemini Decisions checked the drawn boxes against the dataset image. It cannot find objects the geometry missed.',
+      ...(i >= 0 ? { evidenceId: c.least_certain_id } : {}),
+    })
+  } else if (c?.status === 'live' && c.agreed !== undefined && c.total !== undefined)
     out.push({
       key: 'check',
       text: t(lang, 'chip_vision_live', { agreed: fmtCount(c.agreed, lang), total: fmtCount(c.total, lang) }),
