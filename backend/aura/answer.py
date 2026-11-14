@@ -77,6 +77,60 @@ PICK_SOURCE = {
 }
 
 
+_METHOD_RANK = {"cad_geometry": 0, "pdf_vector": 1, "ocr": 2, "vision": 3}
+_HONEST = {  # method -> (answer tag, node kind, where the numbers come from)
+    "vision": ("estimate · measured on the image", "model",
+               "outlines found on the page image by a model, so this is an estimate"),
+    "ocr": ("estimate · read by OCR", "model",
+            "values read by OCR from the page image, so this is an estimate"),
+    "pdf_vector": ("PDF vectors", "exact", "the PDF's vector lines and printed text"),
+}
+
+
+def honest_method(body: dict, d: LoadedDrawing, subject: str | None = None) -> None:
+    """The last word on `method` for a drawing the store indexed (`evidence_method` per subject).
+
+    A solver may call its result exact CAD geometry because it only read the drawing index; whether
+    that index was drawn (CAD / IFC) or found on pixels is a fact of the drawing. Whatever the
+    answer used (its subject, its rooms, its boxes) decides, the weakest source winning, and an
+    answer never stays `cad_geometry` over geometry that came from a scan, OCR or a detection."""
+    em: dict = d.drawing.get("evidence_method") or {}
+    if em and body.get("method") in ("vision", "ocr"):
+        # already an estimate: its answer node must not read as exact either
+        for n in body.get("trace") or []:
+            if n.get("id") == "answer" and n.get("kind") == "exact":
+                n["kind"] = "model"
+                if "estimate" not in str(n.get("tag", "")):
+                    n["tag"] = f"estimate · {n.get('tag') or 'answer'}"
+        return
+    if not em or body.get("method") != "cad_geometry":
+        return
+    ev = body.get("evidence") or {}
+    used = {"room" if subject in ("room", "area", "apartment") else subject}
+    if ev.get("rooms"):
+        used.add("room")
+    used |= {b.get("subject") for b in ev.get("boxes") or [] if isinstance(b, dict)}
+    methods = [em[u] for u in used if u in em] or list(em.values())
+    method = max(methods, key=lambda m: _METHOD_RANK.get(m, 3))
+    if _METHOD_RANK.get(method, 3) == 0:
+        return
+    tag, kind, source = _HONEST.get(method, _HONEST["vision"])
+    body["method"] = method if method in _HONEST else "vision"
+    for n in body.get("trace") or []:
+        exact_claim = "CAD" in str(n.get("tag", "")) or str(n.get("tag", "")).startswith("exact")
+        if not (exact_claim or (n.get("id") == "answer" and n.get("kind") == "exact")):
+            continue
+        if n.get("id") == "answer":
+            n["tag"] = tag
+            n["body"] = (str(n.get("body", "")).split(" Source: indexed CAD")[0].rstrip()
+                         + f" Source: {source}.")
+        else:
+            n["tag"] = str(n["tag"]).replace("exact · ", "").replace("CAD", "drawing index")
+        n["kind"] = kind
+        if isinstance(n.get("detail"), dict) and n["detail"].get("source") == "cad_geometry":
+            n["detail"]["source"] = body["method"]
+
+
 def pick_source(method: str | None, d: LoadedDrawing) -> dict:
     """The 'Pick the best source' node, worded after the evidence the answer really used."""
     store = bool(d.drawing.get("evidence_method"))

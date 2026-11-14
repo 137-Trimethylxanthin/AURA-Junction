@@ -877,6 +877,7 @@ async def _finalize_and_emit(
     *,
     allow_cache: bool,
 ) -> AsyncIterator[tuple[str, dict]]:
+    A.honest_method(built.body, d, built.subject)  # a scan's geometry is never presented as CAD
     check = await _check(svc, d, built, caller, stats)
     body = built.body
     if check is not None and "ranking" not in check:  # sent, but no usable result
