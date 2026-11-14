@@ -25,7 +25,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(BACKEND / 'scripts'))
 
-from preprocess import IFC_ROOT, OUT, ifc_credit, ifc_gold_rows, write_json
+from preprocess import IFC_ROOT, OUT, attach_original, ifc_credit, ifc_gold_rows, write_json
 
 from aura.render import ifc as rifc
 from aura.render import png as rpng
@@ -76,6 +76,8 @@ def import_model(data: Path, model_name: str, min_walls: int) -> list[dict]:
     measured = dt.datetime.now(dt.UTC).isoformat(timespec='seconds')
     used: set[str] = set()
     report = []
+    maps: dict = {}  # model-space sheet mapping from an exactly aligned storey, for storeys that cannot fit alone
+    retry: list[tuple[str, str]] = []
     for order, (_, st) in enumerate(ordered):
         name = st['name'] or f'Storey {order + 1}'
         sl = slug(name)
@@ -102,14 +104,25 @@ def import_model(data: Path, model_name: str, min_walls: int) -> list[dict]:
         drawing['evidence'] = ev
         drawing['gold'] = [{k: v for k, v in g.items() if k not in ('solver_family', 'solver_value', 'match')}
                            for g in gold]
+        orig = attach_original(drawing, model, data, model_name, d, maps)
+        if orig.startswith('not aligned'):
+            retry.append((did, st['name']))
         write_json(d / 'drawing.json', drawing)
         (d / 'plan.svg').write_text(rifc.render_svg(model), encoding='utf-8')
         write_json(d / 'model.json', model.to_json())
         write_json(d / 'gold.json', gold)
         write_json(d / 'evidence.json', ev)
         g = f"{facts['correct']}/{facts['gold_total']}" if facts else 'no dataset questions'
-        print(f'  {name!r:28s} rooms {len(drawing["rooms"]):3d}  walls {len(walls):4d}  gold {g}')
+        print(f'  {name!r:28s} rooms {len(drawing["rooms"]):3d}  walls {len(walls):4d}  gold {g}  · {orig}')
         report.append({'id': did, 'label': name, 'order': order})
+    # Storeys that could not be aligned on their own, now with a sibling's mapping when one was found later.
+    for did, storey in retry if maps else []:
+        d = SERVED / did
+        drawing = json.loads((d / 'drawing.json').read_text(encoding='utf-8'))
+        model = ifc.load(path, storey=storey, drawing_id=did)
+        orig = attach_original(drawing, model, data, model_name, d, maps)
+        write_json(d / 'drawing.json', drawing)
+        print(f'  {storey!r:28s} retry · {orig}')
     return report
 
 

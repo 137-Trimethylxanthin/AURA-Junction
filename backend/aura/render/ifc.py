@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from aura.render.openings import cut_openings
 from aura.solvers import ifc
 from aura.solvers.ifc import IfcModel
 
@@ -35,10 +36,14 @@ def render_svg(model: IfcModel) -> str:
              'door': 'fill="none" stroke="#4b5563" stroke-width="0.9"',
              'wall': 'fill="#2f343c" stroke="#2f343c" stroke-width="0.4"',
              'column': 'fill="#2f343c" stroke="#2f343c" stroke-width="0.4"'}
+    # Walls are cut at their windows and doors (IFC keeps openings as separate voids), so the plan and the 3D
+    # view built from it show real openings instead of walls running through every window.
+    rings = {fam: [g['polygon'] for g in model.footprints.get(fam, []) if g['polygon']]
+             for fam in ('stair', 'wall', 'column', 'window', 'door')}
+    rings['wall'], rings['window'], rings['door'] = cut_openings(rings['wall'], rings['window'], rings['door'])
     for fam in ('stair', 'wall', 'column', 'window', 'door'):
-        for g in model.footprints.get(fam, []):
-            if g['polygon']:
-                svg.append(f'<path d="{_path(model, g["polygon"])}" {style[fam]}/>')
+        for poly in rings[fam]:
+            svg.append(f'<path d="{_path(model, poly)}" {style[fam]}/>')
     fs = max(8, min(12, round(model.frame['scale'] * 0.28)))
     for r in rooms:
         la = ifc.label_at(model, r)
