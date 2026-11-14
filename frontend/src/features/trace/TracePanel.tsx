@@ -3,8 +3,9 @@ import { motion, useReducedMotion } from 'motion/react'
 import { ChevronLeftIcon } from 'lucide-react'
 import type { TraceKind, TraceNode } from '@/api/contract'
 import { Button } from '@/components/ui/button'
+import { useDraft } from '@/features/chat/draft'
 import { cn } from '@/lib/utils'
-import { actions, selectActiveTurn, useAppStore } from '@/store'
+import { actions, appStore, selectActiveTurn, useAppStore } from '@/store'
 
 const KIND: Record<TraceKind, { dot: string; card: string; conf: string }> = {
   exact: { dot: 'bg-success', card: 'border-success/30 bg-success-surface/50', conf: 'text-success' },
@@ -63,6 +64,7 @@ export function TracePanel() {
     const active = document.activeElement
     // (Ignore our own back button: StrictMode re-runs this effect after it has focus.)
     if (active instanceof HTMLElement && active !== document.body && !active.closest('[data-trace-panel]')) opener = active
+    needsFocusRestore = true
     back.current?.focus()
     // Capture phase: the tree is the top layer of the sidebar, so one Escape closes only the tree.
     const onKey = (e: KeyboardEvent) => {
@@ -73,7 +75,13 @@ export function TracePanel() {
       close()
     }
     window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      if (!appStore.getState().ui.traceOpen) {
+        actions().hover([])
+        if (needsFocusRestore) restoreFocusFromTrace()
+      }
+    }
   }, [])
 
   return (
@@ -166,14 +174,21 @@ export function TracePanel() {
 
 /** Element that opened the tree (a card's Reasoning tree button or the session button). */
 let opener: HTMLElement | null = null
+let needsFocusRestore = false
+
+function restoreFocusFromTrace() {
+  needsFocusRestore = false
+  const target = opener
+  opener = null
+  requestAnimationFrame(() => {
+    if (document.querySelector('[role="menu"], [role="dialog"]')) return
+    if (target?.isConnected) target.focus()
+    else useDraft.getState().focus()
+  })
+}
 
 function close() {
   actions().hover([])
   actions().setTraceOpen(false)
-  const target = opener
-  opener = null
-  requestAnimationFrame(() => {
-    if (target?.isConnected) target.focus()
-    else document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Ask about this drawing"]')?.focus()
-  })
+  restoreFocusFromTrace()
 }

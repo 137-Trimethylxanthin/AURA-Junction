@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { motion, useReducedMotion } from "motion/react"
 import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
+import { SPLIT_QUERY } from "@/features/plan/shared"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { isRoomEvidenceId, roomIdOfEvidence, deriveAnswer } from "@/lib/answer"
 import { noun } from "@/lib/format"
@@ -26,18 +27,8 @@ const UNDO_TOAST = "evidence-undo"
 const CHAT_TOASTER = "chat"
 const REJECT_TOAST_MS = 6000
 
-function isTyping(el: Element | null): boolean {
-  if (!el || !(el instanceof HTMLElement)) return false
-  return (
-    el.isContentEditable ||
-    el.tagName === "INPUT" ||
-    el.tagName === "TEXTAREA" ||
-    el.tagName === "SELECT"
-  )
-}
-
 function ChatToaster() {
-  const wide = useMediaQuery("(min-width: 900px)", true)
+  const wide = useMediaQuery(SPLIT_QUERY, true)
   return (
     <Toaster
       id={CHAT_TOASTER}
@@ -61,7 +52,7 @@ function evidenceName(s: AppState, turnId: string, evidenceId: string): string {
   return `${n.charAt(0).toUpperCase()}${n.slice(1)} ${i + 1}`
 }
 
-/** Toasts for rejects (with Undo), fallbacks, and the Ctrl/Cmd+Z shortcut. Always mounted with the chat. */
+/** Toasts for rejects (with Undo) and fallbacks. Always mounted with the chat. */
 function useChatSideEffects() {
   useEffect(() => {
     const seenFallback = new Set<string>()
@@ -109,19 +100,8 @@ function useChatSideEffects() {
         }
       }
     })
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey
-      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
-        if (isTyping(document.activeElement)) return
-        if (appStore.getState().undoStack.length === 0) return
-        e.preventDefault()
-        actions().undo()
-      }
-    }
-    window.addEventListener("keydown", onKey)
     return () => {
       unsub()
-      window.removeEventListener("keydown", onKey)
     }
   }, [])
 }
