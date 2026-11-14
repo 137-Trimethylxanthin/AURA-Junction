@@ -382,6 +382,8 @@ class DrawingStore:
         ingestion. -> the store row, or None when the store is off or the type is not stored."""
         if not self.ok or src.suffix.lower() not in STORE_EXT:
             return None
+        # Normally created at start-up; a store switched on later (or a fresh volume) must not fail the first upload.
+        self.s.store_data_dir.mkdir(parents=True, exist_ok=True)
         tmp_dir = Path(tempfile.mkdtemp(prefix="aura-store-", dir=self.s.store_data_dir))
         tmp = tmp_dir / src.name
         try:

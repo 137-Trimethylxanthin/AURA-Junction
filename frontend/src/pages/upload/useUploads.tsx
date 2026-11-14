@@ -1,5 +1,5 @@
 import { tu as tuNow } from '@/i18n/uiLang'
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import { ApiError, deleteDrawing, getAcceptedUploads, getDrawingStatus, getHealth, listProjects, reindexDrawing } from '@/api/client'
 import type { AcceptedType, DrawingStatusBody } from '@/api/contract'
@@ -360,5 +360,7 @@ export function useUploads(base: string, opts: { onProjectsDiscovered?: () => vo
     [poll],
   )
 
-  return { rows: rows.filter((r) => r.phase !== 'expired'), rejected, watch, clearRejected: () => setRejected([]), add, remove, retry }
+  // One array per change of `rows`: a fresh filter on every render made everything derived from it new each time.
+  const visible = useMemo(() => rows.filter((r) => r.phase !== 'expired'), [rows])
+  return { rows: visible, rejected, watch, clearRejected: () => setRejected([]), add, remove, retry }
 }
