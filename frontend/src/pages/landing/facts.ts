@@ -82,7 +82,15 @@ export function parseFacts(data: unknown): Fact[] {
 }
 
 /** facts.json is written by backend/eval/export_facts.py; facts.manual.json holds the measured facts it does not export. */
-export const FACTS: Fact[] = [...parseFacts(exported), ...parseFacts(manual)]
+/** A manual entry with the same id as an exported one replaces it (used while an export is being corrected). */
+export function mergeFacts(exportedFacts: Fact[], manualFacts: Fact[]): Fact[] {
+  const ids = new Set(exportedFacts.map((f) => f.id))
+  return [
+    ...exportedFacts.map((f) => manualFacts.find((m) => m.id === f.id) ?? f),
+    ...manualFacts.filter((m) => !ids.has(m.id)),
+  ]
+}
+export const FACTS: Fact[] = mergeFacts(parseFacts(exported), parseFacts(manual))
 export const RESULTS = FACTS.filter((f) => f.kind === "result")
 export const LIMIT_FACTS = FACTS.filter((f) => f.kind === "limit")
 export const factById = (id: string) => FACTS.find((f) => f.id === id)

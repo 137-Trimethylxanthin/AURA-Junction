@@ -105,7 +105,7 @@ describe('source', () => {
     await expect(s.ask({ ...REQ, drawing_id: 'other' })).rejects.toMatchObject({ name: 'TransportError' })
   })
 
-  it('a response arriving after the timeout is ignored', async () => {
+  it('a timeout rejects without demoting the session, and a late response is ignored', async () => {
     let lateResolved = false
     const late = { ...askLocal(REQ), source: 'api', answer: { kind: 'count', value: 999, subject: 'window' } }
     // This fetch ignores the abort signal on purpose.
@@ -120,13 +120,11 @@ describe('source', () => {
     )
     const s = createSource({ baseUrl: 'https://api.test', fetch, askTimeoutMs: 20 })
     await s.init()
-    const r = await s.ask(REQ)
-    expect(r.fellBack).toBe(true)
-    expect(r.response.answer).toMatchObject({ value: 12 })
+    // A slow answer is not a dead server: no fallback to local data, the status stays on the API.
+    await expect(s.ask(REQ)).rejects.toMatchObject({ name: 'TransportError', kind: 'timeout' })
     await new Promise((res) => setTimeout(res, 80))
     expect(lateResolved).toBe(true)
-    expect(r.response.answer).toMatchObject({ value: 12 })
-    expect(s.status().kind).toBe('local')
+    expect(s.status().kind).toBe('api')
   })
 
   it('aborts the request on timeout', async () => {
@@ -138,7 +136,7 @@ describe('source', () => {
     })
     const s = createSource({ baseUrl: 'https://api.test', fetch, askTimeoutMs: 10 })
     await s.init()
-    await s.ask(REQ)
+    await expect(s.ask(REQ)).rejects.toMatchObject({ kind: 'timeout' })
     expect(signal?.aborted).toBe(true)
   })
 

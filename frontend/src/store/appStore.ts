@@ -270,6 +270,10 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       set((s) => {
         const session = { ...s.session, drawing: d, load: { id: d.id, state: 'ready' } as DrawingLoad }
         if (s.session.drawing.id === d.id) return { session }
+        // Another drawing: an answer still streaming for the old one must not land here (its conversation id
+        // belongs to the old drawing; the next question would be rejected).
+        inflight?.abort()
+        inflight = null
         return { session: { ...session, conversationId: null }, turns: [], undoStack: [], ui: freshUi() }
       })
     const loadError = (id: string, e: unknown): DrawingLoad => {
@@ -392,6 +396,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
               if (ctrl.signal.aborted) return
               if (e.event === 'turn') {
                 writeConversation(drawingId, e.data.conversation_id)
+                if (get().session.drawing.id !== drawingId) return
                 set((st) => ({ session: { ...st.session, conversationId: e.data.conversation_id } }))
                 return
               }
@@ -401,7 +406,8 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
             },
             ctrl.signal,
           )
-          if (ctrl.signal.aborted) throw new DOMException('Stopped', 'AbortError')
+          // Stopped after the answer arrived: keep the answer (it is complete); Stop only ends a pending one.
+          if (ctrl.signal.aborted && get().session.drawing.id !== drawingId) throw new DOMException('Stopped', 'AbortError')
           patchAgent(pending.id, () => ({ status: 'done', response, ...(fellBack ? { fellBack: true } : {}) }))
           set((st) => ({ session: { ...st.session, lang: response.detected_lang } }))
         } catch (e) {

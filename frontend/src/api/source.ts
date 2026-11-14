@@ -71,7 +71,8 @@ export function createSource(opts: SourceOptions = {}): Source {
   const baseUrl = opts.baseUrl === undefined ? envUrl() : opts.baseUrl || null
   const local = opts.local ?? askLocal
   const healthTimeoutMs = opts.healthTimeoutMs ?? 10_000
-  const askTimeoutMs = opts.askTimeoutMs ?? 15_000
+  // The server's chat-turn deadline is 60 s; /ask can take as long on the agent route.
+  const askTimeoutMs = opts.askTimeoutMs ?? 65_000
   const listeners = new Set<(s: SourceStatus) => void>()
 
   let status: SourceStatus = baseUrl
@@ -176,11 +177,19 @@ export function createSource(opts: SourceOptions = {}): Source {
           },
         )
       } catch (e) {
+        // The stream broke after a complete answer arrived (before `done`): the answer stands.
+        if (response && !(e instanceof ApiError)) return { response, fellBack: false }
         if (e instanceof ChatUnavailable) {
           chatUnavailable = true
           return this.ask(askReq)
         }
-        if (e instanceof TransportError && !seen && turn.drawing_id === BUNDLED_DRAWING_ID && !signal?.aborted) {
+        if (
+          e instanceof TransportError &&
+          e.kind !== 'timeout' &&
+          !seen &&
+          turn.drawing_id === BUNDLED_DRAWING_ID &&
+          !signal?.aborted
+        ) {
           set({ kind: 'local', state: 'ready', reason: 'fell_back' })
           return { response: local(askReq), fellBack: true }
         }
@@ -201,7 +210,8 @@ export function createSource(opts: SourceOptions = {}): Source {
         return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
       } catch (e) {
         if (e instanceof ApiError) throw e
-        if (e instanceof TransportError && req.drawing_id === BUNDLED_DRAWING_ID) {
+        // A slow answer is not a dead server: only network errors and 5xx demote the session to local data.
+        if (e instanceof TransportError && e.kind !== 'timeout' && req.drawing_id === BUNDLED_DRAWING_ID) {
           set({ kind: 'local', state: 'ready', reason: 'fell_back' })
           return { response: local(req), fellBack: true }
         }

@@ -119,3 +119,23 @@ describe('licence label', () => {
     expect(licenceLabel({ license: 'LicenseRef-KIT-unrestricted' })).toBe('Licence terms')
   })
 })
+
+describe('IFC counts with rows and no boxes', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many doors are drawn on this floor plan?' })
+  const rowsOnly = {
+    ...base,
+    answer: { kind: 'count' as const, value: 46, subject: 'door' as const },
+    gold: undefined,
+    evidence: { boxes: [], rooms: [], rows: Array.from({ length: 46 }, (_, i) => ({ id: `guid-${i}` })) },
+  }
+  it('shows the answer value, never a recount of zero boxes', () => {
+    const d = deriveAnswer(rowsOnly, emptyToggles())
+    expect(d.value).toBe(46)
+    expect(valueParts(rowsOnly, d, 'en')).toEqual(['46', 'doors'])
+  })
+  it('a user toggle elsewhere cannot turn a rows count into a box recount', () => {
+    const t = emptyToggles()
+    t.rejected['win-99'] = true
+    expect(deriveAnswer(rowsOnly, t).value).toBe(46)
+  })
+})
