@@ -237,13 +237,9 @@ export function ChatPanel() {
         <div className="flex flex-col gap-3 p-4 pt-5">
           <div className="flex flex-col gap-1">
             <h3 className="text-base font-semibold text-balance">
-              Ask this floor plan
+              {tu("chat_empty_title")}
             </h3>
-            <p className="text-sm text-pretty text-muted-foreground">
-              Every answer comes with its number, the boxes it counted on the
-              plan, and a check against the dataset where one exists. Reject a
-              box and the number follows.
-            </p>
+            <p className="text-sm text-pretty text-muted-foreground">{tu("chat_empty_text")}</p>
           </div>
           <SuggestionList />
         </div>

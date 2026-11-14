@@ -25,6 +25,10 @@ import { needsTidy, splitLocally } from "@/features/rewrite/heuristic"
 import { canRewriteWithModel, useRewrite } from "@/features/rewrite/state"
 import { t } from "@/i18n/strings"
 import { PROMPT_BLOCKS, fillBlock, useDraft } from "./draft"
+import { markLabel } from "@/features/plan/MarkTool"
+import type { UiKey } from "@/i18n/strings"
+
+const PB_LABEL: Record<string, UiKey> = { Count: "pb_count", Area: "pb_area", "Where is": "pb_where", Check: "pb_check", List: "pb_list" }
 import { ScrollRow } from "./ScrollRow"
 import { SuggestionList } from "./Suggestions"
 import { LANG_NAME_EN } from "./view"
@@ -167,12 +171,12 @@ export function Composer() {
         <div className="flex">
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-user-surface py-0 pr-0 pl-2.5 text-sm font-medium text-user">
             <CrosshairIcon className="size-3.5" aria-hidden />
-            {mark.label} attached
+            {tu('mark_chip', { label: markLabel(mark.label, tu) })}
             <Button
               variant="ghost"
               size="icon"
               className="text-user hover:bg-user/10 hover:text-user"
-              aria-label={`Remove ${mark.label} from the question`}
+              aria-label={tu('mark_remove', { label: markLabel(mark.label, tu) })}
               onClick={() => actions().attachMark(null)}
             >
               <XIcon />
@@ -258,17 +262,17 @@ export function Composer() {
         </p>
       ) : null}
 
-      <ScrollRow label="Prompt blocks and suggested questions">
+      <ScrollRow label={tu("pb_row")}>
         <ul aria-label="Prompt blocks" className="flex shrink-0 gap-1.5">
           {PROMPT_BLOCKS.map((b) => (
             <li key={b.label}>
               <button
                 type="button"
-                title={`Fill in: ${b.text}`}
+                title={tu('pb_fill', { text: b.text })}
                 onClick={() => fillBlock(b)}
                 className="inline-flex min-h-10 items-center rounded-lg bg-muted px-3 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-accent-foreground/10 focus-visible:ring-3 focus-visible:ring-ring/50"
               >
-                {b.label}
+                {tu(PB_LABEL[b.label] ?? 'pb_list')}
               </button>
             </li>
           ))}

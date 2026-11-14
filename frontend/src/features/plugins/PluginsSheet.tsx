@@ -10,6 +10,8 @@ import { actions, selectActiveTurn, selectDrawing, useAppStore } from '@/store'
 import { PROMPT_BLOCKS, fillBlock } from '@/features/chat/draft'
 import { downloadText, evidenceCsv } from './csv'
 
+const PB_LABEL: Record<string, UiKey> = { Count: 'pb_count', Area: 'pb_area', 'Where is': 'pb_where', Check: 'pb_check', List: 'pb_list' }
+
 type State = 'ready' | 'backend' | 'planned'
 
 const STATE_LABEL: Record<State, UiKey> = { ready: 'pl_ready', backend: 'pl_backend', planned: 'pl_planned' }
@@ -151,7 +153,7 @@ export function PluginsSheet() {
                       onClick={() => fillBlock(b)}
                       className="inline-flex min-h-10 items-center rounded-lg border border-info/25 bg-info-surface px-3 text-xs font-semibold text-info outline-none hover:border-info/50 focus-visible:ring-3 focus-visible:ring-ring/50"
                     >
-                      {b.label}
+                      {tu(PB_LABEL[b.label] ?? 'pb_list')}
                     </button>
                   </SheetClose>
                 </li>

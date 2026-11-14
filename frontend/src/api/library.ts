@@ -1,4 +1,5 @@
 import { ApiError, TransportError } from './client'
+import { tu } from '@/i18n/uiLang'
 import { fastApiMessage, isErrorBody, isUploadResult, safeUrl, type UploadResult } from './contract'
 
 /**
@@ -113,18 +114,18 @@ export type FileCheck =
 export function checkFile(file: { name: string; size: number }, hasPresenter: boolean): FileCheck {
   const name = file.name.toLowerCase()
   const type = (Object.keys(UPLOAD_CAPS) as UploadType[]).find((k) => UPLOAD_CAPS[k].exts.some((e) => name.endsWith(e)))
-  if (!type) return { ok: false, code: 'unsupported_type', message: 'Only DXF files can be uploaded. DWG and zip files are not accepted.' }
+  if (!type) return { ok: false, code: 'unsupported_type', message: tu('ue_type') }
   if (type === 'pdf')
-    return { ok: false, code: 'unsupported_type', message: 'PDFs are not supported yet. Upload the DXF, or a PNG or JPG with presenter access.' }
+    return { ok: false, code: 'unsupported_type', message: tu('ue_pdf') }
   const cap = UPLOAD_CAPS[type]
-  if (file.size === 0) return { ok: false, code: 'empty', message: 'This file is empty.' }
+  if (file.size === 0) return { ok: false, code: 'empty', message: tu('ue_empty') }
   if (file.size > cap.bytes)
-    return { ok: false, code: 'too_large', message: `${cap.label} files can be at most ${cap.bytes / MB} MB.` }
+    return { ok: false, code: 'too_large', message: tu('ue_big', { type: cap.label, mb: cap.bytes / MB }) }
   if (cap.presenter && !hasPresenter)
     return {
       ok: false,
       code: 'presenter_required',
-      message: 'Needs CAD data. Image-only drawings are a model estimate and are not open yet. DXF works for everyone.',
+      message: tu('ue_presenter'),
     }
   return { ok: true, type }
 }
@@ -134,25 +135,25 @@ export function uploadErrorText(e: unknown): string {
   if (e instanceof ApiError) {
     switch (e.code) {
       case 'too_large':
-        return 'The server says this file is too large.'
+        return tu('ue_srv_big')
       case 'unsupported_type':
-        return 'The server could not read this file type. DWG and zip files are not accepted.'
+        return tu('ue_srv_type')
       case 'presenter_required':
-        return 'This file type needs presenter access.'
+        return tu('ue_srv_presenter')
       case 'rate_limited':
         // The server says which limit (hourly uploads, a full queue, storage): show its words.
-        return e.message || 'Too many uploads from here. Try again in a while.'
+        return e.message || tu('ue_rate')
       case 'budget_exhausted':
-        return 'Today’s model budget is used up. DXF uploads still work.'
+        return tu('ue_budget')
       default:
         return e.message
     }
   }
   if (e instanceof TransportError)
     return e.kind === 'server'
-      ? 'The server had a problem with this file. Try again in a moment.'
-      : 'The server could not be reached. Try again in a moment.'
-  return e instanceof Error ? e.message : 'The upload failed.'
+      ? tu('ue_srv_500')
+      : tu('ue_net')
+  return e instanceof Error ? e.message : tu('ue_failed')
 }
 
 /**
