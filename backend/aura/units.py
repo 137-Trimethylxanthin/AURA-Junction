@@ -102,7 +102,7 @@ def unit_for(key_or_symbol: str | None) -> Unit | None:
     if s in BY_KEY:
         return BY_KEY[s]
     for u in UNITS:
-        if re.fullmatch(f"(?:{u.names}|{u.symbols})" if u.symbols else f"(?:{u.names})", s, re.I):
+        if re.fullmatch(f"(?:{u.names}|{u.symbols})" if u.symbols else f"(?:{u.names})", s, re.IGNORECASE):
             return u
     return None
 
@@ -132,12 +132,13 @@ _DEC_COMMA = {"de", "fr", "fi", "it"}
 
 def fmt_number(v: float, lang: str = "en", decimals: int | None = None) -> str:
     """About four significant figures, at most 2 decimals (4 below 1), locale separators."""
+    fixed = decimals is not None
     if decimals is None:
         mag = math.floor(math.log10(abs(v))) if v else 0
         decimals = max(0, min(3 - mag, 2 if abs(v) >= 1 else 4))
     s = f"{v:,.{decimals}f}"
-    if decimals > 2:
-        s = s.rstrip("0").rstrip(".") if "." in s else s
+    if not fixed and "." in s:
+        s = s.rstrip("0").rstrip(".")  # 200 sq ft, not 200.0
     if lang in _DEC_COMMA:
         s = s.replace(",", " ").replace(".", ",")
     return s
@@ -172,32 +173,32 @@ _SYMS = "|".join(f"(?P<s_{u.key}>{u.symbols})" for u in UNITS if u.symbols)
 _END = r"(?![\w²³])"
 _PREP = r"(?:in|into|en|auf|as)"
 _CONVERT = re.compile(r"\b(?:convert\w*|chang\w+|switch\w*|express\w*|umrechn\w+|umwandeln|konvertier\w+|"
-                      r"converti\w*|muunna\w*|muuta\w*|translate)\b", re.I)
+                      r"converti\w*|muunna\w*|muuta\w*|translate)\b", re.IGNORECASE)
 # "in square feet", "en pieds carrés", "in ft" (also "to inches" in a conversion request)
-_REQ = re.compile(rf"(?<![\w'])(?P<prep>{_PREP})\s+(?:{_NAMES}|{_SYMS}){_END}", re.I)
+_REQ = re.compile(rf"(?<![\w'])(?P<prep>{_PREP})\s+(?:{_NAMES}|{_SYMS}){_END}", re.IGNORECASE)
 # only in a conversion request ("convert that to inches"): "door to the yard", "zu Fuß" are not units
-_REQ_TO = re.compile(rf"(?<![\w'])(?P<prep>{_PREP}|to|zu|nach|a|à)\s+(?:{_NAMES}|{_SYMS}){_END}", re.I)
+_REQ_TO = re.compile(rf"(?<![\w'])(?P<prep>{_PREP}|to|zu|nach|a|à)\s+(?:{_NAMES}|{_SYMS}){_END}", re.IGNORECASE)
 # "how many square feet", "wie viele Quadratfuß", "combien de pieds carrés", "montako neliöjalkaa"
 _HOW_MANY = re.compile(rf"(?P<lead>\b(?:how\s+many|wie\s*viele?|combien\s+de|quant[ie]|kuinka\s+monta|"
-                       rf"montako)\s+)(?:{_NAMES}){_END}", re.I)
+                       rf"montako)\s+)(?:{_NAMES}){_END}", re.IGNORECASE)
 # Finnish essive forms stand alone: "neliöjalkoina", "tuumina"
 _FI_ESSIVE = re.compile(r"(?<!\w)(?P<fi>(?:neliö|kuutio)?(?:jalkoina|tuumina|jaardeina|metreinä|"
-                        r"senttimetreinä|millimetreinä|sentteinä)|eekkereinä|hehtaareina|litroina)(?!\w)", re.I)
-_SQ_FOOTAGE = re.compile(r"\bsquare\s+footage\b|\bsq\.?\s*footage\b", re.I)
+                        r"senttimetreinä|millimetreinä|sentteinä)|eekkereinä|hehtaareina|litroina)(?!\w)", re.IGNORECASE)
+_SQ_FOOTAGE = re.compile(r"\bsquare\s+footage\b|\bsq\.?\s*footage\b", re.IGNORECASE)
 _NUM = r"(?P<num>\d+(?:[.,]\d+)?)"
-_QTY = re.compile(rf"(?<![\w.,]){_NUM}\s*-?\s*(?:{_NAMES}|{_SYMS}){_END}", re.I)
+_QTY = re.compile(rf"(?<![\w.,]){_NUM}\s*-?\s*(?:{_NAMES}|{_SYMS}){_END}", re.IGNORECASE)
 _FT_IN_QTY = re.compile(
     r"(?<![\w.,])(?P<ft>\d+(?:\.\d+)?)\s*(?:'|′|ft\.?|feet|foot)\s*-?\s*"
-    r"(?P<inch>\d+(?:\.\d+)?)\s*(?:\"|″|''|in\.?(?![a-z])|inch(?:es)?)", re.I)
+    r"(?P<inch>\d+(?:\.\d+)?)\s*(?:\"|″|''|in\.?(?![a-z])|inch(?:es)?)", re.IGNORECASE)
 _PRIME_QTY = re.compile(r"(?<![\w.,'])(?P<v>\d+(?:\.\d+)?)(?P<mark>['′\"″])(?=[\s,.;?!)]|$)")
-_IN_SYMBOL_OK = re.compile(r"\s*(?:[?.,;!)]|$|wide|long|high|tall|deep|thick|or\b|and\b|by\b|x\b)", re.I)
+_IN_SYMBOL_OK = re.compile(r"\s*(?:[?.,;!)]|$|wide|long|high|tall|deep|thick|or\b|and\b|by\b|x\b)", re.IGNORECASE)
 _FILLER = re.compile(
     r"\b(?:and|also|now|then|please|pls|ok|okay|what|whats|is|it|that|this|the|same|value|answer|result|"
     r"number|about|how|again|instead|can|could|you|me|give|show|tell|would|be|as|well|too|"
     r"und|auch|jetzt|bitte|das|dies|dieses|noch|mal|wie|viel|ist|sind|wäre|es|ganze|"
     r"et|aussi|maintenant|ça|cela|le|la|s'il|vous|plaît|plait|"
     r"e|anche|ora|per|favore|quello|questo|lo|"
-    r"ja|myös|nyt|entä|se|sama|kiitos)\b", re.I)
+    r"ja|myös|nyt|entä|se|sama|kiitos)\b", re.IGNORECASE)
 
 
 @dataclass
@@ -256,7 +257,7 @@ def plan(question: str) -> UnitPlan:
     asked: list[Unit] = []
 
     def req(m: re.Match) -> str:
-        u, is_symbol = _unit_of_match(m)
+        u, _ = _unit_of_match(m)
         asked.append(u)
         return f"{m['prep']} {_METRIC_LABEL[METRIC_DEFAULT[u.dim]]}"
 
@@ -341,6 +342,37 @@ def has_measure(resp: dict | None) -> bool:
     return bool(resp) and _measure(resp) is not None
 
 
+def metric_response(resp: dict) -> dict:
+    """The response as the pipeline answered it: no `display`, the metric prose restored."""
+    old = resp.get("display")
+    if not isinstance(old, dict):
+        return resp
+    out = {k: v for k, v in resp.items() if k != "display"}
+    if "metric_explanation" in old:
+        out["explanation"] = old["metric_explanation"]
+    else:
+        out.pop("explanation", None)  # it was only our own "x ft (y m)" line
+    if "metric_note" in old and (out.get("answer") or {}).get("kind") == "note":
+        out["answer"] = out["answer"] | {"value": old["metric_note"]}
+    return out
+
+
+def metric_turns(history: list[dict] | None) -> list[dict] | None:
+    """A conversation as the metric pipeline should see it: unit requests and converted prose in
+    earlier turns must not pull a model into answering in feet by itself."""
+    if not history:
+        return history
+    out = []
+    for t in history:
+        t = dict(t)
+        if isinstance(t.get("message"), str):
+            t["message"] = plan(t["message"]).question
+        if isinstance(t.get("response"), dict):
+            t["response"] = metric_response(t["response"])
+        out.append(t)
+    return out
+
+
 def apply(resp: dict, unit: Unit | None, lang: str | None = None) -> dict:
     """A copy of a metric response with `display` (the requested unit) and converted prose.
 
@@ -349,16 +381,8 @@ def apply(resp: dict, unit: Unit | None, lang: str | None = None) -> dict:
     if unit is None:
         return resp
     lang = lang or resp.get("detected_lang") or "en"
-    out = dict(resp)
-    old = out.pop("display", None)
-    if isinstance(old, dict):  # shown in another unit before: start again from the metric prose
-        if "metric_explanation" in old:
-            out["explanation"] = old["metric_explanation"]
-        else:
-            out.pop("explanation", None)  # it was only our own "x ft (y m)" line
-        if "metric_note" in old and (out.get("answer") or {}).get("kind") == "note":
-            out["answer"] = out["answer"] | {"value": old["metric_note"]}
-        resp = out
+    out = resp = metric_response(resp)  # shown in another unit before: start again from metric
+    out = dict(out)
     factors: dict[str, float] = {}
     labels: dict[str, str] = {}
     for dim, mkey in METRIC_DEFAULT.items():

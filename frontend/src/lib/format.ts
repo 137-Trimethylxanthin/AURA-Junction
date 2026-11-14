@@ -32,10 +32,7 @@ export function fmtFtIn(feet: number): string {
 export function fmtConverted(n: number, lang: Lang): string {
   const mag = n === 0 ? 0 : Math.floor(Math.log10(Math.abs(n)))
   const digits = Math.max(0, Math.min(3 - mag, Math.abs(n) >= 1 ? 2 : 4))
-  return new Intl.NumberFormat(LOCALE[lang], {
-    minimumFractionDigits: Math.min(digits, 2),
-    maximumFractionDigits: digits,
-  }).format(n)
+  return new Intl.NumberFormat(LOCALE[lang], { maximumFractionDigits: digits }).format(n)
 }
 
 /**

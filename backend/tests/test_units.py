@@ -123,7 +123,7 @@ def _resp(answer: dict, **extra) -> dict:
     ({"kind": "area", "value": 341.42, "unit": "m2"}, "ft", "3,675 sq ft", "341.42 m²"),  # feet for an area
     ({"kind": "quantity", "value": 120.5, "unit": "m"}, "ft", "395.3 ft", "120.50 m"),
     ({"kind": "quantity", "value": 3.81, "unit": "m"}, "ftin", "12' 6\"", "3.81 m"),
-    ({"kind": "quantity", "value": 12.0, "unit": "m3"}, "cuyd", "15.70 cu yd", "12.00 m³"),
+    ({"kind": "quantity", "value": 12.0, "unit": "m3"}, "cuyd", "15.7 cu yd", "12.00 m³"),
     ({"kind": "note", "value": "The hall is 12.5 m wide.", "number": 12.5, "unit": "m"}, "in", "492.1 in",
      "12.50 m"),
     ({"kind": "note", "value": "Wall 2400 mm.", "number": 2400, "unit": "mm"}, "ft", "7.87 ft", "2,400 mm"),
@@ -143,7 +143,7 @@ def test_apply_adds_display_and_keeps_the_metric_answer(answer, unit, text, metr
 def test_apply_on_a_count_converts_prose_only_and_reapply_restarts_from_metric():
     r = _resp({"kind": "count", "value": 5, "subject": "room"}, explanation="5 rooms are larger than 18.58 m².")
     out = U.apply(r, U.BY_KEY["sqft"])
-    assert out["explanation"] == "5 rooms are larger than 200.0 sq ft (18.58 m²)."
+    assert out["explanation"] == "5 rooms are larger than 200 sq ft (18.58 m²)."
     assert "value" not in out["display"] and out["display"]["factors"]["m2"] == pytest.approx(10.7639, rel=1e-5)
     again = U.apply(out, U.BY_KEY["sqyd"])
     assert again["explanation"] == "5 rooms are larger than 22.22 sq yd (18.58 m²)."
@@ -193,12 +193,30 @@ def test_hook_reshows_the_previous_answer_for_a_pure_unit_follow_up():
     assert body["explanation"].count("(") == 1
 
 
+def test_earlier_turns_reach_the_pipeline_in_metric():
+    got = {}
+
+    async def base(svc, req, caller, context=None, history=None, *a, **kw):
+        got["history"] = history
+        yield "answer", {"response": _resp({"kind": "count", "value": 1, "subject": "door"})}
+
+    shown = U.apply(_resp({"kind": "note", "value": "The hall is 12.5 m wide.", "number": 12.5, "unit": "m"},
+                          explanation="Width 12.5 m."), U.BY_KEY["ft"])
+    assert "41.01 ft" in shown["answer"]["value"]
+    hist = [{"message": "how wide is the hall in feet?", "response": shown}]
+    _collect(pipeline.with_units(base)(_Svc(), AskRequest(drawing_id="d", question="how many doors?"), None, None, hist))
+    (t,) = got["history"]
+    assert t["message"] == "how wide is the hall in m?" and "display" not in t["response"]
+    assert t["response"]["answer"]["value"] == "The hall is 12.5 m wide." and t["response"]["explanation"] == "Width 12.5 m."
+    assert "display" in hist[0]["response"]  # the stored turn is untouched
+
+
 # ---- through the real app ---------------------------------------------------------------------------
 
 
 def test_exact_route_cache_and_default_metric(tmp_path):
     with TestClient(make_app(tmp_path)) as c:
-        ask = lambda q: c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()  # noqa: E731
+        ask = lambda q: c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
         m = ask("What is the net floor area of apartment A in m²?")
         assert m["answer"]["kind"] == "area" and "display" not in m
         f = ask("What is the net floor area of apartment A in square feet?")
@@ -229,9 +247,9 @@ def test_chat_follow_up_in_another_unit(tmp_path):
 
 
 def test_building_total_is_shown_in_the_requested_unit(tmp_path):
-    from tests import test_building as tb
     from aura.config import Settings
     from aura.main import create_app
+    from tests import test_building as tb
 
     s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild")
     with TestClient(create_app(s, extra_drawings=tb._drawings())) as c:

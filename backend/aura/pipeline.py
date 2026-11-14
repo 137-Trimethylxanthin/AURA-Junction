@@ -1375,11 +1375,18 @@ def with_units(base_run):
     """
     async def run_units(svc: Services, req: AskRequest, caller: Caller, *args, **kw):
         up = units.plan(req.question)
+        # Earlier turns are passed on in metric too (args: context, history, ...).
+        if len(args) > 1:
+            history = units.metric_turns(args[1])
+            args = (args[0], history, *args[2:])
+        else:
+            history = units.metric_turns(kw.get("history"))
+            if "history" in kw:
+                kw["history"] = history
         if up.unit is None and not up.changed:
             async for item in base_run(svc, req, caller, *args, **kw):
                 yield item
             return
-        history = args[1] if len(args) > 1 else kw.get("history")
         prev = last_turn_response(history)
         if up.pure and prev is not None and units.has_measure(prev):
             t0 = time.perf_counter()
