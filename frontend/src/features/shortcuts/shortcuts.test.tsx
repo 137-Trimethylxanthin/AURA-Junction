@@ -601,7 +601,7 @@ describe('0ms CommandPaletteDialog, ShortcutHelpDialog, AppShell & TracePanel a1
     try {
       const { container } = mount(<TracePanel />)
       const beforeTick = useDraft.getState().focusTick
-      const backBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Back to chat (Escape)"]')!
+      const backBtn = container.querySelector<HTMLButtonElement>('button[data-trace-back]')!
       expect(backBtn).toBeTruthy()
       act(() => {
         backBtn.click()

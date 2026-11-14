@@ -112,7 +112,7 @@ export function TracePanel() {
       className={cn('flex min-h-0 flex-1 flex-col', !traceOpen && 'pointer-events-none!')}
     >
       <header className="flex items-center gap-2 border-b px-2 py-2">
-        <Button ref={back} variant="ghost" onClick={close} aria-label={tu('trace_back')}>
+        <Button ref={back} variant="ghost" onClick={close} aria-label={tu('trace_back')} data-trace-back>
           <ChevronLeftIcon data-icon="inline-start" />
           {tu('trace_chat')}
         </Button>
