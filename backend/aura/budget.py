@@ -116,6 +116,8 @@ class Budget:
         persisted_by_day: dict[str, int] | None = None,
         sink: Callable[[RequestRecord], None] | None = None,
         clock: Callable[[], float] = time.time,
+        recent_ip_agent: dict[str, list[float]] | None = None,
+        raster_public_used: int = 0,
     ):
         self.s = settings
         self._lock = threading.Lock()
@@ -127,7 +129,9 @@ class Budget:
         self._by_day: dict[str, int] = defaultdict(int, persisted_by_day or {})
         self._pending: dict[int, Reservation] = {}
         self._ip_agent: dict[str, deque[float]] = defaultdict(deque)
-        self._raster_public = 0
+        for ip, ts in (recent_ip_agent or {}).items():  # persisted: limits survive a restart
+            self._ip_agent[ip].extend(sorted(ts))
+        self._raster_public = raster_public_used  # a lifetime cap over the database
         self._tz = ZoneInfo(settings.budget_tz)
 
     # ---- views ---------------------------------------------------------------------------

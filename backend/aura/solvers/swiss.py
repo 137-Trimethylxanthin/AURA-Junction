@@ -376,6 +376,8 @@ def _build_boxes(model: SwissModel, subject: str) -> list[dict]:
         twins = [o for o in out if (o['x'], o['y'], o['w'], o['h']) == (bx['x'], bx['y'], bx['w'], bx['h'])]
         if len(twins) > 1 and subject == 'door':
             bx['note'] = DOUBLE_DOOR_NOTE
+            if twins[0] is not bx:  # contract 1.1: later copies point at the first (UI draws one box)
+                bx['duplicate_of'] = twins[0]['id']
     return out
 
 
@@ -542,7 +544,8 @@ def answer(model: SwissModel, family: str, scope: dict | None = None,
             return _abstain(rid, family, scope, 'unclear_question', f'No such {scope.get("kind")} on this drawing.')
         n = len(boxes)
         doubles = sum(1 for b in boxes if b.get('note'))
-        extra = f' ({doubles} are double-door leaves drawn at the same spot, each counted)' if doubles else ''
+        extra = (f' ({doubles} are drawn twice at the same spot in the CAD file; the dataset counts both)'
+                 if doubles else '')
         return {'result_id': rid, 'family': family, 'scope': scope,
                     'answer': {'kind': 'count', 'value': n, 'subject': family}, 'value': n,
                     'numbers': [n] + ([doubles] if doubles else []),
@@ -583,12 +586,13 @@ def answer(model: SwissModel, family: str, scope: dict | None = None,
         ev, parts = [], []
         for r in rooms:
             a, edited = _room_area(r, ov)
-            if a is None:
+            unknown = a is None
+            if unknown:
                 if k == 'room':
                     return _abstain(rid, family, scope, 'unclear_question',
                                     f"Room {r['room_id']} has no printed area and no outline.")
-                a = 0
-            inc = not (drop_outdoor and r['outdoor'])
+                a = 0  # listed but excluded: an unknown area is never summed as 0 m² (never seen in the dataset)
+            inc = not (drop_outdoor and r['outdoor']) and not unknown
             row = {'room_id': r['room_id'], 'included': inc, 'area_m2': round(a, 2)}
             if edited:
                 row['edited'] = True

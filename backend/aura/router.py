@@ -18,7 +18,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Literal
 
-Intent = Literal["count", "area", "find_text", "abstain", "unknown"]
+Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown"]
 InternalLang = Literal["en", "fr", "fi", "de", "it"]
 
 _LD = r"[^\W_]"  # letter or digit
@@ -162,26 +162,28 @@ LABELLED = S(r"labell?ed|labeled|named|called|désignation|désignées?|bezeichn
 LABEL_CONCEPTS: list[tuple[str, re.Pattern[str], list[str]]] = [
     ("bedroom", S(r"chambres? à coucher|bed ?rooms?|makuuhuone|schlafzimmer|camera da letto|"
                   r"camere da letto|sleep|schlaf|dormir|nukku"),
-     ["Chambre à coucher", "Schlafzimmer", "Camera da letto", "Chambre", "Zimmer", "Pièce", "Stanza"]),
+     ["Chambre à coucher", "Schlafzimmer", "Camera da letto", "Bedroom", "Chambre", "Zimmer",
+      "Pièce", "Stanza"]),
     ("living", S(r"séjour|sejour|living|dining|lounge|olohuone|oleskelu|ruokailu|wohnzimmer|"
                  r"wohnen|esszimmer|wohnraum|soggiorno"),
-     ["Séjour/repas", "Séjour", "Wohnen/Essen", "Wohnen", "Soggiorno/pranzo", "Soggiorno"]),
+     ["Séjour/repas", "Séjour", "Wohnen/Essen", "Wohnen", "Soggiorno/pranzo", "Soggiorno",
+      "Living", "Living room"]),
     ("kitchen", S(r"cuisines?|kitchens?|keitti|küche|kuche|cucin"),
-     ["Cuisine", "Küche", "Küche/Essen", "Cucina"]),
+     ["Cuisine", "Küche", "Küche/Essen", "Cucina", "Kitchen"]),
     ("bathroom", W(r"bains?|salles? de bains?|bathrooms?|baths?|kylpyhuone[^\W\d_]*|bad|"
                    r"badezimmer|bäder|bagno|bagni"),
-     ["Bain", "Bad", "Bagno"]),
+     ["Bain", "Bad", "Bagno", "Bathroom", "Bath"]),
     ("storage", S(r"réduits?|reduit|storage|store ?rooms?|closets?|varasto|abstellraum|abstellr|"
                   r"ripostigli|keller|cantina"),
-     ["Réduit", "Reduit", "Ripostiglio", "Kellerabteil", "Vano cantina"]),
+     ["Réduit", "Reduit", "Ripostiglio", "Kellerabteil", "Vano cantina", "Storage"]),
     ("corridor", S(r"couloirs?|corridors?|hallways?|halls?|käytäv|eteinen|eteis|flur|korridor|"
                    r"gang\b|corridoi"),
-     ["Couloir", "Korridor", "Corridoio"]),
+     ["Couloir", "Korridor", "Corridoio", "Corridor", "Hall"]),
     ("outdoor", S(r"terrasses?|terraces?|balcons?|balcony|balconies|terassi|parveke|balkon|"
                   r"balcone|loggia"),
-     ["Terrasse", "Balcon", "Balkon", "Balcone", "Loggia"]),
+     ["Terrasse", "Balcon", "Balkon", "Balcone", "Loggia", "Balcony", "Terrace"]),
     ("stairs", S(r"stair|escalier|treppe|scala|porrashuone|porras"),
-     ["Cage d'escalier", "Treppenhaus", "Vano scala"]),
+     ["Cage d'escalier", "Treppenhaus", "Vano scala", "Staircase", "Stair"]),
 ]
 
 _QUOTED = re.compile(r"'([^']{1,60})'|‘([^’]{1,60})’|«\s?([^»]{1,60}?)\s?»|„([^“”]{1,60})[“”]|"
@@ -201,6 +203,11 @@ _ROOM_AFTER_WORD = re.compile(
 )
 
 
+QUESTION_WORDS = {"floor", "plan", "level", "room", "rooms", "area", "total", "house", "building",
+                  "storey", "story", "étage", "etage", "geschoss", "stock", "piano", "kerros",
+                  "apartment", "unit", "space"}
+
+
 # ---- drawing context -------------------------------------------------------------------------
 
 
@@ -211,6 +218,19 @@ class DrawingCtx:
     labels: list[str] = field(default_factory=list)
     room_ids: list[str] = field(default_factory=list)
     units: list[str] = field(default_factory=list)
+    kind: str = "cad_dxf"
+
+
+WHOLE_MODEL = S(r"whole building|entire building|in the (?:ifc )?model|whole model|all storeys|"
+                r"all floors|ganzen gebäude|gesamten gebäude|tout le bâtiment|koko rakennus")
+# IFC quantities (answered as given in the model, never recomputed).
+QUANTITY: list[tuple[str, re.Pattern[str]]] = [
+    ("wall_length", S(r"(?:total )?length of (?:the |all )?walls|wall length|wandlänge")),
+    ("wall_side_area", S(r"(?:net )?(?:side )?area of (?:the |all )?walls|wall (?:side )?area|"
+                         r"wandfläche")),
+    ("wall_volume", S(r"volume of (?:the |all )?walls|wall volume|wandvolumen")),
+    ("slab_volume", S(r"volume of (?:the |all )?slabs?|slab volume|deckenvolumen")),
+]
 
 
 def _norm(s: str) -> str:
@@ -261,10 +281,14 @@ def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]
         hit = by_norm.get(_norm(q))
         if hit:
             return hit, q
-    # A label named verbatim (longest first), as a whole word.
+    # A label named verbatim (longest first), as a whole word. Labels that are also everyday
+    # question words ("Floor", "Plan") count only with a "labelled" cue.
     t = _norm(text)
+    cue = bool(LABELLED.search(text))
     for lab in sorted(labels, key=len, reverse=True):
         n = _norm(lab)
+        if n in QUESTION_WORDS and not cue:
+            continue
         if len(n) >= 3 and re.search(rf"(?<!{_LD}){re.escape(n)}(?!{_LD})", t):
             return lab, lab
     # Synonyms → a printed label the drawing has.
@@ -311,6 +335,8 @@ _EXCLUSION = re.compile(
 
 def _scope(text: str, ctx: DrawingCtx | None) -> dict | None:
     text = _EXCLUSION.sub(" ", text)
+    if ctx is not None and ctx.kind == "ifc" and WHOLE_MODEL.search(text):
+        return {"kind": "model"}
     room = room_of(text, ctx)
     if room:
         return {"kind": "room", "room_id": room}
@@ -333,6 +359,11 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     if LABEL_TEXT.search(s):
         return Routed("find_text", lang, signal, subject="label", pattern=None,
                       matched=["label_text"])
+    if ctx is not None and ctx.kind == "ifc":
+        for fam, rx in QUANTITY:
+            if rx.search(s):
+                return Routed("quantity", lang, signal, subject=fam, scope={"kind": "floor"},
+                              matched=["quantity", fam])
     for topic, rx in NOT_ON_DRAWING:
         if rx.search(s):
             return Routed("abstain", lang, signal, reason="not_on_drawing", topic=topic,

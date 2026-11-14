@@ -13,15 +13,18 @@ from dataclasses import dataclass, field
 
 from aura import tools
 from aura.contract import ToolResult
-from aura.gemini.client import GeminiClient
+from aura.gemini.client import GeminiClient, Meter
 
 MAX_ITERATIONS = 3
 SYSTEM = (
     "You answer questions about one construction floor plan by calling tools. Never write a "
     "number yourself: every number must come from a tool result. Scopes are 'floor', "
-    "'unit:<letter>', 'room:<id>' or 'label:<printed room label>'. Finish with final_answer, "
+    "'unit:<letter>', 'room:<id>' or 'label:<printed room label>'. Map everyday words to the "
+    "drawing's own printed labels (call list_rooms first if unsure). Finish with final_answer, "
     "naming the result_id that answers the question, and a one- or two-sentence explanation in "
-    "the user's language. If no tool can answer, call final_answer with result_id 'none'."
+    "the user's language. End on a count, area or text result; if a list_rooms result answers "
+    "a 'how many' question, name it and give the printed label whose room count answers. If no "
+    "tool can answer, call final_answer with result_id 'none'."
 )
 
 
@@ -43,12 +46,24 @@ def _payload(tr: ToolResult) -> dict:
         out["text"] = tr.text
     if tr.kind == "rooms":
         out["rooms"] = tr.meta.get("rooms", [])[:40]
+        out["rooms_per_label"] = tr.meta.get("by_label", {})
     return out
 
 
+BAD_SCOPE = ("bad scope: use 'floor', 'unit:<letter>', 'room:<number>' or "
+             "'label:<printed label>'")
+
+
 def execute(d: tools.LoadedDrawing, name: str, args: dict) -> ToolResult | None:
+    """Run one tool; None means bad arguments (the model is told and may retry)."""
     scope = tools.parse_scope_arg(args.get("scope"))
+    if scope is None and name != "find_text":
+        return None
+    if scope.get("kind") == "model" and not isinstance(d.engine, tools.IfcEngine):
+        return None  # only an IFC model has a whole building; never widen to this floor
     if name == "count_objects":
+        if args.get("subject") == "room" and args.get("label"):
+            return tools.count_rooms_labelled(d, str(args["label"])[:100], scope)
         return tools.count_objects(d, str(args.get("subject", "")), scope)
     if name == "room_areas":
         return tools.room_areas(d, scope)
@@ -76,18 +91,21 @@ def history_contents(history: list[dict]) -> list[dict]:
 
 async def run_agent(client: GeminiClient, d: tools.LoadedDrawing, question: str, *,
                     history: list[dict] | None = None, ip_hash: str | None = None,
-                    presenter: bool = False) -> AgentResult:
+                    presenter: bool = False, meter: Meter | None = None,
+                    partial: AgentResult | None = None) -> AgentResult:
+    """`partial` (if given) is filled in place, so a caller that hits a timeout or a model
+    error still sees the tool results gathered so far; `meter` counts every sent request."""
     decl = [{"functionDeclarations": tools.TOOL_DECLARATIONS}]
     rooms = ", ".join(sorted({r["name"] for r in d.drawing.get("rooms", [])}))[:600]
     units = ", ".join(u["id"] for u in d.drawing.get("units", []))
     system = SYSTEM + f" This drawing has apartments [{units}] and room labels [{rooms}]."
     contents = [*history_contents(history or []),
                 {"role": "user", "parts": [{"text": question}]}]
-    res = AgentResult(final=None, explanation="")
+    res = partial if partial is not None else AgentResult(final=None, explanation="")
     by_id: dict[str, ToolResult] = {}
     for _ in range(MAX_ITERATIONS):
         g = await client.generate(contents, tools=decl, purpose="agent", system=system,
-                                  ip_hash=ip_hash, presenter=presenter)
+                                  ip_hash=ip_hash, presenter=presenter, meter=meter)
         res.calls += 1
         res.cost_usd += g.cost_usd
         if not g.function_calls:
@@ -103,13 +121,20 @@ async def run_agent(client: GeminiClient, d: tools.LoadedDrawing, question: str,
             tr = execute(d, fc.name, fc.args)
             if tr is None:
                 replies.append({"functionResponse": {"name": fc.name, "response": {
-                    "error": "unknown tool or bad arguments"}}})
+                    "error": f"unknown tool or bad arguments ({BAD_SCOPE})"}}})
                 continue
             by_id[tr.result_id] = tr
             res.results.append(tr)
             replies.append({"functionResponse": {"name": fc.name, "response": _payload(tr)}})
         if final_call is not None:
             res.final = by_id.get(str(final_call.args.get("result_id", "")))
+            label = str(final_call.args.get("label") or "")[:100]
+            if res.final is not None and res.final.kind == "rooms" and label:
+                # A room list named with a label: the answer is that list's per-label count,
+                # recomputed by the tool (never the model's number), with those rooms as evidence.
+                counted = tools.count_rooms_labelled(d, label, res.final.args.get("scope"))
+                res.results.append(counted)
+                res.final = counted if counted.value else res.final
             res.explanation = str(final_call.args.get("explanation", ""))[:1000]
             return res
         contents.append({"role": "user", "parts": replies})

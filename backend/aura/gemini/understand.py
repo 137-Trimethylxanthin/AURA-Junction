@@ -7,10 +7,11 @@ step can never put a number into an answer. Cost ≈ $0.00005 per question (E3).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from aura.gemini.client import GeminiClient, image_part, text_part
+from aura.gemini.client import GeminiClient, Meter, image_part, text_part
 
 MIN_CONFIDENCE = 0.6  # E2/E3: accepted answers ≥ 0.6 were right 22/23
 GATE_OFF = 0.4  # E4: off-drawing facts ≤ 0.19, on-drawing facts ≥ 0.63
@@ -97,10 +98,12 @@ def build_request(question: str, units: list[str], labels: list[str],
 
 async def understand(client: GeminiClient, question: str, *, units: list[str],
                      labels: list[str], image_path: Path | None, ip_hash: str | None,
-                     presenter: bool) -> Understood:
-    image = image_path.read_bytes() if image_path is not None and image_path.is_file() else None
+                     presenter: bool, meter: Meter | None = None) -> Understood:
+    image = (await asyncio.to_thread(image_path.read_bytes)
+             if image_path is not None and image_path.is_file() else None)
     parts, questions, to_scope = build_request(question, units, labels, image)
-    res = await client.decisions(parts, questions, "choice", ip_hash=ip_hash, presenter=presenter)
+    res = await client.decisions(parts, questions, "choice", ip_hash=ip_hash, presenter=presenter,
+                                 meter=meter)
     intent, ic, ip = res.choice("intent")
     subject, sc, sp = res.choice("subject")
     scope_key, scc, scp = res.choice("scope")

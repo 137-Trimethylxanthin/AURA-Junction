@@ -186,8 +186,10 @@ def ifc_credit(data: Path, model: str) -> dict:
     for line in (data / 'data' / IFC_ROOT / 'LICENSE.md').read_text(encoding='utf-8').splitlines():
         cells = [c.strip() for c in line.strip().strip('|').split('|')]
         if len(cells) >= 5 and cells[0] == f'{model}.ifc':
+            names = {'LicenseRef-KIT-unrestricted': 'KIT IFC Examples: for unrestricted use', 'CC-BY-4.0': 'CC BY 4.0',
+                     'MIT': 'MIT License'}
             return {'text': f'{cells[1]}: {cells[3]}. Plan rendered by AURA from the IFC footprints.',
-                    'license': cells[2], 'url': cells[4]}
+                    'license': cells[2], 'license_name': names.get(cells[2], cells[2]), 'url': cells[4]}
     raise SystemExit(f'no licence row for {model}.ifc')
 
 

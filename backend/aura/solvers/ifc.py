@@ -390,7 +390,7 @@ def answer(model: IfcModel, family: str, scope: dict | None = None) -> dict:
                 'answer': {'kind': 'area', 'value': value, 'unit': 'm2'}, 'value': value,
                 'numbers': [value, len(parts)] + ([geo] if geo else []) + parts,
                 'evidence': {'boxes': [], 'rows': [],
-                             'rooms': [{'room_id': r['room_id'], 'included': True, 'area_m2': a}
+                             'rooms': [{'room_id': r['room_id'], 'included': r['area'] is not None, 'area_m2': a}
                                        for r, a in zip(rr, parts, strict=True)]},
                 'summary': f'Sum of {len(parts)} IfcSpace net floor area{"s" if len(parts) != 1 else ""} = {value} m²'
                            + (f'; {geo} from the space geometry (no NetFloorArea quantity).' if geo else '.')}

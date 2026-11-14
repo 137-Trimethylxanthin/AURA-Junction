@@ -93,7 +93,8 @@ def build_raster_drawing(drawing_id: str, title: str, width_px: int, height_px: 
                    'y_flip': True, 'px': [width_px, height_px]},
          'm_per_pct_x': 0, 'm_per_pct_y': 0,  # no scale on a raster: areas are not answered
          'images': {'rebuilt': image_url}, 'rooms': [], 'units': [],
-         'credit': credit or {'text': 'Uploaded image.', 'license': 'user upload'}}
+         'credit': credit or {'text': 'Uploaded image.', 'license': 'user upload',
+                             'license_name': 'Your upload'}}
     return d
 
 

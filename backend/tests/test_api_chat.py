@@ -75,6 +75,7 @@ def test_conversation_restore_and_follow_up(tmp_path):
         windows = sse(c, {"drawing_id": SWISS, "conversation_id": conv, "message": "and windows?"})
         a3 = dict(windows)["answer"]["response"]
         assert a3["answer"]["subject"] == "window" and a3["scope"] == {"kind": "unit", "unit": "B"}
+        assert c.get("/conversations/c-nope").json()["code"] == "not_found"
         c.portal.call(c.app.state.svc.writer.flush)
         r = c.get(f"/conversations/{conv}").json()
         assert r["contract_version"] == "1.1" and r["drawing_id"] == SWISS
@@ -84,6 +85,23 @@ def test_conversation_restore_and_follow_up(tmp_path):
         assert c.get("/conversations/c-nope").status_code == 404
         other = c.post("/chat", json={"drawing_id": "swiss-404", "message": "hi"})
         assert other.status_code == 404
+
+
+def test_only_cued_follow_ups_inherit_the_previous_question(tmp_path):
+    """F6: a new question is never answered as the previous one with a new scope."""
+    with TestClient(make_app(tmp_path)) as c:
+        first = sse(c, {"drawing_id": SWISS, "message": "How many doors are in apartment B?"})
+        conv = first[0][1]["conversation_id"]
+        region = {"kind": "region", "rect": {"x": 10, "y": 10, "w": 30, "h": 30}, "label": "Area 1"}
+        fire = dict(sse(c, {"drawing_id": SWISS, "conversation_id": conv,
+                            "message": "fire exit here?", "scope": region}))["answer"]["response"]
+        assert fire["answer"].get("subject") != "door"
+        win = dict(sse(c, {"drawing_id": SWISS, "conversation_id": conv,
+                           "message": "How many windows?"}))["answer"]["response"]
+        assert win["answer"]["subject"] == "window" and win["scope"] == {"kind": "floor"}
+        tot = dict(sse(c, {"drawing_id": SWISS, "conversation_id": conv,
+                           "message": "and doors in total?"}))["answer"]["response"]
+        assert tot["scope"] == {"kind": "floor"}
 
 
 class _Slow:
@@ -101,6 +119,10 @@ def test_turn_deadline_ends_with_timeout_then_done(tmp_path):
         names = [e for e, _ in ev]
         assert names[0] == "turn" and names[-2:] == ["error", "done"]
         assert ev[-2][1]["code"] == "timeout"
+        # F2: the request had left when the deadline hit, so it is reported, not hidden.
+        assert ev[-2][1]["calls"] == 1 and "cost_usd" in ev[-2][1]
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "tally the lavatory fittings"})
+        assert r.status_code == 504 and r.json()["code"] == "timeout" and r.json()["calls"] == 1
         c.portal.call(c.app.state.svc.writer.flush)
         turns = c.get(f"/conversations/{ev[0][1]['conversation_id']}").json()["turns"]
         assert turns[0]["error"]["code"] == "timeout" and "response" not in turns[0]

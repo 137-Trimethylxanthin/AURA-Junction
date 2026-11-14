@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -16,14 +17,14 @@ from dataclasses import dataclass, field
 
 from aura import answer as A
 from aura import tools
-from aura.agent.loop import MAX_ITERATIONS, describe_call, run_agent
+from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agent
 from aura.budget import Budget, BudgetError
 from aura.cache import AnswerCache, CheckCache, answer_key
 from aura.config import Settings, models_enabled
 from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse, ChatRequest
 from aura.gemini.check import check_key, default_anchors, run_check, slice_check
-from aura.gemini.client import GeminiClient, GeminiError
-from aura.gemini.understand import understand
+from aura.gemini.client import GeminiClient, GeminiError, Meter
+from aura.gemini.understand import MIN_CONFIDENCE, understand
 from aura.provenance import allowed_numbers, filter_prose
 from aura.router import FIRE_PATTERN, route
 from aura.store import Store
@@ -105,6 +106,19 @@ def context_from(turns: list[dict]) -> dict | None:
     return None
 
 
+FOLLOW_UP_CUE = re.compile(
+    r"^\s*(and|what about|how about|same|et|und|ja|entä|e|ed|plus|also|then)\b", re.IGNORECASE)
+WHOLE_FLOOR = re.compile(r"\b(in total|total|whole|entire|all|altogether|insgesamt|gesamt|au total|"
+                         r"en tout|yhteensä|kaikki|in tutto)\b", re.IGNORECASE)
+
+
+def identifiers_in(question: str, d: tools.LoadedDrawing) -> str:
+    """Numbers in the question that name something on the drawing (room numbers) may be quoted
+    back; any other number the user typed is NOT provenance ("user said 7" never becomes 7)."""
+    ids = set(d.ctx.room_ids)
+    return " ".join(t for t in re.findall(r"[A-Z]{0,2}\d+(?:\.\d+)?", question) if t in ids)
+
+
 AGENT_TIMEOUT_S = 25.0
 AGENT_TAG = "agent · flash-lite"
 
@@ -112,16 +126,21 @@ AGENT_TAG = "agent · flash-lite"
 async def _agent(svc: Services, d: tools.LoadedDrawing, question: str, lang: str, caller: Caller,
                  stats: dict, history: list[dict] | None, choice_tag: str) -> A.Built:
     """Function calling; the answer comes from the ToolResult the model names."""
+    meter: Meter = stats["meter"]
+    before = meter.calls
+    partial = AgentResult(final=None, explanation="")
     try:
         async with asyncio.timeout(AGENT_TIMEOUT_S):
             ar = await run_agent(svc.client, d, question, history=history,  # type: ignore[arg-type]
-                                 ip_hash=caller.ip_hash, presenter=caller.presenter)
+                                 ip_hash=caller.ip_hash, presenter=caller.presenter,
+                                 meter=meter, partial=partial)
     except (BudgetError, GeminiError, TimeoutError) as e:
         stats["no_cache"] = True
+        sent = meter.calls - before
+        stats["route"] = "agent" if sent else stats["route"]
+        what = f"{sent} request(s) sent, no usable answer" if sent else "skipped"
         return A.unclear(question, lang, d, intent_tag=choice_tag,
-                         look=f"The model step was skipped: {e or 'timeout'}.")
-    stats["calls"] += ar.calls
-    stats["cost_usd"] += ar.cost_usd
+                         look=f"The model step was {what}: {e or 'timeout'}.")
     stats["route"] = "agent"
     final = ar.final
     nodes = []
@@ -144,6 +163,10 @@ async def _agent(svc: Services, d: tools.LoadedDrawing, question: str, lang: str
     elif final.kind == "count":
         built = A.count(question, lang, d, final, final.args.get("scope") or {"kind": "floor"},
                         None, intent_tag=AGENT_TAG)
+        if final.args.get("label"):  # rooms with one label inside a scope
+            where = tools.where_en(final.args.get("scope") or {"kind": "floor"})
+            built.body["canonical_en"] = (f"How many rooms labelled {final.args['label']} are "
+                                          f"{where}")
     elif final.kind == "area":
         built = A.area(question, lang, d, final, final.args.get("scope") or {"kind": "floor"},
                        None, intent_tag=AGENT_TAG)
@@ -153,7 +176,8 @@ async def _agent(svc: Services, d: tools.LoadedDrawing, question: str, lang: str
     at = next((i for i, n in enumerate(trace) if n["id"] == "answer"), len(trace))
     nodes = [{k: v for k, v in n.items() if v is not None} for n in nodes]
     if ar.explanation:
-        kept, dropped = filter_prose(ar.explanation, allowed_numbers(ar.results, question))
+        kept, dropped = filter_prose(ar.explanation,
+                                     allowed_numbers(ar.results, identifiers_in(question, d)))
         if kept:
             built.body["explanation"] = kept
         if dropped:
@@ -173,12 +197,15 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
     r = route(question, d.ctx)
     if context:
         short = len(question.split()) <= 5
-        if r.intent == "unknown" and (r.scope or req.scope) and context["intent"] in ("count",
-                                                                                     "area"):
+        cue = short and bool(FOLLOW_UP_CUE.search(question))
+        if WHOLE_FLOOR.search(question) and r.intent in ("count", "area") and r.scope is None:
+            r.scope = {"kind": "floor"}  # "how many doors in total?" never inherits a scope
+        if (r.intent == "unknown" and cue and (r.scope or req.scope)
+                and context["intent"] in ("count", "area")):
             # "and in apartment B?" → the previous question, new scope
             r.intent, r.subject = context["intent"], context.get("subject")
             r.matched.append("follow-up")
-        elif r.intent in ("count", "area") and r.scope is None and short and context.get("scope"):
+        elif r.intent in ("count", "area") and r.scope is None and cue and context.get("scope"):
             # "and doors?" → new subject, previous scope
             r.scope = context["scope"] if context["scope"].get("kind") != "region" else None
             r.matched.append("follow-up")
@@ -190,19 +217,21 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
 
     if intent == "unknown":
         if svc.models_usable():
+            meter: Meter = stats["meter"]
+            before = meter.calls
             try:
                 async with asyncio.timeout(MODEL_STEP_TIMEOUT_S):
                     u = await understand(
                         svc.client, question,  # type: ignore[arg-type]
                         units=d.ctx.units, labels=d.ctx.labels, image_path=d.image_path(),
-                        ip_hash=caller.ip_hash, presenter=caller.presenter)
+                        ip_hash=caller.ip_hash, presenter=caller.presenter, meter=meter)
             except (BudgetError, GeminiError, TimeoutError) as e:
                 stats["no_cache"] = True  # a temporary refusal must not stick
-                look = ("The question matched no template, and the model step was skipped: "
+                sent = meter.calls - before
+                what = f"{sent} request sent, no usable answer" if sent else "skipped"
+                look = (f"The question matched no template, and the model step was {what}: "
                         f"{e or 'timeout'}.")
                 return A.unclear(question, lang, d, intent_tag="router", look=look)
-            stats["calls"] += u.calls
-            stats["cost_usd"] += u.cost_usd
             stats["route"] = "choice"
             tag, conf = f"Decisions API · {u.intent_conf:.2f}", u.intent_conf
             if u.off_drawing:
@@ -215,7 +244,8 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
             # label (live: "places to sleep in apartment A" → choice 'room' would count all 11).
             vague_rooms = (u.intent == "count" and u.subject == "room"
                            and (text_scope or u.scope or {}).get("kind") != "label")
-            if (not u.confident or u.intent == "other"
+            unsure_subject = u.intent == "count" and u.subject_conf < MIN_CONFIDENCE
+            if (not u.confident or u.intent == "other" or unsure_subject
                     or (u.intent == "count" and not u.subject) or vague_rooms):
                 return await _agent(svc, d, question, lang, caller, stats, history, tag)
             if u.intent == "count" and u.subject:
@@ -231,7 +261,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
                     intent_body="text · not extracted yet", intent_tag=tag)
             else:  # pragma: no cover - every intent option is handled above
                 return A.unclear(question, lang, d, intent_tag=tag)
-            if text_scope is None and u.scope and u.scope_conf >= 0.6:
+            if text_scope is None and u.scope and u.scope_conf >= MIN_CONFIDENCE:
                 text_scope = u.scope
         else:
             return A.unclear(question, lang, d)
@@ -249,6 +279,13 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
 
     if intent == "abstain":
         return A.abstain_topic(question, lang, r.topic or "material", intent_tag=tag)
+
+    if intent == "quantity":
+        tr = tools.measure(d, subject or "", req_scope or text_scope or {"kind": "floor"})
+        if not tr.supported or tr.kind == "none":
+            return A.abstain(question, lang, tr.args["scope"], "not_supported_yet",
+                             "(an IFC quantity)", tr.summary, intent_tag=tag, results=[tr])
+        return A.quantity(question, lang, d, tr, tr.args["scope"], intent_tag=tag)
 
     scope = req_scope or text_scope or {"kind": "floor"}
 
@@ -296,16 +333,23 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
             cached = full is not None
             if full is None:
                 anchors = d.anchors or default_anchors(d.drawing.get("rooms", []), boxes)
+                cm: Meter = stats["check_meter"]
                 try:
                     async with asyncio.timeout(MODEL_STEP_TIMEOUT_S):
                         full = await run_check(
                             svc.client,  # type: ignore[arg-type]
                             drawing_id=d.id, image_path=image, subject=subject, boxes=boxes,
-                            anchors=anchors, ip_hash=caller.ip_hash, presenter=caller.presenter)
+                            anchors=anchors, ip_hash=caller.ip_hash, presenter=caller.presenter,
+                            meter=cm)
                 except (BudgetError, GeminiError, TimeoutError) as e:
                     log.warning("check skipped: %s", e or "timeout")
                     stats["check_note"] = str(e) or "timeout"
                     stats["no_cache"] = True
+                    _settle_check_cost(stats)
+                    if cm.calls:  # sent but unusable: no numbers, but its cost is reported
+                        return {"method": "decisions_api", "status": "sample",
+                                "image": "upload" if d.drawing.get("kind") == "raster"
+                                else "dataset_png", **_check_cost(stats, False)}
                     return None
                 full["key"] = key
                 svc.checks.put(key, d.id, subject, full)
@@ -317,10 +361,16 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
         sliced.pop("agreed", None)
     if sliced is None:
         return None
-    stats["check_calls"] = 0 if cached else 1
-    stats["check_cost_usd"] = 0.0 if cached else float(full.get("cost_usd") or 0)
-    stats["check_tokens"] = 0 if cached else int(full.get("input_tokens") or 0)
+    stats["check_unscored"] = sliced.pop("unscored", 0)  # told in the trace, not a contract field
+    _settle_check_cost(stats)
     return sliced | _check_cost(stats, cached)
+
+
+def _settle_check_cost(stats: dict) -> None:
+    cm: Meter = stats["check_meter"]
+    stats["check_calls"] = cm.calls
+    stats["check_cost_usd"] = cm.cost_usd
+    stats["check_tokens"] = cm.tokens
 
 
 def _check_cost(stats: dict, cached: bool) -> dict:
@@ -336,8 +386,13 @@ def _check_node(check: dict, cached: bool, stats: dict, subject: str) -> dict:
     image = "uploaded image" if check.get("image") == "upload" else "dataset image"
     parts = [(f"Gemini Decisions looked at {total} drawn {A.noun(subject, total)} as zoomed tiles "
               f"of the {image}.")]
-    if agreed is None:
+    if stats.get("check_unscored"):
+        parts.append(f"{stats['check_unscored']} more drawn {A.noun(subject, 2)} got no score from "
+                     "the model and are not ranked.")
+    if agreed is None and check.get("image") == "upload":
         parts.append("On an image the check only ranks the boxes; it removes none.")
+    elif agreed is None:
+        parts.append("No known-negative anchors could be placed, so no box is marked agreed.")
     else:
         parts.append(f"{agreed} of {total} agreed (score above the known-negative anchors, "
                      f"{check['anchors_max']:.2f}, by 0.05).")
@@ -354,7 +409,11 @@ def _check_node(check: dict, cached: bool, stats: dict, subject: str) -> dict:
 
 
 async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | None = None,
-              history: list[dict] | None = None) -> AsyncIterator[tuple[str, dict]]:
+              history: list[dict] | None = None,
+              meters: dict[str, Meter] | None = None) -> AsyncIterator[tuple[str, dict]]:
+    """`meters` ({'answer', 'check'}) lets a caller read what was spent even if this
+    generator is cancelled at the turn deadline."""
+    meters = meters if meters is not None else {"answer": Meter(), "check": Meter()}
     t0 = time.perf_counter()
     ensure_ready(svc, req.drawing_id)
     d = svc.registry.get(req.drawing_id)
@@ -367,8 +426,11 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         key += json.dumps(context, sort_keys=True)
     hit = svc.answers.get(key)
     if hit is not None:
+        # A fresh answer id, persisted: its CSV link and /stats see this answer too.
         body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
+                            "answer_id": "a-" + uuid.uuid4().hex[:16],
                             "latency_ms": int((time.perf_counter() - t0) * 1000)}
+        _persist(svc, d.id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
         yield "understood", {"detected_lang": body["detected_lang"],
                              "canonical_en": body["canonical_en"], "route": "cache"}
         if "check" in body:
@@ -376,8 +438,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         yield "answer", {"response": body}
         return
 
-    stats = {"calls": 0, "cost_usd": 0.0, "route": "template", "check_calls": 0,
-             "check_cost_usd": 0.0, "check_tokens": 0}
+    stats = {"route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
+             "meter": meters["answer"], "check_meter": meters["check"]}
     built = await _decide(svc, req, d, caller, stats, context, history)
     yield "understood", {"detected_lang": built.body["detected_lang"],
                          "canonical_en": built.body["canonical_en"], "route": stats["route"]}
@@ -386,7 +448,15 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
     check = await _check(svc, d, built, caller, stats)
     body = built.body
-    if check is not None:
+    if check is not None and "ranking" not in check:  # sent, but no usable result
+        body["check"] = check
+        for n in body["trace"]:
+            if n["id"] == "check":
+                n.update(tag="Decisions API · failed", kind="warn",
+                         body=f"{check['calls']} check request sent, no usable answer "
+                              f"({stats.get('check_note')}); no box is marked checked.")
+                n.pop("confidence", None)
+    elif check is not None:
         body["check"] = check
         node = _check_node(check, stats["check_calls"] == 0, stats, built.subject or "")
         body["trace"] = [node if n["id"] == "check" else n for n in body["trace"]]
@@ -396,8 +466,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         for n in body["trace"]:
             if n["id"] == "check":
                 n.update(tag="no image",
-                         body="No independent image to check against: an uploaded DXF has only "
-                              "its own geometry, and checking our own rendering would be circular.")
+                         body="No independent image to check against: this drawing has only its "
+                              "own geometry, and checking our own rendering would be circular.")
                 n.pop("confidence", None)
                 n["kind"] = "info"
     elif stats.get("check_note"):
@@ -406,17 +476,19 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 n["body"] = f"The image check was skipped: {stats['check_note']}."
                 n["tag"] = "Decisions API · skipped"
 
-    body["calls"] = stats["calls"]
-    body["cost_usd"] = round(stats["cost_usd"], 6)
+    body["calls"] = meters["answer"].calls  # every request sent for the answer, failed or not
+    body["cost_usd"] = round(meters["answer"].cost_usd, 8)
     body["route"] = stats["route"]
     body["answer_id"] = "a-" + uuid.uuid4().hex[:16]
     body["latency_ms"] = int((time.perf_counter() - t0) * 1000)
     resp = AskResponse.model_validate(body)  # contract gate: fails loudly on a bad body
     out = resp.model_dump(exclude_none=True)
     _persist(svc, d.id, req.question, out, stats)
-    if not stats.get("no_cache"):
+    # The agent reads the conversation history, which is not in the cache key: a turn with
+    # history is not cached on that route.
+    if not stats.get("no_cache") and not (stats["route"] == "agent" and history):
         cached_body = out
-        if check is not None and stats["check_calls"]:
+        if check is not None and "ranking" in check and stats["check_calls"]:
             node = _check_node(check, True, stats, built.subject or "")
             cached_body = out | {
                 "trace": [node if n["id"] == "check" else n for n in out["trace"]],
@@ -438,12 +510,12 @@ def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: d
     )
 
 
-async def ask(svc: Services, req: AskRequest, caller: Caller) -> dict:
-    async for event, data in run(svc, req, caller):
+async def ask(svc: Services, req: AskRequest, caller: Caller,
+              meters: dict[str, Meter] | None = None) -> dict:
+    async for event, data in run(svc, req, caller, meters=meters):
         if event == "answer":
             return data["response"]
     raise PipelineError("internal", "The pipeline ended without an answer.", 500)
-
 
 
 async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
@@ -469,9 +541,11 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
                      overrides=body.overrides, lang_hint=body.lang_hint)
     queue: asyncio.Queue = asyncio.Queue()
 
+    meters = {"answer": Meter(), "check": Meter()}
+
     async def produce() -> None:
         try:
-            async for item in run(svc, req, caller, context, history):
+            async for item in run(svc, req, caller, context, history, meters):
                 await queue.put(item)
         except PipelineError as e:
             await queue.put(("error", {"error": str(e), "code": e.code}))
@@ -491,7 +565,12 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
                 item = await asyncio.wait_for(queue.get(), max(0.0, deadline - loop.time()))
             except TimeoutError:
                 task.cancel()
-                error = {"error": "The answer took too long.", "code": "timeout"}
+                await asyncio.gather(task, return_exceptions=True)  # settle the meters
+                spent = meters["answer"].calls + meters["check"].calls
+                cost = round(meters["answer"].cost_usd + meters["check"].cost_usd, 8)
+                # Every request already sent is reported, even without an answer.
+                error = {"error": "The answer took too long.", "code": "timeout",
+                         "calls": spent, "cost_usd": cost}
                 yield "error", error
                 break
             if item is None:
@@ -507,7 +586,7 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
         if not task.done():
             task.cancel()
         if writer is not None:
-            writer.submit(
+            await writer.execute(  # committed before `done`, so a fast follow-up sees it
                 "INSERT INTO turns(id, conversation_id, t, message, response, error) "
                 "VALUES (?,?,?,?,?,?)",
                 (turn_id, conv_id, time.time(), body.message,

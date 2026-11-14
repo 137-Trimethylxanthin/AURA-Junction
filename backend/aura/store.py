@@ -96,6 +96,20 @@ class Store:
             "SELECT day, COUNT(*) n FROM requests WHERE bucket='public' GROUP BY day")}
         return total, by_bucket, by_day
 
+    def recent_limits(self, now: float, purposes_agent: set[str], purposes_raster: set[str],
+                      ) -> tuple[dict[str, list[float]], int]:
+        """Per-IP agent request times in the last hour, and raster requests ever, so the
+        per-IP and public-raster limits survive a restart (they were in memory only)."""
+        qa = ",".join("?" * len(purposes_agent))
+        by_ip: dict[str, list[float]] = {}
+        for r in self._q(f"SELECT ip_hash, t FROM requests WHERE purpose IN ({qa}) AND "
+                         "ip_hash IS NOT NULL AND t > ? ORDER BY t", (*purposes_agent, now - 3600)):
+            by_ip.setdefault(r["ip_hash"], []).append(r["t"])
+        qr = ",".join("?" * len(purposes_raster))
+        raster = self._q(f"SELECT COUNT(*) n FROM requests WHERE purpose IN ({qr})",
+                         tuple(purposes_raster))[0]["n"]
+        return by_ip, raster
+
     # answers
     def answer(self, answer_id: str) -> dict[str, Any] | None:
         rows = self._q("SELECT response FROM answers WHERE id=?", (answer_id,))

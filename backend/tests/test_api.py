@@ -73,8 +73,11 @@ def test_check_is_counted_separately_and_cached(live_client):
     # Same question again: answer cache.
     again = ask(c, "How many washbasins are drawn on this floor plan?")
     assert again["route"] == "cache" and again["calls"] == 0
+    assert again["answer_id"] != b["answer_id"]  # F12: a fresh, persisted id per answer
+    c.portal.call(c.app.state.svc.writer.flush)
+    assert c.get(f"/answers/{again['answer_id']}/evidence.csv").status_code == 200
     stats = c.get("/stats").json()
-    assert stats["model_calls_today"] == 1 and stats["answers_today"] == 2
+    assert stats["model_calls_today"] == 1 and stats["answers_today"] == 3  # cache hits count
     assert stats["median_cost_per_checked_answer_usd"]["n"] == 1
 
 
@@ -106,7 +109,8 @@ def test_choice_step_text_list_and_low_subject(live_client):
     q13 = ask(live_client, "Which sanitary fixtures are available in this building?")
     assert q13["answer"]["reason"] == "not_supported_yet" and q13["route"] == "choice"
     q16 = ask(live_client, "how many places can people sleep in apartment A")
-    assert q16["answer"]["reason"] == "unclear_question"  # recorded: choice → agent → abstain
+    # recorded: choice → agent → list_rooms → final_answer(list, label) → the label's count
+    assert q16["answer"] == {"kind": "count", "value": 4, "subject": "room"}
     assert q16["route"] == "agent"
 
 
@@ -236,10 +240,15 @@ def test_gemini_network_failure_never_breaks_a_geometry_answer(tmp_path):
     boom = _Boom()
     with TestClient(make_app(tmp_path, transport=boom, with_image=True)) as c:
         b = ask(c, "How many washbasins are drawn on this floor plan?")
-        assert b["answer"]["value"] == 5 and "check" not in b
-        assert "skipped" in next(n for n in b["trace"] if n["id"] == "check")["tag"]
+        assert b["answer"]["value"] == 5 and b["calls"] == 0
+        # The check request may have left: it is reported (1 call), with no ranking.
+        assert b["check"]["calls"] == 1 and "ranking" not in b["check"]
+        assert b["check"]["status"] == "sample" and "per_box" not in b["check"]
+        node = next(n for n in b["trace"] if n["id"] == "check")
+        assert "failed" in node["tag"] and "1 check request sent" in node["body"]
         u = ask(c, "tally the lavatory fittings for me")
-        assert u["answer"]["reason"] == "unclear_question" and u["calls"] == 0
+        assert u["answer"]["reason"] == "unclear_question" and u["calls"] == 1
+        assert "1 request sent" in next(n for n in u["trace"] if n["id"] == "look")["body"]
         assert boom.calls == 2
         assert c.get("/budget").json()["event_used"] == 96  # sent requests count
         # Not cached: the next ask tries again.
@@ -498,3 +507,36 @@ def test_ifc_entry_loads_lists_and_answers(tmp_path):
         apt = c.post("/ask", json={"drawing_id": src.name, "question": "How many apartments?"})
         assert apt.json()["answer"]["kind"] == "abstain"
         assert c.get("/health").json()["checks"]["drawings_skipped"] == 0
+
+
+@pytest.mark.dataset
+def test_ifc_counts_without_footprints_carry_rows(tmp_path):
+    import shutil
+
+    from tests.conftest import BACKEND
+
+    src = BACKEND / "build" / "ifc_drawings" / "ifc-bimspeed-warmond_ar--2-level"
+    if not (src / "model.json").is_file():
+        pytest.skip("dataset: IFC preprocess output missing")
+    app = _library_with(tmp_path, {})
+    shutil.copytree(src, tmp_path / "build" / src.name)
+    with TestClient(app) as c:
+        b = c.post("/ask", json={"drawing_id": src.name,
+                                 "question": "How many doors are on this floor?"}).json()
+        no_nulls(b)
+        assert b["answer"]["value"] == 46 and b["evidence"]["boxes"] == []
+        assert len(b["evidence"]["rows"]) == 46 and b["evidence"]["rows"][0]["id"]
+        w = c.post("/ask", json={"drawing_id": src.name, "question": "How many windows are on "
+                                 "this floor?"}).json()
+        assert w["answer"]["value"] == 28 and len(w["evidence"]["rows"]) == 28
+        r = c.post("/ask", json={"drawing_id": src.name, "question": "How many rooms are on "
+                                 "this floor?"}).json()
+        assert r["answer"]["value"] == 56 and len(r["evidence"]["rooms"]) == 56
+        q = c.post("/ask", json={"drawing_id": src.name,
+                                 "question": "What is the total length of walls?"}).json()
+        no_nulls(q)
+        assert q["answer"]["kind"] == "quantity" and q["answer"]["unit"] == "m"
+        assert q["answer"]["value"] > 0 and q["evidence"]["rows"]
+        m = c.post("/ask", json={"drawing_id": src.name,
+                                 "question": "How many doors are in the whole building?"}).json()
+        assert m["scope"] == {"kind": "model"} and m["answer"]["value"] >= 46

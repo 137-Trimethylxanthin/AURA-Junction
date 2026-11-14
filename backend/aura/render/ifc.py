@@ -87,7 +87,8 @@ def build_drawing(model: IfcModel, *, base_url: str | None = None, source: str =
              images={'rebuilt': f'{base}/plan.svg'}, rooms=rooms, units=[],
              credit=credit or {'text': f'{CREDITS.get(org, "IFC sample model")} ({model.source}), via the Stoa dataset. '
                              'Plan rendered from the IFC footprints.',
-                     'license': 'see the dataset LICENSE.md for this model'})
+                     'license': 'see the dataset LICENSE.md for this model',
+                     'license_name': 'Licence of the source model (see credits)'})
     if facts:
         d['facts'] = facts
     return d

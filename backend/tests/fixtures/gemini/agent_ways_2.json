@@ -46,7 +46,7 @@
   "systemInstruction": {
    "parts": [
     {
-     "text": "You answer questions about one construction floor plan by calling tools. Never write a number yourself: every number must come from a tool result. Scopes are 'floor', 'unit:<letter>', 'room:<id>' or 'label:<printed room label>'. Finish with final_answer, naming the result_id that answers the question, and a one- or two-sentence explanation in the user's language. If no tool can answer, call final_answer with result_id 'none'. This drawing has apartments [A, B] and room labels [, Bain, Chambre à coucher, Couloir, Cuisine, Réduit, Séjour/repas, Terrasse]."
+     "text": "You answer questions about one construction floor plan by calling tools. Never write a number yourself: every number must come from a tool result. Scopes are 'floor', 'unit:<letter>', 'room:<id>' or 'label:<printed room label>'. Map everyday words to the drawing's own printed labels (call list_rooms first if unsure). Finish with final_answer, naming the result_id that answers the question, and a one- or two-sentence explanation in the user's language. End on a count, area or text result; if a list_rooms result answers a 'how many' question, name it and give the printed label whose room count answers. If no tool can answer, call final_answer with result_id 'none'. This drawing has apartments [A, B] and room labels [, Bain, Chambre à coucher, Couloir, Cuisine, Réduit, Séjour/repas, Terrasse]."
     }
    ]
   },
@@ -75,6 +75,10 @@
         "scope": {
          "type": "string",
          "description": "floor | unit:<letter> | room:<id> | label:<printed label>"
+        },
+        "label": {
+         "type": "string",
+         "description": "Only with subject 'room': count rooms with this printed label inside the scope (use a label from list_rooms)."
         }
        },
        "required": [
@@ -97,7 +101,7 @@
      },
      {
       "name": "list_rooms",
-      "description": "List rooms (id, printed label, apartment, area) in a scope.",
+      "description": "List rooms (id, printed label, apartment, area) in a scope, with the number of rooms per printed label.",
       "parameters": {
        "type": "object",
        "properties": {
@@ -133,6 +137,10 @@
         },
         "explanation": {
          "type": "string"
+        },
+        "label": {
+         "type": "string",
+         "description": "Only when result_id names a list_rooms result: the printed room label whose count answers the question."
         }
        },
        "required": [

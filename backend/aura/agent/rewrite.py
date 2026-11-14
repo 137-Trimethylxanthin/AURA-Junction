@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 
 from aura import tools
-from aura.gemini.client import GeminiClient
+from aura.gemini.client import GeminiClient, Meter
 from aura.router import contract_lang, route
 
 PROMPT = (
@@ -86,12 +86,12 @@ def parse(text: str, d: tools.LoadedDrawing) -> tuple[list[dict], list[str], str
 
 
 async def rewrite(client: GeminiClient, d: tools.LoadedDrawing, text: str, *,
-                  ip_hash: str | None, presenter: bool) -> Rewrite:
+                  ip_hash: str | None, presenter: bool, meter: Meter | None = None) -> Rewrite:
     units = ", ".join(d.ctx.units)
     labels = ", ".join(sorted(set(d.ctx.labels)))[:600]
     prompt = PROMPT.format(units=units, labels=labels, text=text.strip()[:2000])
     g = await client.generate(prompt, purpose="rewrite", ip_hash=ip_hash, presenter=presenter,
-                              config={"responseMimeType": "application/json"})
+                              config={"responseMimeType": "application/json"}, meter=meter)
     blocks, na, lang = parse(g.text, d)
     return Rewrite(blocks=blocks, not_answerable=na, detected_lang=contract_lang(lang),
                    calls=1, cost_usd=g.cost_usd, tokens=g.input_tokens + g.output_tokens,

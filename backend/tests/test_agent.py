@@ -88,18 +88,19 @@ def test_unsure_choice_hands_over_to_the_agent(tmp_path):
         assert next(n for n in b["trace"] if n["id"] == "intent")["tag"].startswith("agent")
 
 
-def test_agent_without_a_result_abstains_and_filters_prose(tmp_path):
-    """RECORDED live (choice + 3 flash-lite calls): 'places to sleep' → the agent lists rooms,
-    counts rooms in A, then names the room list and claims '4 rooms labeled Chambre à coucher'.
-    No tool produced 4, so the sentence is removed and the turn abstains."""
+def test_agent_names_a_room_list_with_a_label_and_gets_that_count(tmp_path):
+    """RECORDED live (choice replayed + 2 flash-lite calls, Sat 14 Nov ~10:50, after the
+    final_answer `label` was added): the agent called list_rooms(unit:A), then named that list
+    with label 'Chambre à coucher'. The value 4 is the tool's per-label count (rooms 3.04, 3.05,
+    3.07, 3.10 as evidence), never the model's number."""
     with _app(tmp_path) as c:
         b = c.post("/ask", json={"drawing_id": "swiss-46639",
                                  "question": "how many places can people sleep in apartment A"}).json()
-        assert b["route"] == "agent" and b["calls"] == 4
-        assert b["answer"]["reason"] == "unclear_question" and "explanation" not in b
-        tools_called = [n["tool"]["name"] for n in b["trace"] if "tool" in n]
-        assert tools_called == ["list_rooms", "count_objects"]
-        assert any(n["id"] == "provenance" and n["kind"] == "warn" for n in b["trace"])
+        assert b["route"] == "agent" and b["calls"] == 3
+        assert b["answer"] == {"kind": "count", "value": 4, "subject": "room"}
+        assert [r["room_id"] for r in b["evidence"]["rooms"]] == ["3.04", "3.05", "3.07", "3.10"]
+        assert "Chambre à coucher" in b["canonical_en"] and "4 rooms" in b["explanation"]
+        assert not any(n["id"] == "provenance" for n in b["trace"])
 
 
 def test_chat_streams_agent_tool_calls(tmp_path):
@@ -176,3 +177,63 @@ def test_find_text_is_literal_no_redos():
     assert execute(d, "find_text", {"pattern": "ei30"}).text == "EI30"
     fire = tools.find_text(d, FIRE_PATTERN, "fire_rating")
     assert fire.meta["texts"] == ["EI30", "20 MIN."]
+
+
+def test_room_count_by_label_and_scope_is_tool_produced():
+    from aura.agent.loop import execute
+
+    d = tools.load_file(FRONTEND_DRAWING)
+    r = execute(d, "count_objects", {"subject": "room", "label": "chambre à coucher",
+                                     "scope": "unit:A"})
+    assert r.value == 4 and [x.room_id for x in r.rooms] == ["3.04", "3.05", "3.07", "3.10"]
+    lst = execute(d, "list_rooms", {"scope": "unit:A"})
+    assert lst.meta["by_label"]["Chambre à coucher"] == 4 and 4.0 in lst.numbers
+
+
+class _Scripted:
+    """A stand-in client that replays a fixed list of function calls (no transport at all)."""
+
+    def __init__(self, turns):
+        self.turns = list(turns)
+
+    async def generate(self, contents, **kw):
+        from aura.gemini.client import FunctionCall, GenerateResult
+
+        calls = [FunctionCall(n, a) for n, a in self.turns.pop(0)]
+        return GenerateResult(text="", function_calls=calls, input_tokens=1, output_tokens=1,
+                              cost_usd=0.0, latency_ms=0, model="stub",
+                              content={"role": "model", "parts": []})
+
+
+async def test_final_answer_on_a_room_list_with_a_label_counts_that_label():
+    """Offline path: list_rooms(unit:A), then final_answer naming that list with a label.
+    The value is the tool's per-label count, with those rooms as evidence."""
+    from aura.agent.loop import run_agent
+
+    d = tools.load_file(FRONTEND_DRAWING)
+    rid = tools.list_rooms(d, {"kind": "unit", "unit": "A"}).result_id
+    stub = _Scripted([[("list_rooms", {"scope": "unit:A"})],
+                      [("final_answer", {"result_id": rid, "label": "Chambre à coucher",
+                                         "explanation": "4 rooms are bedrooms."})]])
+    ar = await run_agent(stub, d, "how many places can people sleep in apartment A")
+    assert ar.final.kind == "count" and ar.final.value == 4
+    assert [r.room_id for r in ar.final.rooms] == ["3.04", "3.05", "3.07", "3.10"]
+    # Without a label (or with one that is not on the drawing) the list is not an answer.
+    stub = _Scripted([[("list_rooms", {"scope": "unit:A"})],
+                      [("final_answer", {"result_id": rid, "label": "Sauna",
+                                         "explanation": "none"})]])
+    assert (await run_agent(stub, d, "saunas in A?")).final.kind == "rooms"
+
+
+async def test_agent_rejects_an_unknown_scope_instead_of_widening():
+    from aura.agent.loop import execute
+
+    d = tools.load_file(FRONTEND_DRAWING)
+    assert execute(d, "count_objects", {"subject": "door", "scope": "bedroom"}) is None
+    assert execute(d, "count_objects", {"subject": "door", "scope": "apartment:B"}).args[
+        "scope"] == {"kind": "unit", "unit": "B"}
+    # 'model' exists only for IFC models: on a single plan it is refused, never the whole floor.
+    for name, args in (("list_rooms", {}), ("count_objects", {"subject": "door"}),
+                       ("count_objects", {"subject": "room", "label": "Bain"}), ("room_areas", {})):
+        assert execute(d, name, {**args, "scope": "model"}) is None, name
+    assert tools.list_rooms(d, {"kind": "model"}).supported is False

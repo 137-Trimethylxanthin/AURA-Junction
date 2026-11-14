@@ -16,6 +16,8 @@ RESULTS = BACKEND / 'eval' / 'results'
 DRAWINGS = BACKEND / 'build' / 'drawings'
 
 
+# IFC question families the API answers today (update when L2 serves more): eval/ifc_full.py family names
+IFC_SERVED = {'storey_count_IfcDoor', 'storey_count_IfcWindow', 'storey_count_IfcSpace', 'room_area', 'storey_area'}
 DEV = 'Measured on the challenge dataset the solver was developed against, not a held-out result.'  # the probes and solvers were written while looking at this dataset
 
 
@@ -23,6 +25,12 @@ def pct(num: float, den: float, dp: int = 1) -> str:
     """Truncated percentage, e.g. 18606/18792 -> '99.0 %' (dp=1)."""
     f = 10 ** dp
     return f'{math.floor(num / den * 100 * f + 1e-9) / f:.{dp}f} %'
+
+
+def usd(x: float, dp: int = 4) -> str:
+    """Dollars TRUNCATED to dp decimals, never rounded up ($0.0448607 -> $0.0448)."""
+    f = 10 ** dp
+    return f'${math.floor(x * f + 1e-9) / f:.{dp}f}'
 
 
 def load(p: Path):
@@ -54,9 +62,35 @@ def facts() -> list[dict]:
                 'scope': f'The {len(rows)} seeded library drawings (random.Random(46639) over plans with at least 30 questions)',
                 'method': 'Same solver as the full-set run, answers compared with the dataset gold',
                 'measured': min(r['measured_at'] for r in rows)[:10], 'caveat': DEV})
+    log = BACKEND / 'build' / 'checks_requests.jsonl'
+    if log.exists() and lib:
+        reqs = [json.loads(x) for x in log.read_text(encoding='utf-8').splitlines() if x.strip()]
+        boxes = agreed = 0
+        for d in lib['drawings']:
+            for r in (load(DRAWINGS / d['id'] / 'checks.json') or {}).values():
+                pb = r['per_box']
+                boxes += len(pb)
+                agreed += sum(1 for v in pb.values() if v > r['anchors_max'] + 0.05)  # plan rule
+        cost = sum(r['cost_usd'] for r in reqs)
+        lo, hi = min(r['cost_usd'] for r in reqs), max(r['cost_usd'] for r in reqs)
+        out.append({
+            'id': 'check-cost-library', 'label': 'Cost of one Gemini check of a drawing layer',
+            'value': usd(cost / len(reqs)), 'cost_usd': round(cost / len(reqs), 7),
+            'n': len(reqs), 'n_unit': 'requests', 'model_calls': len(reqs),
+            'scope': f"Precomputed checks of the {len(lib['drawings'])} library drawings: windows, doors and washbasins, "
+                     f'{boxes} boxes in total, one Decisions request per drawing and subject',
+            'method': ('Gemini Decisions API, 384 px tiles with 3 anchor tiles per request; cost from the logged '
+                       'token counts'),
+            'measured': min(r['at'] for r in reqs)[:10],
+            'caveat': (f'Mean of {len(reqs)} requests, {usd(lo)}–{usd(hi)} each, {usd(cost)} in total '
+                       f"({sum(r['input_tokens'] for r in reqs):,} input tokens; dollar figures truncated). "
+                       f'{agreed} of {boxes} boxes agreed (score above the highest anchor + 0.05). "Agreed" '
+                       "means the model agreed with the solver's boxes; it is not a measured accuracy of the "
+                       'check. The check covers drawn boxes only.')})
     ic = load(RESULTS / 'ifc.json')
     if ic:
         pr = ic['probe_rules_reproduced']
+        served = sum(v['n'] for k, v in ic['families'].items() if k in IFC_SERVED)
         out.append({
             'id': 'ifc-full', 'label': 'IFC building models answered from the model file',
             'value': pct(ic['correct'], ic['questions']), 'numerator': ic['correct'], 'denominator': ic['questions'],
@@ -67,7 +101,11 @@ def facts() -> list[dict]:
             'measured': ic['measured_at'][:10],
             'caveat': (f"Two rules were added after reading the {pr['questions'] - pr['correct']} misses on this same set, "
                        f"so this is not a held-out measure; with the original rules: {pr['correct']:,}/{pr['questions']:,} "
-                       f"= {pct(pr['correct'], pr['questions'])}."),
+                       f"= {pct(pr['correct'], pr['questions'])}."
+                       + (f' The live app serves {served:,} of these {ic["questions"]:,} questions today (door, window '
+                          'and room counts per storey, room and storey areas); whole-model counts, walls, columns, '
+                          'stairs and wall/slab quantities are solved in this evaluation but not yet answered in the app.'
+                          if served < ic['questions'] else '')),
         })
     cc = load(RESULTS / 'cubicasa.json')
     if cc:

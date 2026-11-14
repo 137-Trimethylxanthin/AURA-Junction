@@ -165,3 +165,12 @@ def test_detect_has_no_signal_on_gibberish():
 def test_router_is_pure_text():
     # The fixture bundle is ours; nothing about the router reads files at route time.
     assert Path(FRONTEND_DRAWING).is_file()
+
+
+def test_labels_that_are_question_words_need_a_cue():
+    ctx = DrawingCtx(labels=["Floor", "Bedroom", "Kitchen"], room_ids=[], units=[])
+    assert route("How many doors are on this floor?", ctx).scope is None
+    assert route("How many rooms are labelled Floor?", ctx).scope == {"kind": "label",
+                                                                      "label": "Floor"}
+    assert route("How many bedrooms are there?", ctx).scope == {"kind": "label",
+                                                                "label": "Bedroom"}

@@ -245,6 +245,21 @@ class RecordingTransport:
         return status, data
 
 
+class Meter:
+    """Counts every request actually sent (success, error or cancel) and its cost, so a
+    response can report calls/cost truthfully even when the model step failed."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.cost_usd = 0.0
+        self.tokens = 0
+
+    def add(self, rec) -> None:
+        self.calls += 1
+        self.cost_usd += rec.cost_usd
+        self.tokens += rec.input_tokens + rec.output_tokens
+
+
 # ---- client -----------------------------------------------------------------------------
 
 
@@ -275,6 +290,7 @@ class GeminiClient:
         bucket: Bucket,
         ip_hash: str | None,
         presenter: bool,
+        meter: Meter | None = None,
     ) -> tuple[dict, int, int, int]:
         res = self.budget.reserve(purpose, bucket, ip_hash=ip_hash, presenter=presenter)
         try:
@@ -290,17 +306,23 @@ class GeminiClient:
             raise
         except Exception as e:
             # Sent (or possibly sent): it counts. Network errors surface as GeminiError.
-            self.budget.commit(res, model=model, status=0,
+            rec = self.budget.commit(res, model=model, status=0,
                                latency_ms=int((time.perf_counter() - t0) * 1000))
+            if meter is not None:
+                meter.add(rec)
             raise GeminiError(0, f"{type(e).__name__}") from e
         except BaseException:  # cancelled (deadline): it still counts
-            self.budget.commit(res, model=model, status=0,
+            rec = self.budget.commit(res, model=model, status=0,
                                latency_ms=int((time.perf_counter() - t0) * 1000))
+            if meter is not None:
+                meter.add(rec)
             raise
         latency = int((time.perf_counter() - t0) * 1000)
         tin, tout = _usage(data)
-        self.budget.commit(res, model=model, input_tokens=tin, output_tokens=tout,
-                           latency_ms=latency, status=status)
+        rec = self.budget.commit(res, model=model, input_tokens=tin, output_tokens=tout,
+                                 latency_ms=latency, status=status)
+        if meter is not None:
+            meter.add(rec)
         if status != 200:
             msg = (data.get("error") or {}).get("message", "") if isinstance(data, dict) else ""
             raise GeminiError(status, str(msg)[:300])
@@ -316,12 +338,13 @@ class GeminiClient:
         ip_hash: str | None = None,
         presenter: bool = False,
         model: str | None = None,
+        meter: Meter | None = None,
     ) -> DecisionsResult:
         model = model or self.s.decision_model
         body = {"model": model, "input": input_parts, "questions": questions}
         data, tin, _tout, latency = await self._send(
             "/decisions", body, model=model, purpose=purpose, bucket=bucket,
-            ip_hash=ip_hash, presenter=presenter,
+            ip_hash=ip_hash, presenter=presenter, meter=meter,
         )
         return DecisionsResult(
             answers=dict(data.get("answers") or {}),
@@ -345,6 +368,7 @@ class GeminiClient:
         system: str | None = None,
         config: dict | None = None,
         tool_config: dict | None = None,
+        meter: Meter | None = None,
     ) -> GenerateResult:
         model = model or self.s.agent_model
         if isinstance(contents, str):
@@ -359,7 +383,7 @@ class GeminiClient:
         body["generationConfig"] = {"temperature": 0, **(config or {})}
         data, tin, tout, latency = await self._send(
             f"/models/{model}:generateContent", body, model=model, purpose=purpose,
-            bucket=bucket, ip_hash=ip_hash, presenter=presenter,
+            bucket=bucket, ip_hash=ip_hash, presenter=presenter, meter=meter,
         )
         cand = (data.get("candidates") or [{}])[0]
         content = cand.get("content") or {}

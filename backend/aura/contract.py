@@ -32,6 +32,7 @@ ErrorCode = Literal[
     "presenter_required",
     "processing",
     "timeout",
+    "not_found",
 ]  # timeout: SSE `error` event; /ask answers 504
 ToolName = Literal[
     "count_objects",
@@ -77,10 +78,17 @@ class Box(_M):
     room_id: str | None = None
     unit: str | None = None
     note: str | None = None
+    duplicate_of: str | None = None  # second copy of an object drawn twice (Swiss CAD only)
 
 
 class ScopeFloor(_M):
     kind: Literal["floor"] = "floor"
+
+
+class ScopeModel(_M):
+    """1.1: the whole building model (IFC only), not just the drawing's storey."""
+
+    kind: Literal["model"] = "model"
 
 
 class ScopeUnit(_M):
@@ -105,7 +113,8 @@ class ScopeRegion(_M):
 
 
 Scope = Annotated[
-    ScopeFloor | ScopeUnit | ScopeRoom | ScopeLabel | ScopeRegion, Field(discriminator="kind")
+    ScopeFloor | ScopeModel | ScopeUnit | ScopeRoom | ScopeLabel | ScopeRegion,
+    Field(discriminator="kind"),
 ]
 
 
@@ -164,8 +173,17 @@ class AnswerText(_M):
     subject: Literal["fire_rating", "label"]
 
 
+class AnswerQuantity(_M):
+    """1.1: a measured quantity given as the IFC model states it (never recomputed)."""
+
+    kind: Literal["quantity"] = "quantity"
+    value: float
+    unit: Literal["m", "m2", "m3"]
+
+
 Answer = Annotated[
-    AnswerCount | AnswerArea | AnswerAbstain | AnswerText, Field(discriminator="kind")
+    AnswerCount | AnswerArea | AnswerAbstain | AnswerQuantity | AnswerText,
+    Field(discriminator="kind"),
 ]
 
 
@@ -176,9 +194,18 @@ class EvidenceRoom(_M):
     edited: bool | None = None
 
 
+class EvidenceRow(_M):
+    """An element counted without a 2D box (IFC GlobalId rows)."""
+
+    id: str
+    name: str | None = None
+    value: float | None = None
+
+
 class Evidence(_M):
     boxes: list[Box] = Field(default_factory=list)
     rooms: list[EvidenceRoom] = Field(default_factory=list)
+    rows: list[EvidenceRow] | None = None  # counted elements that have no 2D box (IFC)
 
 
 class Recall(_M):
@@ -300,9 +327,10 @@ class Credit(_Open):
     text: str
     license: str
     url: str | None = None
+    license_name: str | None = None
 
 
-class Facts(BaseModel):
+class Facts(_Open):
     gold_total: int
     correct: int
     measured_at: str
@@ -370,7 +398,7 @@ class ToolResult(BaseModel):
     result_id: str
     tool: ToolName
     args: dict[str, Any] = Field(default_factory=dict)
-    kind: Literal["count", "area", "text", "rooms", "boxes", "check", "none"]
+    kind: Literal["count", "area", "text", "quantity", "rooms", "boxes", "check", "none"]
     subject: str | None = None
     value: float | None = None
     text: str | None = None

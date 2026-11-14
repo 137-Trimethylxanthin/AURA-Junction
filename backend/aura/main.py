@@ -26,7 +26,7 @@ from starlette.datastructures import UploadFile
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from aura import tools, uploads
-from aura.budget import Budget, RequestRecord
+from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, RequestRecord
 from aura.cache import AnswerCache, CheckCache
 from aura.config import Settings, get_settings, models_enabled
 from aura.contract import (
@@ -37,7 +37,7 @@ from aura.contract import (
     RewriteRequest,
 )
 from aura.csvout import evidence_csv
-from aura.gemini.client import GeminiClient, Transport
+from aura.gemini.client import GeminiClient, Meter, Transport
 from aura.jobs import Jobs
 from aura.logging import AccessLogMiddleware, RequestLogFile, setup_logging
 from aura.mcp import build_mcp
@@ -53,9 +53,15 @@ LIBRARY_CACHE = "public, max-age=3600"
 NO_STORE = "private, no-store"
 
 
-def _err(code: str, message: str, status: int) -> JSONResponse:
-    return JSONResponse({"contract_version": CONTRACT_VERSION, "error": message, "code": code},
-                        status_code=status)
+def _err(code: str, message: str, status: int, **extra) -> JSONResponse:
+    return JSONResponse({"contract_version": CONTRACT_VERSION, "error": message, "code": code,
+                         **extra}, status_code=status)
+
+
+def _spent(*meters) -> dict:
+    """Model requests already sent (counted even when the step then failed)."""
+    return {"calls": sum(m.calls for m in meters),
+            "cost_usd": round(sum(m.cost_usd for m in meters), 8)}
 
 
 def _on_modal() -> bool:
@@ -115,9 +121,17 @@ def create_app(
             reqlog.write(row)
             logging.getLogger("aura.model").info("", extra={"fields": {"kind": "model", **row}})
 
+        # Jobs live in this process only: anything still queued/processing was cut off by a
+        # restart and would otherwise poll as "processing" until it expires.
+        await writer.execute(
+            "UPDATE drawings SET status='failed', progress=NULL, error=? "
+            "WHERE status IN ('queued','processing')",
+            ("The server restarted while this file was being processed; upload it again.",))
         total, by_bucket, by_day = store.request_counts()
+        recent_ip, raster_used = store.recent_limits(time.time(), AGENT_PURPOSES, RASTER_PURPOSES)
         budget = Budget(settings, persisted_total=total, persisted_by_bucket=by_bucket,
-                        persisted_by_day=by_day, sink=sink)
+                        persisted_by_day=by_day, sink=sink, recent_ip_agent=recent_ip,
+                        raster_public_used=raster_used)
         client = GeminiClient(settings, budget, transport) if use_gemini else None
         registry = tools.Registry(settings.drawing_dirs(),
                                   {d.id: d for d in extra_drawings or []},
@@ -310,7 +324,7 @@ def create_app(
     @app.get("/drawings/{drawing_id}/{name}")
     async def drawing_file(drawing_id: str, name: str, request: Request):
         if name not in SERVED_FILES:
-            return _err("bad_request", "No such file.", 404)
+            return _err("not_found", "No such file.", 404)
         is_upload = drawing_id.startswith("up-")
         if is_upload:
             row = upload_row(request, drawing_id)
@@ -322,7 +336,7 @@ def create_app(
         d = svc(request).registry.get(drawing_id)
         p = d.file(name) if d is not None else None
         if p is None:
-            return _err("bad_request", "No such file.", 404)
+            return _err("not_found", "No such file.", 404)
         cache = NO_STORE if is_upload or d.source == "upload" else LIBRARY_CACHE
         return FileResponse(p, headers={"cache-control": cache})
 
@@ -340,11 +354,12 @@ def create_app(
     async def post_ask(body: AskRequest, request: Request):
         if (r := not_ready(request, body.drawing_id)) is not None:
             return r
+        meters = {"answer": Meter(), "check": Meter()}
         try:
             async with asyncio.timeout(settings.turn_deadline_s):
-                return JSONResponse(await ask(svc(request), body, caller_of(request)))
+                return JSONResponse(await ask(svc(request), body, caller_of(request), meters))
         except TimeoutError:
-            return _err("timeout", "The answer took too long.", 504)
+            return _err("timeout", "The answer took too long.", 504, **_spent(*meters.values()))
 
     @app.post("/chat")
     async def post_chat(body: ChatRequest, request: Request):
@@ -379,15 +394,16 @@ def create_app(
             return _err("budget_exhausted", "Models are off or the budget is used up; "
                                             "type the question instead.", 429)
         caller = caller_of(request)
+        meter = Meter()
         try:
             async with asyncio.timeout(30):
                 r = await rewrite(s.client, d, body.text, ip_hash=caller.ip_hash,  # type: ignore[arg-type]
-                                  presenter=caller.presenter)
+                                  presenter=caller.presenter, meter=meter)
         except BudgetError as e:
             code = "rate_limited" if e.code == "rate_limited" else "budget_exhausted"
             return _err(code, str(e), 429)
         except (GeminiError, TimeoutError):
-            return _err("timeout", "The rewrite model did not answer in time.", 504)
+            return _err("timeout", "The rewrite model did not answer in time.", 504, **_spent(meter))
         return {"contract_version": CONTRACT_VERSION, "drawing_id": d.id,
                 "detected_lang": r.detected_lang, "blocks": r.blocks,
                 "not_answerable": r.not_answerable, "calls": r.calls,
@@ -398,7 +414,7 @@ def create_app(
         st = svc(request).store
         conv = st.conversation(conv_id) if st else None
         if conv is None:
-            return _err("bad_request", "Unknown conversation.", 404)
+            return _err("not_found", "Unknown conversation.", 404)
         return {"contract_version": CONTRACT_VERSION, **conv}
 
     @app.get("/answers/{answer_id}/evidence.csv")
@@ -406,7 +422,7 @@ def create_app(
         s = svc(request)
         resp = s.store.answer(answer_id) if s.store else None
         if resp is None:
-            return _err("bad_request", "Unknown answer.", 404)
+            return _err("not_found", "Unknown answer.", 404)
         drawing_id = s.store.answer_drawing(answer_id) if s.store else None
         d = s.registry.get(drawing_id) if drawing_id else None
         rooms = {r["room_id"]: r for r in (d.drawing.get("rooms", []) if d else [])}

@@ -38,7 +38,7 @@ def gold_for(d: LoadedDrawing, lang: str, kind: str, subject: str | None, scope:
         ga = g.get("answer") or {}
         if ga.get("kind") != kind:
             continue
-        if kind == "count" and ga.get("subject") != subject:
+        if kind in ("count", "quantity") and ga.get("subject", ga.get("family")) != subject:
             continue
         if not same_scope(g.get("scope") or {"kind": "floor"}, scope):
             continue
@@ -211,10 +211,13 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
     trace.append({"id": "answer", "parent": "q", "title": "Answer",
                   "tag": "estimate" if vision else "count", "body": answer_body,
                   "kind": "model" if vision else "exact", "evidence_ids": answer_ids})
+    evidence: dict = {"boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
+                      "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]}
+    if tr.meta.get("rows") and not tr.boxes:
+        evidence["rows"] = tr.meta["rows"]  # IFC elements without a 2D footprint
     body = _base(question, lang, scope) | {
         "answer": {"kind": "count", "value": value, "subject": subject},
-        "evidence": {"boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
-                     "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]},
+        "evidence": evidence,
         "canonical_en": canonical,
         "method": tr.method,
         "trace": trace,
@@ -276,6 +279,37 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     if gold:
         body["gold"] = gold
     return Built(body, [tr], [], "area")
+
+
+QUANTITY_EN = {"wall_length": "total wall length", "wall_side_area": "net wall side area",
+               "wall_volume": "net wall volume", "slab_volume": "net slab volume"}
+
+
+def quantity(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict,
+             intent_tag: str = "router") -> Built:
+    """An IFC quantity, given exactly as the model states it (never recomputed)."""
+    what = QUANTITY_EN.get(tr.subject or "", tr.subject or "quantity")
+    unit = tr.meta.get("unit", "m")
+    rows = tr.meta.get("rows", [])
+    body = _base(question, lang, scope) | {
+        "answer": {"kind": "quantity", "value": float(tr.value), "unit": unit},
+        "evidence": {"boxes": [], "rooms": [], **({"rows": rows} if rows else {})},
+        "canonical_en": f"What is the {what} {where_en(scope)}",
+        "method": tr.method,
+        "trace": [
+            question_node(question, lang),
+            intent_node(f"quantity · {what} · {scope_text(scope)}", intent_tag),
+            {"id": "read", "parent": "q", "title": "Read the IFC quantities", "tag": "IFC · Qto",
+             "body": tr.summary, "kind": "exact", "tool": tool_meta(tr)},
+            {"id": "answer", "parent": "q", "title": "Answer", "tag": "quantity",
+             "body": f"{tr.value} {unit}, as stated in the model's quantity sets.",
+             "kind": "exact"},
+        ],
+    }
+    gold = gold_for(d, lang, "quantity", tr.subject, scope, float(tr.value))
+    if gold:
+        body["gold"] = gold
+    return Built(body, [tr], [], tr.subject)
 
 
 def text(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, subject: str,

@@ -21,9 +21,9 @@
   "questions": 18792,
   "pct": 99.01
  },
- "runtime_s": 32.3,
+ "runtime_s": 36.2,
  "jobs": 16,
- "measured_at": "2026-11-14T00:28:55+00:00",
+ "measured_at": "2026-11-14T01:12:33+00:00",
  "families": {
   "apartments": {
    "correct": 1040,

@@ -46,6 +46,8 @@ def where_en(scope: dict) -> str:
     k = scope.get("kind", "floor")
     if k == "floor":
         return "on this floor plan"
+    if k == "model":
+        return "in the whole building model"
     if k == "unit":
         return f"in apartment {scope['unit']}"
     if k == "room":
@@ -59,6 +61,7 @@ def scope_text(scope: dict) -> str:
     k = scope.get("kind", "floor")
     return {
         "floor": "whole floor",
+        "model": "whole building model",
         "unit": f"apartment {scope.get('unit')}",
         "room": f"room {scope.get('room_id')}",
         "label": f"rooms labelled {scope.get('label')}",
@@ -68,7 +71,7 @@ def scope_text(scope: dict) -> str:
 
 def _rid(drawing_id: str, tool: str, args: dict) -> str:
     key = json.dumps([drawing_id, tool, args], sort_keys=True, ensure_ascii=False)
-    return "r-" + hashlib.sha1(key.encode()).hexdigest()[:12]
+    return "r-" + hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 def _in_rect(x: float, y: float, r: dict) -> bool:
@@ -353,6 +356,7 @@ class LoadedDrawing:
             labels=[r["name"] for r in rooms],
             room_ids=[r["room_id"] for r in rooms],
             units=[u["id"] for u in self.drawing.get("units", [])],
+            kind=self.drawing.get("kind", "cad_dxf"),
         )
 
     def public_drawing(self) -> dict:
@@ -519,13 +523,41 @@ def _to_result(d: LoadedDrawing, tool: str, args: dict, raw: dict, ms: int,
         ms=ms,
         meta=({"abstain": ans.get("reason")} if is_abstain else
               ({"texts": raw.get("texts", [])} if kind == "text" else {}))
-             | ({"estimate": True, "measured": raw.get("measured")} if raw.get("estimate") else {}),
+             | ({"estimate": True, "measured": raw.get("measured")} if raw.get("estimate") else {})
+             | ({"rows": [{k: r[k] for k in ("id", "name", "value") if r.get(k) is not None}
+                          for r in ev["rows"]]} if ev.get("rows") else {}),
     )
+
+
+def _model_scope_unsupported(d: LoadedDrawing, tool: str, args: dict) -> ToolResult | None:
+    """Only IFC models have a whole-building scope; a single plan never widens to it."""
+    if (args.get("scope") or {}).get("kind") == "model" and not isinstance(d.engine, IfcEngine):
+        return ToolResult(result_id=_rid(d.id, tool, args), tool=tool, args=args, kind="none",
+                          supported=False, meta={"abstain": "not_supported_yet"},
+                          summary="This drawing is one floor plan; it has no whole-building model.")
+    return None
+
+
+def measure(d: LoadedDrawing, family: str, scope: dict | None = None) -> ToolResult:
+    """An IFC quantity (wall length, wall side area, wall/slab volume) given as the model has it."""
+    scope = scope or {"kind": "floor"}
+    args = {"family": family, "scope": scope}
+    if not isinstance(d.engine, IfcEngine):
+        return ToolResult(result_id=_rid(d.id, "room_areas", args), tool="room_areas", args=args,
+                          kind="none", supported=False, meta={"abstain": "not_supported_yet"},
+                          summary="Lengths and volumes are only read from IFC models.")
+    t0 = time.perf_counter()
+    raw = d.engine.answer(family, scope, None)
+    tr = _to_result(d, "room_areas", args, raw, _ms(t0), "quantity", family)
+    unit = (raw.get("answer") or {}).get("unit")
+    return tr.model_copy(update={"meta": tr.meta | ({"unit": unit} if unit else {})})
 
 
 def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> ToolResult:
     scope = scope or {"kind": "floor"}
     args = {"subject": subject, "scope": scope}
+    if (bad := _model_scope_unsupported(d, "count_objects", args)) is not None:
+        return bad
     t0 = time.perf_counter()
     if not d.engine.supports(subject):
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects",
@@ -536,6 +568,28 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
     return _to_result(d, "count_objects", args, raw, _ms(t0), "count", subject)
 
 
+def count_rooms_labelled(d: LoadedDrawing, label: str, scope: dict | None = None) -> ToolResult:
+    """Rooms with one printed label inside a scope (e.g. bedrooms in apartment A)."""
+    scope = scope or {"kind": "floor"}
+    args = {"subject": "room", "label": label, "scope": scope}
+    if (bad := _model_scope_unsupported(d, "count_objects", args)) is not None:
+        return bad
+    t0 = time.perf_counter()
+    rows = d.engine.room_list(scope)
+    hits = [r for r in rows if r["name"].casefold() == label.casefold()]
+    n = len(hits)
+    names = sorted({r["name"] for r in rows})
+    summary = (f"{n} rooms labelled {hits[0]['name'] if hits else label} {where_en(scope)}."
+               if hits or label in names else
+               f"No room is labelled {label} {where_en(scope)}; labels there: {', '.join(names)}.")
+    return ToolResult(
+        result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+        kind="count", subject="room", value=n, numbers=[float(n)],
+        rooms=[EvidenceRoom(room_id=r["room_id"], included=True,
+                            area_m2=float(r.get("area_m2") or 0)) for r in hits],
+        summary=summary, ms=_ms(t0))
+
+
 def room_areas(d: LoadedDrawing, scope: dict | None = None,
                overrides: list[dict] | None = None) -> ToolResult:
     scope = scope or {"kind": "floor"}
@@ -543,6 +597,8 @@ def room_areas(d: LoadedDrawing, scope: dict | None = None,
     args: dict[str, Any] = {"scope": scope}
     if overrides:
         args["overrides"] = overrides
+    if (bad := _model_scope_unsupported(d, tool, args)) is not None:
+        return bad
     t0 = time.perf_counter()
     raw = d.engine.answer("area", scope, overrides)
     return _to_result(d, tool, args, raw, _ms(t0), "area", None)
@@ -554,17 +610,23 @@ def what_if(d: LoadedDrawing, scope: dict | None, overrides: list[dict]) -> Tool
 
 def list_rooms(d: LoadedDrawing, scope: dict | None = None) -> ToolResult:
     scope = scope or {"kind": "floor"}
+    if (bad := _model_scope_unsupported(d, "list_rooms", {"scope": scope})) is not None:
+        return bad
     t0 = time.perf_counter()
     rows = d.engine.room_list(scope)
     rooms = [EvidenceRoom(room_id=r["room_id"], included=not r.get("outdoor", False),
                           area_m2=float(r.get("area_m2") or 0)) for r in rows]
+    by_label: dict[str, int] = {}
+    for r in rows:
+        by_label[r["name"]] = by_label.get(r["name"], 0) + 1
     return ToolResult(
         result_id=_rid(d.id, "list_rooms", {"scope": scope}), tool="list_rooms",
         args={"scope": scope}, kind="rooms", rooms=rooms,
-        numbers=[float(r.get("area_m2") or 0) for r in rows] + [float(len(rows))],
-        summary=f"{len(rows)} rooms {where_en(scope)}: "
-                + ", ".join(f"{r['room_id']} {r['name']}" for r in rows[:30]),
-        ms=_ms(t0), meta={"rooms": rows},
+        numbers=[float(r.get("area_m2") or 0) for r in rows] + [float(len(rows))]
+                + [float(v) for v in by_label.values()],
+        summary=f"{len(rows)} rooms {where_en(scope)}; by label: "
+                + ", ".join(f"{k} {v}" for k, v in sorted(by_label.items())),
+        ms=_ms(t0), meta={"rooms": rows, "by_label": by_label},
     )
 
 
@@ -636,6 +698,9 @@ TOOL_DECLARATIONS: list[dict] = [
                 "subject": {"type": "string", "enum": list(BOX_SUBJECTS) + ["room", "apartment"]},
                 "scope": {"type": "string",
                           "description": "floor | unit:<letter> | room:<id> | label:<printed label>"},
+                "label": {"type": "string",
+                          "description": "Only with subject 'room': count rooms with this printed "
+                                         "label inside the scope (use a label from list_rooms)."},
             },
             "required": ["subject"],
         },
@@ -651,7 +716,8 @@ TOOL_DECLARATIONS: list[dict] = [
     },
     {
         "name": "list_rooms",
-        "description": "List rooms (id, printed label, apartment, area) in a scope.",
+        "description": "List rooms (id, printed label, apartment, area) in a scope, with the "
+                       "number of rooms per printed label.",
         "parameters": {"type": "object", "properties": {"scope": {"type": "string"}}},
     },
     {
@@ -667,23 +733,39 @@ TOOL_DECLARATIONS: list[dict] = [
                        "Never write a number that is not in a tool result.",
         "parameters": {
             "type": "object",
-            "properties": {"result_id": {"type": "string"}, "explanation": {"type": "string"}},
+            "properties": {
+                "result_id": {"type": "string"},
+                "explanation": {"type": "string"},
+                "label": {"type": "string",
+                          "description": "Only when result_id names a list_rooms result: the "
+                                         "printed room label whose count answers the question."},
+            },
             "required": ["result_id", "explanation"],
         },
     },
 ]
 
 
-def parse_scope_arg(s: str | None) -> dict:
-    """'floor' | 'unit:A' | 'room:3.04' | 'label:Bain' -> contract Scope."""
-    if not s or s.strip().lower() in ("floor", "whole floor", ""):
+UNIT_ALIASES = {"unit", "apartment", "flat", "apt", "appartement", "appartamento", "wohnung",
+                "asunto", "dwelling"}
+
+
+def parse_scope_arg(s: str | None) -> dict | None:
+    """'floor' | 'unit:A' | 'room:3.04' | 'label:Bain' (| 'model') -> contract Scope.
+    Anything else is None: the caller must reject it, never widen it to the whole floor."""
+    if s is None or not str(s).strip() or str(s).strip().lower() in ("floor", "whole floor"):
         return {"kind": "floor"}
-    k, _, v = s.partition(":")
+    s = str(s).strip()
+    if s.lower() in ("model", "building", "whole building"):
+        return {"kind": "model"}
+    k, sep, v = s.partition(":")
+    if not sep:
+        k, _, v = s.partition(" ")
     k, v = k.strip().lower(), v.strip()
-    if k == "unit" and v:
-        return {"kind": "unit", "unit": v.upper()[:1]}
+    if k in UNIT_ALIASES and re.fullmatch(r"[A-Za-z]", v):
+        return {"kind": "unit", "unit": v.upper()}
     if k == "room" and v:
         return {"kind": "room", "room_id": v}
     if k == "label" and v:
         return {"kind": "label", "label": v}
-    return {"kind": "floor"}
+    return None
