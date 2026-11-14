@@ -149,6 +149,11 @@ class Store:
         return [{"message": r["message"], "response": json.loads(r["response"])}
                 for r in reversed(rows)]
 
+    def spend_totals(self) -> dict[str, Any]:
+        """All model requests ever recorded in this database and their booked USD cost."""
+        r = self._q("SELECT COUNT(*) n, COALESCE(SUM(cost_usd), 0) usd FROM requests")[0]
+        return {"model_calls_total": int(r["n"]), "cost_usd_total": round(float(r["usd"]), 6)}
+
     def stats(self, day: str) -> dict[str, Any]:
         rows = self._q(
             "SELECT calls, check_calls, check_cost_usd, cost_usd FROM answers WHERE day=?", (day,))

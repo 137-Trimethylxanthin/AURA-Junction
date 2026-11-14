@@ -23,10 +23,6 @@ fi
 export AURA_SIDECAR_URL="${AURA_SIDECAR_URL:-http://127.0.0.1:${JUNCTION_PORT:-8090}}"
 export AURA_SIDECAR_TOKEN_FILE="${AURA_SIDECAR_TOKEN_FILE:-${JUNCTION_TOKEN_FILE:-$root/agent-service/.data/token}}"
 export AURA_SIDECAR_MODEL="${AURA_SIDECAR_MODEL:-${JUNCTION_MODEL:-gemini-3.8-flash}}"
-# Every local request comes from one IP; the public per-IP/day agent caps (3/h, 15/day) would stall a demo.
-# The event-wide request cap (AURA_EVENT_CAP) still bounds spend.
-export AURA_AGENT_RUNS_PER_IP_HOUR="${AURA_AGENT_RUNS_PER_IP_HOUR:-60}"
-export AURA_AGENT_RUNS_PER_DAY="${AURA_AGENT_RUNS_PER_DAY:-200}"
 
 host="${HOST:-127.0.0.1}"
 port="${PORT:-8000}"

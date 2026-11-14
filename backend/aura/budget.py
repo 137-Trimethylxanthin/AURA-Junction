@@ -5,12 +5,14 @@ Every model request goes through `Budget.reserve(purpose, bucket, ...)`, then ex
 sent). Reservation is atomic under a lock, so concurrent requests near a cap cannot overshoot.
 
 Counters:
+Every cap is "0 = unlimited" (the default); counting and cost booking happen regardless.
+
 - event total: `seed + persisted requests + pending`. Nothing exceeds `event_cap`, presenter
   token included. The seed is configuration, never written to the DB, so restarts never add it twice.
 - daily cap: public-bucket requests per Europe/Helsinki day.
 - dev / measurement buckets: their own caps.
 - per IP (public bucket only, skipped with the presenter token): agent and router-miss requests
-  per rolling hour; raster requests need the presenter token unless `raster_public_cap` > 0.
+  per rolling hour; raster requests without the presenter token: `raster_public_cap` (-1 = never).
   Checks are not limited per IP: they are cached per (drawing, subject) and bounded by the daily cap.
 - kill switch: `AURA_MODELS=off`, read on every reserve.
 """
@@ -48,7 +50,20 @@ PRICES: dict[str, tuple[float, float]] = {
     "gemini-4-hydrogen": (1.50, 7.50),
     "gemini-4-argon": (2.00, 10.00),
     "gemini-4-carbon": (2.00, 10.00),
+    # voice (aura/voice.py); TTS at the 2027 list price, the dearer of the two published
+    "gemini-3.5-transcribe": (2.00, 12.00),
+    "gemini-3.8-flash-lite-tts": (1.00, 12.00),
 }
+
+
+def _over(value: int, cap: int) -> bool:
+    """True when `value` exceeds a positive cap; a cap <= 0 means unlimited."""
+    return cap > 0 and value > cap
+
+
+def _under(value: int, cap: int) -> bool:
+    """True when one more fits under a positive cap; a cap <= 0 means unlimited."""
+    return cap <= 0 or value < cap
 
 
 def cost_usd(model: str, input_tokens: int, output_tokens: int = 0) -> float:
@@ -278,7 +293,7 @@ class Budget:
 
     def can_spend(self) -> bool:
         """Cheap pre-flight for the UI badge: models on and event cap not reached."""
-        return models_enabled() and self.event_used() < self.s.event_cap
+        return models_enabled() and _under(self.event_used(), self.s.event_cap)
 
     # ---- reserve / commit / release --------------------------------------------------------
 
@@ -297,31 +312,32 @@ class Budget:
         now = self._clock()
         today = self.day(now)
         with self._lock:
-            if self._event_used_locked() + slots > self.s.event_cap:
+            if _over(self._event_used_locked() + slots, self.s.event_cap):
                 raise BudgetError("budget_exhausted", "The event-wide model budget is used up.")
             pending_in = [r for r in self._pending.values() if r.bucket == bucket]
             pend_slots = sum(r.slots for r in pending_in)
             if bucket == "dev":
-                if self._by_bucket["dev"] + pend_slots + slots > self.s.dev_cap:
+                if _over(self._by_bucket["dev"] + pend_slots + slots, self.s.dev_cap):
                     raise BudgetError("budget_exhausted", "The development budget is used up.")
             elif bucket == "measurement":
-                if self._by_bucket["measurement"] + pend_slots + slots > self.s.measurement_cap:
+                if _over(self._by_bucket["measurement"] + pend_slots + slots, self.s.measurement_cap):
                     raise BudgetError("budget_exhausted", "The measurement budget is used up.")
             else:
                 pend_today = sum(r.slots for r in pending_in if r.day == today)
-                if self._by_day[today] + pend_today + slots > self.s.daily_cap:
+                if _over(self._by_day[today] + pend_today + slots, self.s.daily_cap):
                     raise BudgetError("budget_exhausted", "Today's model budget is used up.")
                 if purpose == "agent_run":
                     pend_runs_today = sum(
                         1 for r in pending_in if r.day == today and r.purpose == "agent_run"
                     )
-                    if self._agent_runs_by_day[today] + pend_runs_today >= self.s.agent_runs_per_day:
+                    if not _under(self._agent_runs_by_day[today] + pend_runs_today, self.s.agent_runs_per_day):
                         raise BudgetError(
                             "budget_exhausted", "Today's deep-agent run budget is used up."
                         )
                 if not presenter:
                     if purpose in RASTER_PURPOSES:
-                        if self._raster_public >= self.s.raster_public_cap:
+                        cap = self.s.raster_public_cap
+                        if cap < 0 or not _under(self._raster_public, cap):
                             raise BudgetError(
                                 "presenter_required", "Raster analysis needs the presenter token."
                             )
@@ -330,7 +346,7 @@ class Budget:
                         q = self._ip_agent_runs[ip_hash]
                         while q and now - q[0] > 3600:
                             q.popleft()
-                        if len(q) >= self.s.agent_runs_per_ip_hour:
+                        if not _under(len(q), self.s.agent_runs_per_ip_hour):
                             raise BudgetError(
                                 "rate_limited", "Too many deep-agent runs from this address."
                             )
@@ -339,7 +355,7 @@ class Budget:
                         q = self._ip_agent[ip_hash]
                         while q and now - q[0] > 3600:
                             q.popleft()
-                        if len(q) >= self.s.ip_agent_per_hour:
+                        if not _under(len(q), self.s.ip_agent_per_hour):
                             raise BudgetError(
                                 "rate_limited", "Too many model questions from this address."
                             )
@@ -357,7 +373,8 @@ class Budget:
             self._next_id += 1
             if self.ledger is not None:
                 try:
-                    near = self._event_used_locked() + slots >= self.s.event_cap - NEAR_CAP
+                    near = self.s.event_cap > 0 and (
+                        self._event_used_locked() + slots >= self.s.event_cap - NEAR_CAP)
                     res.row_id = self.ledger.reserve(res, near)
                 except Exception as e:  # fail closed: an uncounted request is never sent
                     if res.purpose in RASTER_PURPOSES and not presenter and bucket == "public":
@@ -450,7 +467,7 @@ class Budget:
                 self._by_day[day] += n
                 if purpose == "agent_run":
                     self._agent_runs_by_day[day] += 1
-            near = self._event_used_locked() >= self.s.event_cap - NEAR_CAP
+            near = self.s.event_cap > 0 and self._event_used_locked() >= self.s.event_cap - NEAR_CAP
 
         total_cost = cost_usd(model, input_tokens, output_tokens) if n > 0 else 0.0
         primary = RequestRecord(
