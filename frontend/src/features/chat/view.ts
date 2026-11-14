@@ -95,7 +95,10 @@ export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, 
   }
   if (d.value === null) return null
   if (resp.answer.kind === 'count') return [fmtCount(d.value, lang), noun(resp.answer.subject, d.value, lang)]
-  if (resp.answer.kind === 'area') return [fmtArea(d.value, lang), 'm²']
+  if (resp.answer.kind === 'area')
+    return resp.answer.approximate
+      ? [`≈ ${fmtCount(Math.round(d.value), lang)}`, 'm² (estimate)']
+      : [fmtArea(d.value, lang), 'm²']
   if (resp.answer.kind === 'quantity')
     return [fmtArea(d.value, lang), { m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]]
   return null
@@ -117,6 +120,7 @@ export function sentence(resp: AskResponse, d: Derived, drawing: Drawing, lang: 
   if (resp.answer.kind !== 'area') return ''
   const byId = new Map(drawing.rooms.map((r) => [r.room_id, r]))
   const parts = [t(lang, 'area_where', { where })]
+  if (resp.answer.approximate) parts.push(t(lang, 'area_estimate_note'))
   if (resp.evidence.rooms.length > 0) {
     parts.push(t(lang, 'rooms_included', { n: fmtCount(d.includedRooms.length, lang) }))
   } else if (resp.method === 'agent_estimate') {

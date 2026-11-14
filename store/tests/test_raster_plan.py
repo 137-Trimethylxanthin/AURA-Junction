@@ -185,3 +185,35 @@ def test_interpret_gives_a_nominal_frame_polygons_walls_and_is_idempotent(scan):
 
     RP.drop_nominal_frame(db, FID)                                              # what raster_rooms does on a re-run
     assert db.one("select 1 as x from jstore.frame where file_id = :f", f=FID) is None
+
+
+def test_the_plan_of_a_scan_is_a_vector_drawing_with_estimate_areas(scan):
+    """aura_model: plan.svg of an image plan is drawn from the model (walls, rooms, openings), never the scan;
+    the scan stays the original; rooms carry polygons and areas under a nominal scale are estimates."""
+    from jstore.service import aura_model as M
+    db, _ = scan
+    db.run("update jstore.page set to_image = cast('{1,0,0,0,1,0}' as double precision[]) where file_id = :f", f=FID)
+    RP.interpret(db, db.one("select * from jstore.source_file where file_id = :f", f=FID))
+    m = M.build(db, "test_scan")
+    assert m.vector_scan and m.nominal and m.walls, (m.base, len(m.rooms), [r["points"] for r in m.rooms])
+    doc = M.drawing_doc(m)
+    assert doc["images"] == {"rebuilt": "/drawings/test_scan/plan.svg", "original": "/drawings/test_scan/original.png",
+                             "original_alignment": "exact"}
+    assert doc["m_per_pct_x"] > 0 and len(doc["rooms"]) == 2
+    assert all(len(r["points"]) >= 4 and r["area_source"] == "estimate" and r["area_m2"] > 0 for r in doc["rooms"])
+    svg = M.plan_svg(db, m)
+    assert "<image" not in svg and "data:image" not in svg
+    assert 'data-plan="vector-scan"' in svg and 'data-scale="nominal"' in svg and M.ESTIMATE_NOTE in svg
+    for look in (f'fill="{M.WALL_FILL}"', f'fill="#ffffff" stroke="{M.WINDOW_STROKE}"', f'fill="none" stroke="{M.DOOR_STROKE}"',
+                 f'fill="none" stroke="{M.FIXTURE_STROKE}"'):
+        assert look in svg, look                       # the styles the 3D view reads its layers by
+    assert svg.count("<polygon") == 2 and ">Kitchen<" in svg and "≈ " in svg
+    # the Kitchen polygon in the drawing is the room outline in percent of the scan (620 x 400 px)
+    k = next(r for r in doc["rooms"] if r["name"] == "Kitchen")
+    xs, ys = [p[0] for p in k["points"]], [p[1] for p in k["points"]]
+    assert (min(xs), max(xs)) == pytest.approx((100 / 6.2, 300 / 6.2), abs=0.05)
+    assert (min(ys), max(ys)) == pytest.approx((100 / 4.0, 250 / 4.0), abs=0.05)
+
+    db.run("update jstore.entity set status = 'retired' where drawing_key = 'test_scan' and kind in ('room', 'wall')")
+    bare = M.build(db, "test_scan")                    # no model of the plan: its picture only, nothing to compare
+    assert not bare.vector_scan and "original" not in M.drawing_doc(bare)["images"]

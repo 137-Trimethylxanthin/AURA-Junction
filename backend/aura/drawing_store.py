@@ -660,7 +660,8 @@ def _plan_images(drawing_id: str, out_dir: Path, images: dict, svg: str | None) 
         tmp.write_text(sized_svg(svg), encoding="utf-8")
         os.replace(tmp, path)
         return {"rebuilt": f"{base}/plan.svg", "original": f"{base}/original.png", "original_alignment": "exact"}
-    if str(images.get("rebuilt") or "").endswith("/plan.svg") and (out_dir / "original.png").is_file():
+    if (str(images.get("rebuilt") or "").endswith("/plan.svg") and (out_dir / "original.png").is_file()
+            and path.is_file() and 'data-plan="vector-scan"' in path.read_text(encoding="utf-8")[:600]):
         path.unlink(missing_ok=True)                 # the model went away on a later interpretation
         return {"rebuilt": f"{base}/original.png"}
     if images.get("original") and images.get("original") == images.get("rebuilt"):

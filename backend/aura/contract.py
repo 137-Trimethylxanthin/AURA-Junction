@@ -191,6 +191,7 @@ class AnswerArea(_M):
     kind: Literal["area"] = "area"
     value: float
     unit: Literal["m2"] = "m2"
+    approximate: bool | None = None  # measured under an estimated scale (a scan that states none): show "≈"
 
 
 class AnswerAbstain(_M):

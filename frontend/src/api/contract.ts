@@ -482,7 +482,7 @@ export interface AnswerNote {
 
 export type Answer =
   | { kind: 'count'; value: number; subject: Subject }
-  | { kind: 'area'; value: number; unit: 'm2' }
+  | { kind: 'area'; value: number; unit: 'm2'; approximate?: boolean }
   | { kind: 'abstain'; reason: AbstainReason; where_to_find?: string }
   /** 1.1: a measured quantity given as is (IFC wall length, net side area, net volume); never recomputed. */
   | { kind: 'quantity'; value: number; unit: 'm' | 'm2' | 'm3' }
