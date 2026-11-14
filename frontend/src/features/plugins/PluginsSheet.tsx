@@ -79,6 +79,7 @@ export function PluginsSheet() {
   const open = useAppStore((s) => s.ui.pluginsOpen)
   const turn = useAppStore(selectActiveTurn)
   const drawing = useAppStore(selectDrawing)
+  const activeProject = useAppStore((s) => s.activeProject)
   const resp = turn?.response
   const evidenceCount = resp
     ? resp.evidence.boxes.length + resp.evidence.rooms.length + (resp.evidence.rows?.length ?? 0)
@@ -86,7 +87,7 @@ export function PluginsSheet() {
   const base = resolveLiveBase()
   const mcpSnippet = `{\n  "mcpServers": {\n    "aura": { "url": "${base}/mcp/" }\n  }\n}`
   const restSnippet = `curl -X POST ${base}/ask \\\n  -H 'content-type: application/json' \\\n  -d '{ "drawing_id": "${drawing.id}",\n        "question": "Montako ikkunaa?" }'`
-  const blocks = promptBlocksFor(drawing)
+  const blocks = promptBlocksFor(drawing, activeProject)
 
   const download = () => {
     if (!turn || !resp) return
@@ -155,7 +156,7 @@ export function PluginsSheet() {
                       type="button"
                       title={b.text}
                       onClick={() => fillBlock(b)}
-                      className="inline-flex min-h-10 items-center rounded-lg border border-info/25 bg-info-surface px-3 text-xs font-semibold text-info outline-none hover:border-info/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+                      className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-info/25 bg-info-surface px-3 text-xs font-semibold text-info outline-none hover:border-info/50 focus-visible:ring-3 focus-visible:ring-ring/50"
                     >
                       {tu(PB_LABEL[b.label] ?? 'pb_list')}
                     </button>

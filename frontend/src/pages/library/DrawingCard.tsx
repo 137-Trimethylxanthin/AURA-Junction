@@ -88,21 +88,20 @@ function CardBody({
           <span
             aria-hidden
             className={cn(
-              "num absolute top-2.5 left-2.5 inline-flex size-6 items-center justify-center rounded-full text-xs font-semibold shadow-xs transition-colors",
+              "num absolute top-2.5 left-2.5 inline-flex h-6 min-w-6 max-w-[calc(100%-1.25rem)] items-center justify-center rounded-full text-xs font-semibold shadow-xs transition-colors",
               selected
-                ? "bg-user text-primary-foreground ring-2 ring-background"
-                : "border border-input bg-background/90 text-muted-foreground"
+                ? "gap-1 bg-user px-2 text-primary-foreground ring-2 ring-background"
+                : "size-6 border border-input bg-background/90 text-muted-foreground"
             )}
           >
-            {selected ? selectedOrder : <CheckIcon className="size-3.5 opacity-0" />}
+            {selected ? (
+              <span className="truncate">
+                {floorLabel ? `${selectedOrder} · ${floorLabel}` : selectedOrder}
+              </span>
+            ) : (
+              <CheckIcon className="size-3.5 opacity-0" />
+            )}
           </span>
-        ) : floorLabel ? (
-          <Badge
-            variant="secondary"
-            className="num absolute top-2.5 left-2.5 bg-background/90 text-foreground shadow-xs"
-          >
-            {floorLabel}
-          </Badge>
         ) : null}
       </div>
       <CardHeader>
@@ -181,6 +180,7 @@ export function DrawingCard({
   selectedOrder = null,
   floorLabel = null,
   onToggleSelect,
+  onOpen,
 }: {
   d: DrawingSummary
   offline?: boolean
@@ -188,6 +188,7 @@ export function DrawingCard({
   selectedOrder?: number | null
   floorLabel?: string | null
   onToggleSelect?: (d: DrawingSummary) => void
+  onOpen?: (d: DrawingSummary) => void
 }) {
   const { tu } = useUi()
   const title = displayDrawingTitle(d)
@@ -226,6 +227,7 @@ export function DrawingCard({
       {/* Press feedback on pointer-down (scale), a gentle lift for fine pointers only. */}
       <Link
         to={`/d/${encodeURIComponent(d.id)}`}
+        onClick={() => onOpen?.(d)}
         aria-label={
           d.subtitle
             ? tu("card_open_sub", { title, subtitle: d.subtitle })

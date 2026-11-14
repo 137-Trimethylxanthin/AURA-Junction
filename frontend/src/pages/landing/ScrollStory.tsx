@@ -2,7 +2,6 @@ import { useRef, useState, type ReactNode } from "react"
 import {
   motion,
   useMotionValueEvent,
-  useReducedMotion,
   useScroll,
   useTransform,
   type MotionValue,
@@ -22,6 +21,7 @@ import { BOXES, GOLD } from "./demoData"
 import { factById } from "./facts"
 import { PlanTile } from "./PlanTile"
 import { Reveal, RevealItem } from "./motion"
+import { usePrefersReducedMotion } from "./springs"
 
 /**
  * "How it works", told on the real plan. On a laptop the plan stays pinned while the page scrolls
@@ -90,7 +90,7 @@ const DOT = { success: "bg-success", info: "bg-info", warning: "bg-warning" }
 
 export function ScrollStory() {
   const wide = useMediaQuery("(min-width: 1024px) and (min-height: 640px)")
-  const reduce = useReducedMotion()
+  const reduce = usePrefersReducedMotion()
   const steps = useSteps()
   return wide && !reduce ? (
     <Pinned steps={steps} />

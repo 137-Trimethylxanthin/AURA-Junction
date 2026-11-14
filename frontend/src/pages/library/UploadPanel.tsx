@@ -22,11 +22,12 @@ import {
   TriangleAlertIcon,
 } from "lucide-react"
 import { ApiError, deleteDrawing, getDrawingStatus } from "@/api/client"
-import type { DrawingStatus, Lang } from "@/api/contract"
+import { isProjectBundle, type DrawingStatus } from "@/api/contract"
 import {
   ACCEPT,
   UPLOAD_CAPS,
   checkFile,
+  myProjects,
   myUploads,
   presenter,
   uploadErrorText,
@@ -74,13 +75,6 @@ const UPLOAD_DEADLINE_MS = 3 * 60_000
 /** Files taken from one drop or pick; the rest are listed as not uploaded. */
 const UPLOAD_BATCH = 5
 
-const BUNDLE_COPY: Record<Lang, string> = {
-  en: "Bundle into house project",
-  fr: "Regrouper en projet maison",
-  fi: "Yhdistä taloprojektiksi",
-  de: "Als Hausprojekt bündeln",
-}
-
 export interface ReadyUploadSummary {
   id: string
   name: string
@@ -91,6 +85,7 @@ export interface UploadPanelProps {
   onReadyUploadsChange?: (uploads: ReadyUploadSummary[]) => void
   onBundleUploads?: (uploadIds: string[]) => void
   onProjectsDiscovered?: () => void
+  onOpenUpload?: (uploadId: string) => void
 }
 
 type Row = StoredUpload & {
@@ -109,46 +104,24 @@ let uploadSeq = 0
 /** Files named by the rejection lines (a batch overflow line names several files). */
 const rejectedCount = (r: { n?: number }[]) => r.reduce((k, x) => k + (x.n ?? 1), 0)
 
-/** Discover server-created multi-page PDF projects once a PDF upload finishes processing. */
+/** Discover server-created multi-page PDF projects & sibling drawings once a PDF upload finishes processing. */
 async function discoverServerProjects(base: string, onProjectsDiscovered?: () => void) {
   try {
     const resp = await fetch(`${base.replace(/\/+$/, "")}/projects`)
-    if (!resp.ok) return
-    const body: unknown = await resp.json()
-    const projects =
-      body && typeof body === "object" && Array.isArray((body as { projects?: unknown }).projects)
-        ? (body as { projects: unknown[] }).projects
-        : []
-    if (!projects.length) return
-    const raw = globalThis.localStorage?.getItem("aura.projects")
-    const current: unknown[] = raw ? (JSON.parse(raw) as unknown[]) : []
-    const existingIds = new Set(
-      Array.isArray(current)
-        ? current
-            .map((p) => (p && typeof p === "object" ? (p as { id?: unknown }).id : undefined))
-            .filter((x): x is string => typeof x === "string")
-        : []
-    )
-    const fresh = projects.filter(
-      (p) =>
-        !!p &&
-        typeof p === "object" &&
-        typeof (p as { id?: unknown }).id === "string" &&
-        Array.isArray((p as { floors?: unknown }).floors) &&
-        !existingIds.has((p as { id: string }).id)
-    )
-    if (fresh.length > 0) {
-      globalThis.localStorage?.setItem(
-        "aura.projects",
-        JSON.stringify([...fresh, ...(Array.isArray(current) ? current : [])])
-      )
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new Event("aura:projects"))
+    if (resp.ok) {
+      const body: unknown = await resp.json()
+      const projects =
+        body && typeof body === "object" && Array.isArray((body as { projects?: unknown }).projects)
+          ? (body as { projects: unknown[] }).projects.filter(isProjectBundle)
+          : []
+      if (projects.length > 0) {
+        myProjects.syncFromServer(projects)
       }
-      onProjectsDiscovered?.()
     }
   } catch {
     /* ignore network / 404 / storage errors */
+  } finally {
+    onProjectsDiscovered?.()
   }
 }
 
@@ -348,7 +321,15 @@ function UiText({ k }: { k: UiKey }) {
   return <>{useUi().tu(k)}</>
 }
 
-function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
+function UploadRow({
+  r,
+  onDelete,
+  onOpen,
+}: {
+  r: Row
+  onDelete: (r: Row) => void
+  onOpen?: (uploadId: string) => void
+}) {
   const { tu } = useUi()
   const pct =
     r.progress !== undefined
@@ -386,7 +367,9 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
       <AttachmentActions className="gap-1">
         {r.phase === "ready" ? (
           <Button variant="outline" asChild>
-            <Link to={`/d/${encodeURIComponent(r.id)}`}>{tu("open")}</Link>
+            <Link to={`/d/${encodeURIComponent(r.id)}`} onClick={() => onOpen?.(r.id)}>
+              {tu("open")}
+            </Link>
           </Button>
         ) : null}
         {r.delete_token ? (
@@ -446,6 +429,7 @@ export function UploadPanel({
   onReadyUploadsChange,
   onBundleUploads,
   onProjectsDiscovered,
+  onOpenUpload,
 }: UploadPanelProps) {
   const { tu } = useUi()
   return (
@@ -465,6 +449,7 @@ export function UploadPanel({
               onReadyUploadsChange={onReadyUploadsChange}
               onBundleUploads={onBundleUploads}
               onProjectsDiscovered={onProjectsDiscovered}
+              onOpenUpload={onOpenUpload}
             />
           </TooltipProvider>
         ) : (
@@ -487,13 +472,15 @@ function Uploader({
   onReadyUploadsChange,
   onBundleUploads,
   onProjectsDiscovered,
+  onOpenUpload,
 }: {
   base: string
   onReadyUploadsChange?: (uploads: ReadyUploadSummary[]) => void
   onBundleUploads?: (uploadIds: string[]) => void
   onProjectsDiscovered?: () => void
+  onOpenUpload?: (uploadId: string) => void
 }) {
-  const { lang, tu, tn } = useUi()
+  const { tu, tn } = useUi()
   const { rows, start, remove } = useUploads(base, onProjectsDiscovered)
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
@@ -703,7 +690,7 @@ function Uploader({
                 data-bundle-uploads-toggle
               >
                 <LayersIcon data-icon="inline-start" />
-                {BUNDLE_COPY[lang]}
+                {tu("proj_bundle_uploads")}
               </Button>
             ) : onBundleUploads && readyUploads.length >= 2 ? (
               <Button
@@ -714,14 +701,14 @@ function Uploader({
                 data-bundle-uploads
               >
                 <LayersIcon data-icon="inline-start" />
-                {BUNDLE_COPY[lang]}
+                {tu("proj_bundle_uploads")}
               </Button>
             ) : null}
           </div>
           <ul className="flex flex-col gap-2" aria-label={tu("your_uploads")}>
             {rows.map((r) => (
               <li key={r.uid ?? r.id} data-upload={r.phase} className={r.leaving ? "exit-fall" : "enter-rise"}>
-                <UploadRow r={r} onDelete={(x) => void remove(x)} />
+                <UploadRow r={r} onDelete={(x) => void remove(x)} onOpen={onOpenUpload} />
               </li>
             ))}
           </ul>

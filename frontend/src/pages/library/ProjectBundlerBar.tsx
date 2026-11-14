@@ -11,8 +11,19 @@ import {
   UnlinkIcon,
   XIcon,
 } from "lucide-react"
-import type { Credit, DrawingSummary, Lang } from "@/api/contract"
-import { displayDrawingTitle } from "@/api/library"
+import type {
+  Credit,
+  DrawingKind,
+  DrawingSummary,
+  Lang,
+  ProjectBundle,
+  ProjectFloor,
+} from "@/api/contract"
+import {
+  displayDrawingTitle,
+  inferFloorOrderAndLabel,
+  myProjects,
+} from "@/api/library"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -20,24 +31,11 @@ import { Input } from "@/components/ui/input"
 import { useUi } from "@/i18n/uiLang"
 import { actions } from "@/store"
 
-export interface ProjectFloorItem {
-  drawing_id: string
-  label: string
-  order: number
-}
-
-export interface ProjectBundleItem {
-  id: string
-  title: string
-  floors: ProjectFloorItem[]
-  auto_matched?: boolean
-  created_at?: string
-}
-
 export interface SelectablePlan {
   id: string
   title: string
   subtitle?: string
+  kind?: DrawingKind
   credit?: Credit
   source?: "library" | "upload"
   project_id?: string
@@ -45,323 +43,123 @@ export interface SelectablePlan {
   floor_order?: number
 }
 
-interface Copy {
-  sectionTitle: string
-  sectionDesc: string
-  autoBadge: string
-  floorsN: (n: number) => string
-  openProject: string
+export interface SelectionFloorMeta {
+  order: number
+  label: string
+}
+
+interface ExtraCopy {
   editProject: string
-  ungroup: string
-  groupBtn: string
-  cancelBtn: string
-  titleLabel: string
-  titlePlaceholder: string
-  floorLabel: string
   moveUp: (label: string) => string
   moveDown: (label: string) => string
   removePlan: (title: string) => string
-  selectHint: string
-  selectedN: (n: number) => string
-  saveBtn: string
-  savedToast: (n: number, title: string) => string
-  ungroupedToast: (title: string) => string
   uploadsPickLabel: string
 }
 
-const COPY: Record<Lang, Copy> = {
+const EXTRA_COPY: Record<Lang, ExtraCopy> = {
   en: {
-    sectionTitle: "House & building projects",
-    sectionDesc:
-      "Plans grouped by building so you can switch floors fast and match stairs, shafts or apartments across sheets.",
-    autoBadge: "Auto-matched",
-    floorsN: (n) => `${n} floors`,
-    openProject: "Open project",
     editProject: "Edit",
-    ungroup: "Ungroup",
-    groupBtn: "Group plans into a project",
-    cancelBtn: "Cancel grouping",
-    titleLabel: "Project name",
-    titlePlaceholder: "e.g. Villa Nord",
-    floorLabel: "Floor label",
     moveUp: (l) => `Move ${l} up`,
     moveDown: (l) => `Move ${l} down`,
     removePlan: (t) => `Remove ${t} from project`,
-    selectHint: "Select 2 or more plans below to bundle them into a multi-floor project.",
-    selectedN: (n) => `${n} plans selected`,
-    saveBtn: "Save project",
-    savedToast: (n, title) => `Grouped ${n} floors into ${title}`,
-    ungroupedToast: (title) => `Ungrouped ${title}`,
     uploadsPickLabel: "Your ready uploads",
   },
   fr: {
-    sectionTitle: "Projets de bâtiment",
-    sectionDesc:
-      "Plans regroupés par bâtiment pour changer d’étage rapidement et relier escaliers, gaines ou appartements.",
-    autoBadge: "Associé auto",
-    floorsN: (n) => `${n} étages`,
-    openProject: "Ouvrir le projet",
     editProject: "Modifier",
-    ungroup: "Dissocier",
-    groupBtn: "Grouper des plans en projet",
-    cancelBtn: "Annuler le groupement",
-    titleLabel: "Nom du projet",
-    titlePlaceholder: "p. ex. Villa Nord",
-    floorLabel: "Nom de l’étage",
     moveUp: (l) => `Monter ${l}`,
     moveDown: (l) => `Descendre ${l}`,
     removePlan: (t) => `Retirer ${t} du projet`,
-    selectHint: "Sélectionnez au moins 2 plans ci-dessous pour les regrouper en projet multi-étages.",
-    selectedN: (n) => `${n} plans sélectionnés`,
-    saveBtn: "Enregistrer le projet",
-    savedToast: (n, title) => `${n} étages regroupés dans ${title}`,
-    ungroupedToast: (title) => `${title} dissocié`,
     uploadsPickLabel: "Vos fichiers prêts",
   },
   fi: {
-    sectionTitle: "Rakennusprojektit",
-    sectionDesc:
-      "Rakennuksen pohjat ryhmiteltynä nopeaan kerrosvaihtoon sekä portaiden, kuilujen ja asuntojen vertailuun.",
-    autoBadge: "Automaattinen",
-    floorsN: (n) => `${n} kerrosta`,
-    openProject: "Avaa projekti",
     editProject: "Muokkaa",
-    ungroup: "Pura ryhmä",
-    groupBtn: "Ryhmittele pohjat projektiksi",
-    cancelBtn: "Peruuta ryhmittely",
-    titleLabel: "Projektin nimi",
-    titlePlaceholder: "esim. Villa Nord",
-    floorLabel: "Kerrostunnus",
     moveUp: (l) => `Siirrä ${l} ylemmäs`,
     moveDown: (l) => `Siirrä ${l} alemmas`,
     removePlan: (t) => `Poista ${t} projektista`,
-    selectHint: "Valitse alta vähintään 2 piirustusta yhdistääksesi ne monikerrosprojektiksi.",
-    selectedN: (n) => `${n} piirustusta valittu`,
-    saveBtn: "Tallenna projekti",
-    savedToast: (n, title) => `${n} kerrosta ryhmitelty projektiin ${title}`,
-    ungroupedToast: (title) => `${title} purettu`,
     uploadsPickLabel: "Valmiit omat lataukset",
   },
   de: {
-    sectionTitle: "Haus- & Gebäudeprojekte",
-    sectionDesc:
-      "Nach Gebäude gruppierte Pläne für schnellen Geschosswechsel und geschossübergreifenden Abgleich von Treppen, Schächten oder Wohnungen.",
-    autoBadge: "Automatisch erkannt",
-    floorsN: (n) => `${n} Geschosse`,
-    openProject: "Projekt öffnen",
     editProject: "Bearbeiten",
-    ungroup: "Gruppierung lösen",
-    groupBtn: "Pläne zu Projekt gruppieren",
-    cancelBtn: "Gruppierung abbrechen",
-    titleLabel: "Projektname",
-    titlePlaceholder: "z. B. Villa Nord",
-    floorLabel: "Geschosskürzel",
     moveUp: (l) => `${l} nach oben`,
     moveDown: (l) => `${l} nach unten`,
     removePlan: (t) => `${t} aus Projekt entfernen`,
-    selectHint: "Wählen Sie unten mindestens 2 Pläne aus, um sie als Mehrgeschoss-Projekt zu bündeln.",
-    selectedN: (n) => `${n} Pläne ausgewählt`,
-    saveBtn: "Projekt speichern",
-    savedToast: (n, title) => `${n} Geschosse in ${title} gruppiert`,
-    ungroupedToast: (title) => `Gruppierung für ${title} gelöst`,
     uploadsPickLabel: "Bereite eigene Uploads",
   },
 }
 
-const PROJECTS_KEY = "aura.projects"
-const DISMISSED_AUTO_KEY = "aura.projects.dismissed"
-const PROJECTS_EVENT = "aura:projects"
+const GROUND_TOKEN_RE =
+  /\b(?:eg|erdgeschoss|parterre|rdc|rez[- ]de[- ]chauss[eé]e|rez|pohjakerros|piano\s+terra|gf|ground(?:\s+(?:floor|level|storey))?|(?:level|floor|storey)\s*0|0\s*\.?\s*level|0f)\b/i
 
-function readStorage(key: string): string | null {
-  try {
-    return globalThis.localStorage?.getItem(key) ?? null
-  } catch {
-    return null
-  }
-}
+const FLOOR_STRIP_RE =
+  /\b([1-9]\d?\s*\.?\s*(?:ug|untergeschoss|kg|keller|kellergeschoss|og|obergeschoss|kerros|krs|level)|[1-9]\d?\s*(?:st|nd|rd|th)?\s*(?:floor|storey|story)|(?:floor|storey|story|level|lvl|page|sheet|seite|sivu|feuille)\s*\d+|[1-9]\d?\s*(?:er|ère|ere|e|ème|eme)?\s*[eé]tage|kg|ug|eg|dg|gf|rdc|b[1-9]|[0-9]\d?f|kellergeschoss|untergeschoss|erdgeschoss|obergeschoss|dachgeschoss|attika|attic|penthouse|loft|roof|rooftop|ground\s*floor|basement\s*\d*|mezzanine|zwischengeschoss|rez[- ]de[- ]chauss[eé]e|rez|sous[- ]sol|combles|toiture|pohjakerros|kellari|ullakko)\b/gi
 
-function writeStorage(key: string, value: string | null) {
-  try {
-    if (value === null) globalThis.localStorage?.removeItem(key)
-    else globalThis.localStorage?.setItem(key, value)
-  } catch {
-    /* storage unavailable in private mode */
-  }
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(PROJECTS_EVENT))
-  }
-}
-
-function subscribeProjectsStore(onStoreChange: () => void) {
-  if (typeof window === "undefined") return () => {}
-  window.addEventListener(PROJECTS_EVENT, onStoreChange)
+function subscribeProjects(onStoreChange: () => void): () => void {
+  const unsub = myProjects.subscribe(onStoreChange)
+  if (typeof window === "undefined") return unsub
   window.addEventListener("storage", onStoreChange)
   return () => {
-    window.removeEventListener(PROJECTS_EVENT, onStoreChange)
+    unsub()
     window.removeEventListener("storage", onStoreChange)
   }
 }
 
-function isFloorItem(x: unknown): x is ProjectFloorItem {
-  return (
-    !!x &&
-    typeof x === "object" &&
-    typeof (x as ProjectFloorItem).drawing_id === "string" &&
-    typeof (x as ProjectFloorItem).label === "string" &&
-    typeof (x as ProjectFloorItem).order === "number"
-  )
-}
-
-function isBundleItem(x: unknown): x is ProjectBundleItem {
-  return (
-    !!x &&
-    typeof x === "object" &&
-    typeof (x as ProjectBundleItem).id === "string" &&
-    typeof (x as ProjectBundleItem).title === "string" &&
-    Array.isArray((x as ProjectBundleItem).floors) &&
-    (x as ProjectBundleItem).floors.every(isFloorItem)
-  )
-}
-
-function parseStoredProjects(raw: string | null): ProjectBundleItem[] {
+function getProjectsSnapshot(): string {
   try {
-    const parsed: unknown = JSON.parse(raw ?? "[]")
-    return Array.isArray(parsed) ? parsed.filter(isBundleItem) : []
+    const saved = globalThis.localStorage?.getItem("aura.projects") ?? ""
+    const ungrouped = globalThis.localStorage?.getItem("aura.projects.ungrouped") ?? ""
+    return `${saved}||${ungrouped}`
   } catch {
-    return []
+    return ""
   }
 }
 
-function writeStoredProjects(projects: ProjectBundleItem[]) {
-  writeStorage(PROJECTS_KEY, JSON.stringify(projects))
+function kindFromName(name: string): DrawingKind {
+  const lower = name.toLowerCase()
+  if (lower.endsWith(".ifc")) return "ifc"
+  if (lower.endsWith(".dxf")) return "cad_dxf"
+  return "raster"
 }
 
-function parseDismissedIds(raw: string | null): Set<string> {
-  try {
-    const parsed: unknown = JSON.parse(raw ?? "[]")
-    return new Set(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [])
-  } catch {
-    return new Set()
-  }
-}
-
-function addDismissedAutoId(id: string) {
-  const next = parseDismissedIds(readStorage(DISMISSED_AUTO_KEY))
-  next.add(id)
-  writeStorage(DISMISSED_AUTO_KEY, JSON.stringify([...next]))
-}
-
-function removeDismissedAutoId(id: string) {
-  const next = parseDismissedIds(readStorage(DISMISSED_AUTO_KEY))
-  if (next.delete(id)) {
-    writeStorage(DISMISSED_AUTO_KEY, JSON.stringify([...next]))
+function toSummary(plan: SelectablePlan): DrawingSummary {
+  return {
+    id: plan.id,
+    title: plan.title,
+    subtitle: plan.subtitle,
+    kind: plan.kind ?? kindFromName(plan.title),
+    status: "ready",
+    source: plan.source ?? "library",
+    thumbnail: "",
+    credit: plan.credit ?? { text: plan.title, license: "" },
+    ...(plan.project_id ? { project_id: plan.project_id } : {}),
+    ...(plan.floor_label ? { floor_label: plan.floor_label } : {}),
+    ...(plan.floor_order !== undefined ? { floor_order: plan.floor_order } : {}),
   }
 }
 
-interface InferredFloor {
-  order: number
-  label: string
-  matched: boolean
-}
-
-function inferFloor(plan: SelectablePlan, fallbackIndex = 0): InferredFloor {
-  if (typeof plan.floor_order === "number" && plan.floor_label?.trim()) {
-    return { order: plan.floor_order, label: plan.floor_label.trim(), matched: true }
+function inferDraftPlanFloor(
+  plan: SelectablePlan | undefined,
+  id: string,
+  fallbackIndex: number
+): { order: number; label: string; explicitOrMatched: boolean } {
+  if (plan?.floor_order !== undefined && plan.floor_label?.trim()) {
+    return {
+      order: plan.floor_order,
+      label: plan.floor_label.trim(),
+      explicitOrMatched: true,
+    }
   }
-  if (plan.floor_label?.trim()) {
-    return { order: plan.floor_order ?? fallbackIndex, label: plan.floor_label.trim(), matched: true }
+  if (plan?.floor_label?.trim()) {
+    return {
+      order: plan.floor_order ?? fallbackIndex,
+      label: plan.floor_label.trim(),
+      explicitOrMatched: true,
+    }
   }
-
-  const hay = `${plan.title} ${plan.subtitle ?? ""} ${plan.id}`
-
-  // Multi-basement: 2. UG, B2, 2e sous-sol
-  const multiUg = /\b([1-9])\.?\s*UG\b|\bB([1-9])\b|\b([1-9])(?:er|e|ème)?\s*sous[-\s]?sol\b/i.exec(hay)
-  if (multiUg) {
-    const n = Number(multiUg[1] || multiUg[2] || multiUg[3] || 1)
-    const label = /\bB[1-9]\b/i.test(multiUg[0]) ? `B${n}` : n === 1 ? "UG" : `${n}. UG`
-    return { order: -n, label, matched: true }
-  }
-
-  // Basement / cellar
-  if (/\b(KG|UG|kellergeschoss|untergeschoss|keller|basement|cellar|sous[-\s]?sol|kellari|kellarikerros)\b/i.test(hay)) {
-    const isUg = /\b(UG|untergeschoss)\b/i.test(hay)
-    const isFr = /\bsous[-\s]?sol\b/i.test(hay)
-    const isEn = /\b(basement|cellar)\b/i.test(hay)
-    return { order: -1, label: isUg ? "UG" : isFr ? "SS" : isEn ? "B1" : "KG", matched: true }
-  }
-
-  // Ground floor
-  if (
-    /\b(EG|erdgeschoss|parterre|ground\s*floor|GF|rez[-\s]?de[-\s]?chauss[ée]e|RDC|pohjakerros|maantasokerros|level\s*0|floor\s*0)\b/i.test(
-      hay
-    )
-  ) {
-    const isFr = /\b(rez|RDC)\b/i.test(hay)
-    const isEn = /\b(ground\s*floor|GF|level\s*0|floor\s*0)\b/i.test(hay)
-    return { order: 0, label: isFr ? "RDC" : isEn ? "GF" : "EG", matched: true }
-  }
-
-  // German upper floors: 1. OG, 2 OG, 1OG, Obergeschoss
-  const deOg = /(?:^|[\s._-])([1-9]\d?)\.?\s*OG\b/i.exec(hay)
-  if (deOg) {
-    const n = Number(deOg[1])
-    return { order: n, label: `${n}. OG`, matched: true }
-  }
-  if (/\bobergeschoss\b/i.test(hay)) {
-    return { order: 1, label: "1. OG", matched: true }
-  }
-
-  // French upper floors: 1er étage, 3e étage
-  const frEt = /\b([1-9]\d?)\s*(?:er|e|ème)\s*[ée]tage\b/i.exec(hay)
-  if (frEt) {
-    const n = Number(frEt[1])
-    return { order: n, label: `${n === 1 ? "1er" : `${n}e`}`, matched: true }
-  }
-
-  // Finnish floors: 1. kerros, 2. krs
-  const fiKrs = /\b([1-9]\d?)\.\s*(?:kerros|krs)\b/i.exec(hay)
-  if (fiKrs) {
-    const n = Number(fiKrs[1])
-    return { order: n - 1, label: `${n}. krs`, matched: true }
-  }
-
-  // English floors: 1st floor, 2nd floor, Floor 2, Level 3, Storey 1
-  const enOrd = /\b([1-9]\d?)(?:st|nd|rd|th)\s*(?:floor|storey|level)\b/i.exec(hay)
-  if (enOrd) {
-    const n = Number(enOrd[1])
-    return { order: n, label: `${n}F`, matched: true }
-  }
-  const enPre = /\b(?:floor|storey|level)\s*([1-9]\d?)\b/i.exec(hay)
-  if (enPre) {
-    const n = Number(enPre[1])
-    return { order: n, label: `${n}F`, matched: true }
-  }
-
-  // Attic / Roof
-  if (/\b(DG|dachgeschoss|attika|attic|penthouse|roof\s*floor|combles|toiture|ullakko)\b/i.test(hay)) {
-    return { order: 90, label: "DG", matched: true }
-  }
-
-  // Multi-page PDFs: Page 1, Seite 2, sivu 3, --p2, _page_2
-  const pageMatch = /\b(?:page|seite|sivu)\s*([1-9]\d?)\b|[._-]p(?:age)?([1-9]\d?)\b/i.exec(hay)
-  if (pageMatch) {
-    const n = Number(pageMatch[1] || pageMatch[2])
-    return { order: n, label: `P${n}`, matched: true }
-  }
-
-  return { order: 100 + fallbackIndex, label: `F${fallbackIndex + 1}`, matched: false }
-}
-
-const FLOOR_STRIP_RE =
-  /\b([1-9]\.?\s*(?:UG|OG|kerros|krs)|[1-9](?:st|nd|rd|th)\s*(?:floor|storey|level)|(?:floor|storey|level|page|seite|sivu)\s*\d+|[1-9]\s*(?:er|e|ème)\s*[ée]tage|KG|UG|EG|DG|GF|RDC|B[1-9]|kellergeschoss|untergeschoss|erdgeschoss|obergeschoss|dachgeschoss|attika|ground\s*floor|first\s*floor|second\s*floor|third\s*floor|basement|cellar|attic|rez[-\s]?de[-\s]?chauss[ée]e|sous[-\s]?sol|combles|pohjakerros|kellari|ullakko)\b/gi
-
-function cleanStem(raw: string): string {
-  return raw
-    .replace(/\.(dxf|ifc|pdf|png|jpe?g|webp)$/i, "")
-    .replace(FLOOR_STRIP_RE, " ")
-    .replace(/[·—–\-_:()/[\]]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
+  const sourceText = [plan?.title, plan?.subtitle, id].filter(Boolean).join(" · ")
+  const inf = inferFloorOrderAndLabel(sourceText)
+  const matched =
+    inf.order !== 0 || inf.label !== "GF" || GROUND_TOKEN_RE.test(sourceText)
+  return { order: inf.order, label: inf.label, explicitOrMatched: matched }
 }
 
 function buildingStemOf(plan: SelectablePlan): { key: string; title: string } | null {
@@ -370,10 +168,25 @@ function buildingStemOf(plan: SelectablePlan): { key: string; title: string } | 
     id: plan.id,
     credit: plan.credit,
   })
-  const stem = cleanStem(display)
+  const stem = display
+    .replace(/\.(?:dxf|ifc|pdf|png|jpe?g|webp)$/i, "")
+    .replace(/\bup-[a-z0-9]+(?:-p\d+)?\b/gi, " ")
+    .replace(FLOOR_STRIP_RE, " ")
+    .replace(/\b(?:grundriss|floor\s*plan|floorplan|pohjapiirros|plan|pianta)\b/gi, " ")
+    .replace(/[·—–\-_:()/[\]]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
   const lower = stem.toLowerCase()
-  if (stem.length >= 3 && !/^(plan|drawing|floor\s*plan|grundriss|upload|scan|image|model)$/i.test(lower)) {
-    return { key: lower, title: stem }
+  if (
+    stem.length >= 3 &&
+    !/^\d+$/.test(stem) &&
+    !/^(?:plan|drawing|upload|scan|image|model|house|building|project|project name|untitled)$/i.test(
+      lower
+    )
+  ) {
+    const titled =
+      stem === lower ? stem.replace(/\b\w/g, (c) => c.toUpperCase()) : stem
+    return { key: lower, title: titled }
   }
   const siteMatch = /\bsite\s+(\d+)\b/i.exec(plan.subtitle ?? "")
   if (siteMatch) {
@@ -382,84 +195,7 @@ function buildingStemOf(plan: SelectablePlan): { key: string; title: string } | 
   return null
 }
 
-function autoMatchPlans(
-  plans: SelectablePlan[],
-  saved: ProjectBundleItem[],
-  dismissedIds: Set<string>
-): ProjectBundleItem[] {
-  const claimedDrawings = new Set<string>()
-  const savedIds = new Set<string>()
-  for (const p of saved) {
-    savedIds.add(p.id)
-    for (const f of p.floors) claimedDrawings.add(f.drawing_id)
-  }
-
-  const out: ProjectBundleItem[] = []
-
-  // 1. Explicit server/PDF `project_id` grouping
-  const byProjectId = new Map<string, SelectablePlan[]>()
-  for (const plan of plans) {
-    if (!plan.project_id || claimedDrawings.has(plan.id)) continue
-    const arr = byProjectId.get(plan.project_id) ?? []
-    arr.push(plan)
-    byProjectId.set(plan.project_id, arr)
-  }
-  for (const [projId, group] of byProjectId) {
-    if (group.length < 2 || savedIds.has(projId) || dismissedIds.has(projId)) continue
-    const floors = group
-      .map((p, idx) => {
-        const inf = inferFloor(p, idx)
-        return { drawing_id: p.id, label: inf.label, order: inf.order }
-      })
-      .sort((a, b) => a.order - b.order)
-    const stem = buildingStemOf(group[0])
-    out.push({
-      id: projId,
-      title: stem?.title || displayDrawingTitle({ title: group[0].title, id: group[0].id, credit: group[0].credit }),
-      floors,
-      auto_matched: true,
-    })
-    for (const p of group) claimedDrawings.add(p.id)
-  }
-
-  // 2. Building stem + distinct floor indicator matching
-  const byStem = new Map<string, { title: string; items: { plan: SelectablePlan; floor: InferredFloor }[] }>()
-  for (const plan of plans) {
-    if (claimedDrawings.has(plan.id)) continue
-    const floor = inferFloor(plan)
-    if (!floor.matched) continue
-    const stem = buildingStemOf(plan)
-    if (!stem) continue
-    const entry = byStem.get(stem.key) ?? { title: stem.title, items: [] }
-    entry.items.push({ plan, floor })
-    byStem.set(stem.key, entry)
-  }
-
-  for (const [stemKey, { title, items }] of byStem) {
-    if (items.length < 2) continue
-    const distinctLabels = new Set(items.map((x) => x.floor.label.toLowerCase()))
-    if (distinctLabels.size < 2) continue
-    const autoId = `auto-${stemKey.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`
-    if (savedIds.has(autoId) || dismissedIds.has(autoId)) continue
-    const floors = items
-      .map((x) => ({
-        drawing_id: x.plan.id,
-        label: x.floor.label,
-        order: x.floor.order,
-      }))
-      .sort((a, b) => a.order - b.order)
-    out.push({
-      id: autoId,
-      title,
-      floors,
-      auto_matched: true,
-    })
-  }
-
-  return out
-}
-
-function syncProjectToServer(base: string | null, bundle: ProjectBundleItem) {
+function syncProjectToServer(base: string | null, bundle: ProjectBundle) {
   if (!base) return
   void fetch(`${base.replace(/\/+$/, "")}/projects`, {
     method: "POST",
@@ -472,39 +208,42 @@ function syncProjectToServer(base: string | null, bundle: ProjectBundleItem) {
 
 function deleteProjectOnServer(base: string | null, projectId: string) {
   if (!base) return
-  void fetch(`${base.replace(/\/+$/, "")}/projects/${encodeURIComponent(projectId)}`, {
-    method: "DELETE",
-  }).catch(() => {
+  void fetch(
+    `${base.replace(/\/+$/, "")}/projects/${encodeURIComponent(projectId)}`,
+    { method: "DELETE" }
+  ).catch(() => {
     /* ignore offline / 404 */
   })
 }
 
-function activateProjectInWorkspace(bundle: ProjectBundleItem) {
-  // Ensure `aura.projects` in localStorage has this bundle so FloorSwitcher on `/d/:id` finds it immediately.
-  const current = parseStoredProjects(readStorage(PROJECTS_KEY))
-  if (!current.some((p) => p.id === bundle.id)) {
-    writeStoredProjects([bundle, ...current])
-  }
-  const storeActions = actions() as unknown as {
-    setActiveProject?: (project: ProjectBundleItem | null) => void
-  }
-  storeActions.setActiveProject?.(bundle)
+function activateProjectInWorkspace(bundle: ProjectBundle) {
+  myProjects.save(bundle)
+  actions().setActiveProject(bundle)
 }
 
-function entryFloorOf(bundle: ProjectBundleItem): ProjectFloorItem {
-  const sorted = [...bundle.floors].sort((a, b) => a.order - b.order)
-  return sorted.find((f) => f.order === 0) ?? sorted[0]
+function entryFloorOf(bundle: ProjectBundle): ProjectFloor {
+  const sorted = [...bundle.floors].sort(
+    (a, b) => a.order - b.order || a.drawing_id.localeCompare(b.drawing_id)
+  )
+  return (
+    sorted.find((f) =>
+      /^(?:eg|gf|rdc|pk|pt|ground(?:\s+floor)?|erdgeschoss)$/i.test(
+        f.label.trim()
+      )
+    ) ??
+    sorted.find((f) => f.order === 0 && sorted[0].order < 0) ??
+    sorted[0]
+  )
 }
 
 export interface ProjectBundlerBarProps {
   base: string | null
   plans: SelectablePlan[]
-  librarySummaries?: DrawingSummary[]
   grouping: boolean
   onGroupingChange: (open: boolean) => void
   selectedIds: string[]
   onSelectedIdsChange: (ids: string[]) => void
-  onSelectionLabelsChange?: (labels: Record<string, string>) => void
+  onSelectionMetaChange?: (meta: Record<string, SelectionFloorMeta>) => void
 }
 
 export function ProjectBundlerBar({
@@ -514,24 +253,16 @@ export function ProjectBundlerBar({
   onGroupingChange,
   selectedIds,
   onSelectedIdsChange,
-  onSelectionLabelsChange,
+  onSelectionMetaChange,
 }: ProjectBundlerBarProps) {
-  const { lang } = useUi()
-  const copy = COPY[lang]
+  const { lang, tu } = useUi()
+  const extra = EXTRA_COPY[lang]
 
-  const rawSaved = useSyncExternalStore(
-    subscribeProjectsStore,
-    () => readStorage(PROJECTS_KEY),
-    () => null
+  const projectsSnap = useSyncExternalStore(
+    subscribeProjects,
+    getProjectsSnapshot,
+    () => ""
   )
-  const rawDismissed = useSyncExternalStore(
-    subscribeProjectsStore,
-    () => readStorage(DISMISSED_AUTO_KEY),
-    () => null
-  )
-
-  const savedProjects = useMemo(() => parseStoredProjects(rawSaved), [rawSaved])
-  const dismissedAuto = useMemo(() => parseDismissedIds(rawDismissed), [rawDismissed])
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [customTitle, setCustomTitle] = useState<string | null>(null)
@@ -539,39 +270,65 @@ export function ProjectBundlerBar({
   const [manuallyReordered, setManuallyReordered] = useState(false)
 
   const planById = useMemo(() => new Map(plans.map((p) => [p.id, p])), [plans])
-
-  const autoProjects = useMemo(
-    () => autoMatchPlans(plans, savedProjects, dismissedAuto),
-    [plans, savedProjects, dismissedAuto]
-  )
+  const summaryPlans = useMemo(() => plans.map(toSummary), [plans])
 
   const allProjects = useMemo(() => {
-    const merged = [...savedProjects, ...autoProjects]
-    return merged.filter((p) => p.floors.length >= 2)
-  }, [savedProjects, autoProjects])
+    void projectsSnap
+    return myProjects
+      .resolveAll(summaryPlans)
+      .filter(
+        (p) =>
+          p.floors.length >= 2 &&
+          (!p.auto_matched || p.floors.some((f) => planById.has(f.drawing_id)))
+      )
+  }, [summaryPlans, planById, projectsSnap])
 
-  const draftFloors = useMemo<ProjectFloorItem[]>(() => {
-    if (!grouping) return []
-    const items = selectedIds.map((id, idx) => {
+  const draftFloors = useMemo<ProjectFloor[]>(() => {
+    if (!grouping || selectedIds.length === 0) return []
+    const raw = selectedIds.map((id, idx) => {
       const plan = planById.get(id)
-      const inf = plan
-        ? inferFloor(plan, idx)
-        : { order: 100 + idx, label: `F${idx + 1}`, matched: false }
-      const label = labelOverrides[id] !== undefined ? labelOverrides[id] : inf.label
+      const inf = inferDraftPlanFloor(plan, id, idx)
       return {
         drawing_id: id,
-        label,
-        order: manuallyReordered ? idx : inf.order,
+        inferredLabel: inf.label,
+        inferredOrder: inf.order,
+        explicitOrMatched: inf.explicitOrMatched,
+        clickIndex: idx,
       }
     })
-    return manuallyReordered ? items : [...items].sort((a, b) => a.order - b.order)
+    const allUnmatched = raw.every((r) => !r.explicitOrMatched)
+    const items = raw.map((r, idx) => {
+      const fallbackLabel = allUnmatched ? `F${idx + 1}` : r.inferredLabel
+      const label =
+        labelOverrides[r.drawing_id] !== undefined
+          ? labelOverrides[r.drawing_id]
+          : fallbackLabel
+      return {
+        drawing_id: r.drawing_id,
+        label,
+        order: manuallyReordered || allUnmatched ? idx : r.inferredOrder,
+        clickIndex: r.clickIndex,
+      }
+    })
+    const ordered = manuallyReordered
+      ? items
+      : [...items].sort((a, b) => a.order - b.order || a.clickIndex - b.clickIndex)
+    return ordered.map(({ drawing_id, label, order }) => ({
+      drawing_id,
+      label,
+      order,
+    }))
   }, [grouping, selectedIds, planById, labelOverrides, manuallyReordered])
 
   const suggestedTitle = useMemo(() => {
     if (!grouping) return ""
-    const selectedPlans = selectedIds.map((id) => planById.get(id)).filter((p): p is SelectablePlan => !!p)
+    const selectedPlans = selectedIds
+      .map((id) => planById.get(id))
+      .filter((p): p is SelectablePlan => !!p)
     if (!selectedPlans.length) return ""
-    const stems = selectedPlans.map(buildingStemOf).filter((s): s is { key: string; title: string } => !!s)
+    const stems = selectedPlans
+      .map(buildingStemOf)
+      .filter((s): s is { key: string; title: string } => !!s)
     if (stems.length > 0 && stems.every((s) => s.key === stems[0].key)) {
       return stems[0].title
     }
@@ -583,19 +340,22 @@ export function ProjectBundlerBar({
 
   const displayedTitle = customTitle ?? suggestedTitle
 
-  // Sync derived floor badges back to `LibraryPage` so `DrawingCard` displays `KG`, `EG`, `1. OG`.
+  // Sync sorted floor numbers & labels back to `LibraryPage` so `DrawingCard` displays `1 · KG`, `2 · EG`, `3 · 1. OG`.
   useEffect(() => {
-    if (!onSelectionLabelsChange) return
+    if (!onSelectionMetaChange) return
     if (!grouping) {
-      onSelectionLabelsChange({})
+      onSelectionMetaChange({})
       return
     }
-    const map: Record<string, string> = {}
+    const map: Record<string, SelectionFloorMeta> = {}
     draftFloors.forEach((f, idx) => {
-      map[f.drawing_id] = f.label.trim() || `F${idx + 1}`
+      map[f.drawing_id] = {
+        order: idx + 1,
+        label: f.label.trim() || `F${idx + 1}`,
+      }
     })
-    onSelectionLabelsChange(map)
-  }, [grouping, draftFloors, onSelectionLabelsChange])
+    onSelectionMetaChange(map)
+  }, [grouping, draftFloors, onSelectionMetaChange])
 
   const resetBuilder = useCallback(() => {
     setEditingId(null)
@@ -607,8 +367,10 @@ export function ProjectBundlerBar({
   }, [onGroupingChange, onSelectedIdsChange])
 
   const startEdit = useCallback(
-    (bundle: ProjectBundleItem) => {
-      const sorted = [...bundle.floors].sort((a, b) => a.order - b.order)
+    (bundle: ProjectBundle) => {
+      const sorted = [...bundle.floors].sort(
+        (a, b) => a.order - b.order || a.drawing_id.localeCompare(b.drawing_id)
+      )
       const overrides: Record<string, string> = {}
       for (const f of sorted) overrides[f.drawing_id] = f.label
       setEditingId(bundle.id)
@@ -622,21 +384,14 @@ export function ProjectBundlerBar({
   )
 
   const handleUngroup = useCallback(
-    (bundle: ProjectBundleItem) => {
-      const nextSaved = savedProjects.filter((p) => p.id !== bundle.id)
-      writeStoredProjects(nextSaved)
-      if (bundle.auto_matched || bundle.id.startsWith("auto-")) {
-        addDismissedAutoId(bundle.id)
-      }
+    (bundle: ProjectBundle) => {
+      myProjects.remove(bundle.id)
       deleteProjectOnServer(base, bundle.id)
-      const storeActions = actions() as unknown as {
-        setActiveProject?: (project: ProjectBundleItem | null) => void
-      }
-      storeActions.setActiveProject?.(null)
+      actions().setActiveProject(null)
       if (editingId === bundle.id) resetBuilder()
-      toast.success(copy.ungroupedToast(bundle.title))
+      toast.success(tu("proj_ungrouped_toast", { title: bundle.title }))
     },
-    [savedProjects, base, editingId, resetBuilder, copy]
+    [base, editingId, resetBuilder, tu]
   )
 
   const moveFloor = (idx: number, delta: -1 | 1) => {
@@ -672,30 +427,36 @@ export function ProjectBundlerBar({
     if (draftFloors.length < 2) return
     const cleanTitle =
       displayedTitle.trim() ||
-      buildingStemOf(planById.get(draftFloors[0].drawing_id) ?? { id: "", title: "" })?.title ||
-      copy.sectionTitle
-    const normalizedFloors: ProjectFloorItem[] = draftFloors.map((f, idx) => ({
-      drawing_id: f.drawing_id,
-      label: f.label.trim() || `F${idx + 1}`,
-      order: idx,
-    }))
-    const id = editingId && !editingId.startsWith("auto-") ? editingId : `proj-${Date.now().toString(36)}`
-    if (editingId?.startsWith("auto-")) {
-      addDismissedAutoId(editingId)
-    } else {
-      removeDismissedAutoId(id)
-    }
-    const bundle: ProjectBundleItem = {
+      buildingStemOf(planById.get(draftFloors[0].drawing_id) ?? { id: "", title: "" })
+        ?.title ||
+      tu("proj_section_title")
+
+    let prevOrder = Number.NEGATIVE_INFINITY
+    const normalizedFloors: ProjectFloor[] = draftFloors.map((f, idx) => {
+      let nextOrder = manuallyReordered ? idx : f.order
+      if (!manuallyReordered && nextOrder <= prevOrder) {
+        nextOrder = prevOrder + 1
+      }
+      prevOrder = nextOrder
+      return {
+        drawing_id: f.drawing_id,
+        label: f.label.trim() || `F${idx + 1}`,
+        order: nextOrder,
+      }
+    })
+
+    const id = editingId ?? `proj-${Date.now().toString(36)}`
+    const saved = myProjects.save({
       id,
       title: cleanTitle,
       floors: normalizedFloors,
       auto_matched: false,
       created_at: new Date().toISOString(),
-    }
-    const nextSaved = [bundle, ...savedProjects.filter((p) => p.id !== id && p.id !== editingId)]
-    writeStoredProjects(nextSaved)
-    syncProjectToServer(base, bundle)
-    toast.success(copy.savedToast(normalizedFloors.length, cleanTitle))
+    })
+    syncProjectToServer(base, saved)
+    toast.success(
+      tu("proj_saved_toast", { n: normalizedFloors.length, title: cleanTitle })
+    )
     resetBuilder()
   }
 
@@ -707,30 +468,38 @@ export function ProjectBundlerBar({
   if (!grouping && allProjects.length === 0) return null
 
   return (
-    <div className="flex flex-col gap-3" data-projects-region>
+    <div className="flex min-w-0 flex-col gap-3" data-projects-region>
       {grouping ? (
-        <Card size="sm" className="border-info/40 bg-info-surface/25" data-project-builder>
+        <Card
+          size="sm"
+          className="border-info/40 bg-info-surface/25"
+          data-project-builder
+        >
           <CardHeader className="pb-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-                <LayersIcon className="size-4 text-info" aria-hidden />
-                <span>{copy.groupBtn}</span>
+                <LayersIcon className="size-4 shrink-0 text-info" aria-hidden />
+                <span>{tu("proj_group_btn")}</span>
               </CardTitle>
-              <Badge variant="secondary" className="num text-xs">
-                {copy.selectedN(draftFloors.length)}
+              <Badge variant="secondary" className="num shrink-0 text-xs">
+                {tu("proj_selected_n", { n: draftFloors.length })}
               </Badge>
             </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-col gap-1.5 sm:max-w-sm">
-              <label htmlFor="project-title-input" className="text-xs font-medium text-foreground">
-                {copy.titleLabel}
+              <label
+                htmlFor="project-title-input"
+                className="text-xs font-medium text-foreground"
+              >
+                {tu("proj_title_label")}
               </label>
               <Input
                 id="project-title-input"
                 value={displayedTitle}
+                maxLength={80}
                 onChange={(e) => setCustomTitle(e.target.value)}
-                placeholder={copy.titlePlaceholder}
+                placeholder={tu("proj_title_placeholder")}
                 className="h-10 bg-background"
               />
             </div>
@@ -738,7 +507,7 @@ export function ProjectBundlerBar({
             {uploadPlans.length > 0 ? (
               <div className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-muted-foreground">
-                  {copy.uploadsPickLabel}
+                  {extra.uploadsPickLabel}
                 </span>
                 <div className="flex flex-wrap gap-2">
                   {uploadPlans.map((up) => {
@@ -750,7 +519,7 @@ export function ProjectBundlerBar({
                         variant={picked ? "default" : "outline"}
                         aria-pressed={picked}
                         onClick={() => toggleUploadPlan(up.id)}
-                        className="min-h-10 min-w-10 text-xs"
+                        className="min-h-10 min-w-10 max-w-full text-xs"
                       >
                         {picked ? <CheckIcon data-icon="inline-start" /> : null}
                         <span className="max-w-48 truncate">{up.title}</span>
@@ -766,7 +535,11 @@ export function ProjectBundlerBar({
                 {draftFloors.map((floor, idx) => {
                   const plan = planById.get(floor.drawing_id)
                   const planTitle = plan
-                    ? displayDrawingTitle({ title: plan.title, id: plan.id, credit: plan.credit })
+                    ? displayDrawingTitle({
+                        title: plan.title,
+                        id: plan.id,
+                        credit: plan.credit,
+                      })
                     : floor.drawing_id
                   return (
                     <li
@@ -779,20 +552,26 @@ export function ProjectBundlerBar({
                       </span>
                       <Input
                         value={floor.label}
-                        onChange={(e) => updateFloorLabel(floor.drawing_id, e.target.value)}
-                        aria-label={`${copy.floorLabel}: ${planTitle}`}
+                        maxLength={24}
+                        onChange={(e) =>
+                          updateFloorLabel(floor.drawing_id, e.target.value)
+                        }
+                        aria-label={`${tu("proj_floor_label")}: ${planTitle}`}
                         className="h-10 w-24 shrink-0 text-xs font-semibold"
                       />
-                      <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={planTitle}>
+                      <span
+                        className="min-w-32 flex-1 truncate text-sm text-foreground"
+                        title={planTitle}
+                      >
                         {planTitle}
                       </span>
-                      <div className="flex items-center gap-1">
+                      <div className="ml-auto flex shrink-0 items-center gap-1">
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
                           disabled={idx === 0}
-                          aria-label={copy.moveUp(floor.label || planTitle)}
+                          aria-label={extra.moveUp(floor.label || planTitle)}
                           onClick={() => moveFloor(idx, -1)}
                         >
                           <ArrowUpIcon />
@@ -802,7 +581,7 @@ export function ProjectBundlerBar({
                           variant="ghost"
                           size="icon"
                           disabled={idx === draftFloors.length - 1}
-                          aria-label={copy.moveDown(floor.label || planTitle)}
+                          aria-label={extra.moveDown(floor.label || planTitle)}
                           onClick={() => moveFloor(idx, 1)}
                         >
                           <ArrowDownIcon />
@@ -811,7 +590,7 @@ export function ProjectBundlerBar({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          aria-label={copy.removePlan(planTitle)}
+                          aria-label={extra.removePlan(planTitle)}
                           onClick={() => removeFloorFromDraft(floor.drawing_id)}
                         >
                           <XIcon />
@@ -822,16 +601,20 @@ export function ProjectBundlerBar({
                 })}
               </ol>
             ) : (
-              <p className="text-xs text-muted-foreground">{copy.selectHint}</p>
+              <p className="text-xs text-muted-foreground">
+                {tu("proj_select_hint")}
+              </p>
             )}
 
             <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               <p className="text-xs text-muted-foreground">
-                {draftFloors.length < 2 ? copy.selectHint : copy.selectedN(draftFloors.length)}
+                {draftFloors.length < 2
+                  ? tu("proj_select_hint")
+                  : tu("proj_selected_n", { n: draftFloors.length })}
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <Button type="button" variant="ghost" onClick={resetBuilder}>
-                  {copy.cancelBtn}
+                  {tu("proj_group_cancel")}
                 </Button>
                 <Button
                   type="button"
@@ -840,7 +623,7 @@ export function ProjectBundlerBar({
                   data-save-project
                 >
                   <CheckIcon data-icon="inline-start" />
-                  {copy.saveBtn}
+                  {tu("proj_save")}
                 </Button>
               </div>
             </div>
@@ -849,60 +632,92 @@ export function ProjectBundlerBar({
       ) : null}
 
       {allProjects.length > 0 ? (
-        <section aria-labelledby="projects-heading" className="flex flex-col gap-2.5">
+        <section
+          aria-labelledby="projects-heading"
+          className="flex min-w-0 flex-col gap-2.5"
+        >
           <div className="flex flex-col gap-0.5">
-            <h3 id="projects-heading" className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Building2Icon className="size-4 text-muted-foreground" aria-hidden />
-              <span>{copy.sectionTitle}</span>
-              <span className="num text-xs font-normal text-muted-foreground">{allProjects.length}</span>
+            <h3
+              id="projects-heading"
+              className="flex items-center gap-2 text-sm font-medium text-foreground"
+            >
+              <Building2Icon
+                className="size-4 shrink-0 text-muted-foreground"
+                aria-hidden
+              />
+              <span>{tu("proj_section_title")}</span>
+              <span className="num text-xs font-normal text-muted-foreground">
+                {allProjects.length}
+              </span>
             </h3>
-            <p className="text-xs text-muted-foreground">{copy.sectionDesc}</p>
+            <p className="text-xs text-muted-foreground">
+              {tu("proj_section_desc")}
+            </p>
           </div>
 
-          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-label={copy.sectionTitle}>
+          <ul
+            className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+            aria-label={tu("proj_section_title")}
+          >
             {allProjects.map((bundle) => {
-              const sortedFloors = [...bundle.floors].sort((a, b) => a.order - b.order)
+              const sortedFloors = [...bundle.floors].sort(
+                (a, b) =>
+                  a.order - b.order || a.drawing_id.localeCompare(b.drawing_id)
+              )
               const entryFloor = entryFloorOf(bundle)
               return (
-                <li key={bundle.id} data-project-card={bundle.id}>
+                <li key={bundle.id} data-project-card={bundle.id} className="min-w-0">
                   <Card size="sm" className="h-full">
-                    <CardContent className="flex h-full flex-col justify-between gap-3 pt-4">
-                      <div className="flex flex-col gap-2">
+                    <CardContent className="flex h-full min-w-0 flex-col justify-between gap-3 pt-4">
+                      <div className="flex min-w-0 flex-col gap-2">
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-foreground" title={bundle.title}>
+                            <p
+                              className="truncate text-sm font-semibold text-foreground"
+                              title={bundle.title}
+                            >
                               {bundle.title}
                             </p>
                             <p className="num text-xs text-muted-foreground">
-                              {copy.floorsN(sortedFloors.length)}
+                              {tu("proj_floors_n", { n: sortedFloors.length })}
                             </p>
                           </div>
                           {bundle.auto_matched ? (
                             <Badge variant="secondary" className="shrink-0 text-xs">
-                              {copy.autoBadge}
+                              {tu("proj_auto_badge")}
                             </Badge>
                           ) : null}
                         </div>
 
-                        <div className="flex flex-wrap gap-1.5" role="group" aria-label={bundle.title}>
+                        <div
+                          className="flex flex-wrap gap-1.5"
+                          role="group"
+                          aria-label={bundle.title}
+                        >
                           {sortedFloors.map((floor) => {
                             const plan = planById.get(floor.drawing_id)
                             const planName = plan
-                              ? displayDrawingTitle({ title: plan.title, id: plan.id, credit: plan.credit })
+                              ? displayDrawingTitle({
+                                  title: plan.title,
+                                  id: plan.id,
+                                  credit: plan.credit,
+                                })
                               : floor.drawing_id
                             return (
                               <Button
                                 key={floor.drawing_id}
                                 variant="outline"
                                 asChild
-                                className="min-h-10 min-w-10 px-3 text-xs font-medium"
+                                className="min-h-10 min-w-10 max-w-full px-3 text-xs font-medium"
                               >
                                 <Link
                                   to={`/d/${encodeURIComponent(floor.drawing_id)}`}
                                   title={planName}
                                   onClick={() => activateProjectInWorkspace(bundle)}
                                 >
-                                  {floor.label}
+                                  <span className="max-w-44 truncate">
+                                    {floor.label}
+                                  </span>
                                 </Link>
                               </Button>
                             )
@@ -921,29 +736,29 @@ export function ProjectBundlerBar({
                             onClick={() => activateProjectInWorkspace(bundle)}
                           >
                             <LayersIcon data-icon="inline-start" />
-                            {copy.openProject}
+                            {tu("proj_open")}
                           </Link>
                         </Button>
-                        <div className="flex items-center gap-1">
+                        <div className="flex flex-wrap items-center gap-1">
                           <Button
                             type="button"
                             variant="ghost"
-                            aria-label={`${copy.editProject} ${bundle.title}`}
+                            aria-label={`${extra.editProject} ${bundle.title}`}
                             onClick={() => startEdit(bundle)}
                             className="min-h-10 text-xs"
                           >
                             <PencilIcon data-icon="inline-start" />
-                            {copy.editProject}
+                            {extra.editProject}
                           </Button>
                           <Button
                             type="button"
                             variant="ghost"
-                            aria-label={`${copy.ungroup} ${bundle.title}`}
+                            aria-label={`${tu("proj_ungroup")} ${bundle.title}`}
                             onClick={() => handleUngroup(bundle)}
                             className="min-h-10 text-xs text-muted-foreground"
                           >
                             <UnlinkIcon data-icon="inline-start" />
-                            {copy.ungroup}
+                            {tu("proj_ungroup")}
                           </Button>
                         </div>
                       </div>

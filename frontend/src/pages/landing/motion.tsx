@@ -3,11 +3,10 @@ import {
   animate,
   motion,
   useInView,
-  useReducedMotion,
   type Variants,
 } from "motion/react"
 import { cn } from "@/lib/utils"
-import { SPRING } from "./springs"
+import { SPRING, usePrefersReducedMotion } from "./springs"
 
 /**
  * Motion vocabulary for the landing pages (apple-motion): critically damped springs, no bounce,
@@ -35,7 +34,7 @@ export function Reveal({
   as?: "div" | "ul" | "ol" | "dl"
   amount?: number
 }) {
-  const reduce = useReducedMotion()
+  const reduce = usePrefersReducedMotion()
   if (reduce) {
     const Plain = as
     return <Plain className={className}>{children}</Plain>
@@ -63,7 +62,7 @@ export function RevealItem({
   className?: string
   as?: "div" | "li"
 }) {
-  const reduce = useReducedMotion()
+  const reduce = usePrefersReducedMotion()
   if (reduce) {
     const Plain = as
     return <Plain className={cn("min-w-0", className)}>{children}</Plain>
@@ -91,7 +90,7 @@ export function CountUp({
 }) {
   const ref = useRef<HTMLSpanElement>(null)
   const inView = useInView(ref, { once: true, amount: 0.25 })
-  const reduce = useReducedMotion()
+  const reduce = usePrefersReducedMotion()
   const m = /^(\D*)(\d[\d,]*(?:\.\d+)?)(.*)$/.exec(value)
   const [text, setText] = useState(() =>
     m && !reduce ? `${m[1]}${fmt(0, m[2])}${m[3]}` : value
