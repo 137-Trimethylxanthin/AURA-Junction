@@ -774,12 +774,12 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
             try:
                 if line is None and px.get("line") and len(px["line"]) >= 2:
                     line = [[_r(v) for v in apply(to_pct, float(a), float(b))] for a, b in px["line"]]
-                if px.get("box") and len(px["box"]) >= 4:
-                    tb = transform(make_box(*[float(v) for v in px["box"][:4]]), to_pct)
+                tb = (transform(make_box(*[float(v) for v in px["box"][:4]]), to_pct)
+                      if px.get("box") and len(px["box"]) >= 4 else None)
+                if line is not None and len(line) >= 2:    # the line and its text: a thin box, not every source box
+                    g = shapely.LineString(line)
+                if tb is not None:
                     g = tb if g is None else shapely.union_all([g, tb])
-                if line is not None and len(line) >= 2:
-                    ln = shapely.LineString(line)
-                    g = ln if g is None else shapely.union_all([g, ln])
             except (TypeError, ValueError):
                 pass
         item = dict(id=f"dim-{n:0{max(2, len(str(len(dims))))}d}", subject="label", kind="dimension",

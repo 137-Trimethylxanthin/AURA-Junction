@@ -205,7 +205,7 @@ def _body(question: str, lang: str, d: LoadedDrawing, scope: dict, tr: ToolResul
                      "rooms": [r.model_dump(exclude_none=True) | {"area_m2": r.area_m2} for r in tr.rooms]},
         "canonical_en": canonical,
         "method": tr.method,
-        "explanation": text,
+        **({"explanation": text} if value is not None else {}),  # a note is its own explanation
         "trace": [
             A.question_node(question, lang),
             A.intent_node(f"length · {A.scope_text(scope)}", "router · length"),

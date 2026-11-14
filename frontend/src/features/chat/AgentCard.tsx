@@ -911,7 +911,9 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
           </p>
         ) : null}
         {numericNoteProse ? <ClampedProse text={numericNoteProse} lang={lang} kind="note" /> : null}
-        <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        {sentence(resp, derived, drawing, lang) ? (
+          <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        ) : null}
         {!parts || resp.answer.kind === 'text' || isProseNote ? (
           <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="-ml-2 self-start" />
         ) : null}

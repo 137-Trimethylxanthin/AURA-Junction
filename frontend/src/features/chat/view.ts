@@ -136,6 +136,9 @@ const fmtFor = (resp: AskResponse, n: number, lang: Lang) =>
 export function sentence(resp: AskResponse, d: Derived, drawing: Drawing, lang: Lang): string {
   const where = whereText(resp.scope as Scope | ProjectScopeLike, lang)
   if (resp.answer.kind === 'count') return t(lang, 'counted_where', { where })
+  // A length read from a printed dimension or measured on the outline says so itself (its explanation); only an
+  // IFC quantity is "as given by the model file".
+  if (resp.answer.kind === 'quantity' && resp.explanation && drawing.kind !== 'ifc') return ''
   if (resp.answer.kind === 'quantity') return t(lang, 'measured_where', { where })
   if (resp.answer.kind === 'text') return t(lang, 'text_found')
   // A note is only an agent estimate when its method says so; exact notes (e.g. "largest room") come from CAD.
