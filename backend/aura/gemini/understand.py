@@ -78,6 +78,14 @@ def scope_options(units: list[str], labels: list[str]) -> tuple[dict[str, str], 
     return crit, to_scope
 
 
+def valid_choices(questions: dict[str, dict]) -> dict[str, dict]:
+    """The Decisions API refuses a choice question with fewer than 2 options (HTTP 400, measured on
+    uploads without rooms or units: scope had only "floor"). Such a question has nothing to decide,
+    so it is left out and its reader falls back (scope None = the whole drawing)."""
+    return {k: q for k, q in questions.items()
+            if q.get("type") != "choice" or len(q.get("criteria") or {}) >= 2}
+
+
 def build_request(question: str, units: list[str], labels: list[str],
                   image: bytes | None) -> tuple[list[dict], dict, dict[str, dict]]:
     parts = [text_part(f"A user asked this question about the construction floor plan below:\n"
@@ -98,7 +106,7 @@ def build_request(question: str, units: list[str], labels: list[str],
                        "instructions": "Is the information needed to answer the question shown "
                                        "on this drawing?"},
     }
-    return parts, questions, to_scope
+    return parts, valid_choices(questions), to_scope
 
 
 async def understand(client: GeminiClient, question: str, *, units: list[str],
@@ -344,6 +352,7 @@ async def decide_hybrid_route(
             "criteria": crit,
         }
 
+    questions = valid_choices(questions)
     if not questions:
         return HybridDecision(
             on_drawing=None, exact_sufficient=None, cache_key=None, cache_question=None,
