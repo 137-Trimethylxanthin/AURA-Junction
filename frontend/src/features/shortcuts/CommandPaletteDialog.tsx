@@ -20,6 +20,7 @@ import {
   TextCursorInputIcon,
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
+import { toast } from 'sonner'
 import { useStore } from 'zustand'
 import type { DrawingSummary, Lang } from '@/api/contract'
 import { listDrawings } from '@/api/client'
@@ -56,6 +57,7 @@ import {
   selectCrossPlanScope,
   selectDrawing,
   selectIsPending,
+  type AgentTurn,
   type AppStore,
   type Tool,
 } from '@/store'
@@ -169,7 +171,11 @@ export function CommandPaletteDialog({
   )
 
   const mac = isMacPlatform()
-  const mod = mac ? '⌘' : 'Ctrl'
+  const alt = mac ? '⌥' : 'Alt'
+  const currentFloorIdx = useMemo(
+    () => orderedFloors.findIndex((f) => f.drawing_id === drawing.id),
+    [orderedFloors, drawing.id],
+  )
 
   const runCommand = (fn: () => void, opts: { managesOwnFocus?: boolean } = {}) => {
     if (opts.managesOwnFocus) skipCloseRestoreRef.current = true
@@ -187,10 +193,6 @@ export function CommandPaletteDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => store.getState().setCommandOpen(next)}>
-      <DialogHeader className="sr-only">
-        <DialogTitle>{tu('cmd_title')}</DialogTitle>
-        <DialogDescription>{tu('cmd_desc')}</DialogDescription>
-      </DialogHeader>
       <DialogContent
         showCloseButton={false}
         data-command-palette
@@ -202,7 +204,11 @@ export function CommandPaletteDialog({
         }}
         className="top-[18%] translate-y-0 overflow-hidden rounded-xl! p-0 sm:max-w-lg duration-0 data-open:animate-none data-closed:animate-none"
       >
-        <Command>
+        <DialogHeader className="sr-only">
+          <DialogTitle>{tu('cmd_title')}</DialogTitle>
+          <DialogDescription>{tu('cmd_desc')}</DialogDescription>
+        </DialogHeader>
+        <Command className="[&_[data-slot=input-group]]:min-h-10 [&_[data-slot=input-group]]:h-10! [&_[data-slot=input-group]]:border-input [&_[data-slot=input-group]]:bg-background">
           <CommandInput placeholder={tu('cmd_placeholder')} aria-label={tu('cmd_title')} />
           <CommandList className="max-h-80">
             <CommandEmpty>{tu('cmd_empty')}</CommandEmpty>
@@ -210,8 +216,14 @@ export function CommandPaletteDialog({
             {orderedFloors.length >= 2 && activeProject ? (
               <>
                 <CommandGroup heading={`${tu('cmd_group_floors')} · ${activeProject.title}`}>
-                  {orderedFloors.map((floor) => {
+                  {orderedFloors.map((floor, idx) => {
                     const isCurrent = floor.drawing_id === drawing.id
+                    const stepArrow =
+                      currentFloorIdx >= 0 && idx === currentFloorIdx + 1
+                        ? '↑'
+                        : currentFloorIdx >= 0 && idx === currentFloorIdx - 1
+                          ? '↓'
+                          : null
                     return (
                       <CommandItem
                         key={`floor-${floor.drawing_id}`}
@@ -226,6 +238,14 @@ export function CommandPaletteDialog({
                       >
                         <LayersIcon />
                         <span className="truncate">{tu('group_jump_floor', { label: floor.label })}</span>
+                        {stepArrow ? (
+                          <CommandShortcut>
+                            <KbdGroup>
+                              <Kbd>{alt}</Kbd>
+                              <Kbd>{stepArrow}</Kbd>
+                            </KbdGroup>
+                          </CommandShortcut>
+                        ) : null}
                       </CommandItem>
                     )
                   })}
@@ -365,7 +385,17 @@ export function CommandPaletteDialog({
                   runCommand(
                     () => {
                       const s = store.getState()
-                      s.setTraceOpen(!s.ui.traceOpen)
+                      const nextOpen = !s.ui.traceOpen
+                      if (nextOpen && !s.ui.activeTurnId) {
+                        const latestAgent = [...s.turns]
+                          .reverse()
+                          .find((turn): turn is AgentTurn => turn.role === 'agent')
+                        if (latestAgent) s.setActive(latestAgent.id)
+                      }
+                      s.setTraceOpen(nextOpen)
+                      if (!nextOpen) {
+                        requestAnimationFrame(() => useDraft.getState().focus())
+                      }
                     },
                     { managesOwnFocus: true },
                   )
@@ -399,7 +429,17 @@ export function CommandPaletteDialog({
                 <CommandItem
                   value={`new conversation clear chat ${tu('new_chat')}`}
                   className="min-h-10"
-                  onSelect={() => runCommand(() => store.getState().newConversation())}
+                  onSelect={() =>
+                    runCommand(() => {
+                      const restore = store.getState().newConversation()
+                      toast(tu('new_chat_cleared'), {
+                        id: 'new-chat-undo',
+                        toasterId: 'chat',
+                        duration: 6000,
+                        action: { label: tu('undo'), onClick: () => restore() },
+                      })
+                    })
+                  }
                 >
                   <MessageSquarePlusIcon />
                   <span>{tu('new_chat')}</span>
@@ -440,12 +480,6 @@ export function CommandPaletteDialog({
               >
                 <ArrowLeftIcon />
                 <span>{tu('all_drawings')}</span>
-                <CommandShortcut>
-                  <KbdGroup>
-                    <Kbd>{mod}</Kbd>
-                    <Kbd>K</Kbd>
-                  </KbdGroup>
-                </CommandShortcut>
               </CommandItem>
             </CommandGroup>
 
@@ -469,7 +503,25 @@ export function CommandPaletteDialog({
                             }
                             const spotX = Math.round(rx * 10) / 10
                             const spotY = Math.round(ry * 10) / 10
-                            navigate(`/d/${drawing.id}#spot=${spotX},${spotY}`)
+                            const spotHash = `#spot=${spotX},${spotY}`
+                            navigate(`/d/${drawing.id}${spotHash}`)
+                            if (typeof window !== 'undefined') {
+                              // React Router uses `history.pushState()`, which does not emit `hashchange`.
+                              // Sync hash & dispatch `hashchange` so `PlanStage` pans and zooms (>=190%) every time.
+                              const oldURL = window.location.href
+                              if (window.location.hash !== spotHash) {
+                                window.history.replaceState(
+                                  window.history.state,
+                                  '',
+                                  `${window.location.pathname}${window.location.search}${spotHash}`,
+                                )
+                              }
+                              const ev =
+                                typeof HashChangeEvent === 'function'
+                                  ? new HashChangeEvent('hashchange', { oldURL, newURL: window.location.href })
+                                  : new Event('hashchange')
+                              window.dispatchEvent(ev)
+                            }
                           })
                         }
                       >

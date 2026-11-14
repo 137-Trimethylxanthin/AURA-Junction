@@ -46,6 +46,7 @@ function confidence(c: TraceNode['confidence']): string | null {
 }
 
 export function TracePanel() {
+  const traceOpen = useAppStore((s) => s.ui.traceOpen)
   const turn = useAppStore(selectActiveTurn)
   const question = useAppStore((s) => {
     const u = turn ? s.turns.find((x) => x.id === turn.replyTo) : undefined
@@ -84,6 +85,14 @@ export function TracePanel() {
     }
   }, [])
 
+  // Restore focus immediately when `traceOpen` flips false (e.g. via `T` shortcut) without waiting for AnimatePresence exit.
+  useEffect(() => {
+    if (!traceOpen) {
+      actions().hover([])
+      if (needsFocusRestore) restoreFocusFromTrace()
+    }
+  }, [traceOpen])
+
   return (
     <motion.section
       aria-label="Reasoning tree"
@@ -93,7 +102,7 @@ export function TracePanel() {
       exit={reduce ? { opacity: 0 } : { opacity: 0, x: 24 }}
       // Critically damped spring: re-targets from the live value, so a quick close after open never jumps.
       transition={reduce ? { duration: 0.12 } : { type: 'spring', bounce: 0, duration: 0.32 }}
-      className="flex min-h-0 flex-1 flex-col"
+      className={cn('flex min-h-0 flex-1 flex-col', !traceOpen && 'pointer-events-none!')}
     >
       <header className="flex items-center gap-2 border-b px-2 py-2">
         <Button ref={back} variant="ghost" onClick={close} aria-label="Back to chat (Escape)">
