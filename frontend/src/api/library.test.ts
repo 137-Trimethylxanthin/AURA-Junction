@@ -263,3 +263,28 @@ describe('autoGroupDrawings & myProjects', () => {
     ])
   })
 })
+
+describe('ungrouping a building the server derives from files', () => {
+  it('stays ungrouped across syncs and resolves, and grouping it again works', async () => {
+    const { myProjects } = await import('./library')
+    myProjects.clear()
+    const ifc = {
+      id: 'proj-ifc-m',
+      title: 'Model',
+      auto_matched: false,
+      floors: [
+        { drawing_id: 'ifc-m--a', label: 'A', order: 0 },
+        { drawing_id: 'ifc-m--b', label: 'B', order: 1 },
+      ],
+    }
+    myProjects.syncFromServer([ifc])
+    expect(myProjects.resolveAll([], [ifc]).map((p) => p.id)).toEqual(['proj-ifc-m'])
+    myProjects.remove('proj-ifc-m')
+    myProjects.syncFromServer([ifc])
+    expect(myProjects.list().map((p) => p.id)).not.toContain('proj-ifc-m')
+    expect(myProjects.resolveAll([], [ifc])).toEqual([])
+    myProjects.save(ifc)
+    expect(myProjects.resolveAll([], [ifc]).map((p) => p.id)).toEqual(['proj-ifc-m'])
+    myProjects.clear()
+  })
+})

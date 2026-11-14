@@ -661,7 +661,9 @@ export const myProjects = {
     let changed = false
     for (const sp of serverProjects) {
       if (!isProjectBundle(sp) || !keepProject(sp)) continue
-      if (sp.auto_matched && ungrouped.has(sp.id)) continue
+      // An Ungroup tombstone is the user's explicit choice: it holds for every server project, including the
+      // ones the server derives from files (an IFC model's storeys), which it cannot delete.
+      if (ungrouped.has(sp.id)) continue
       const existing = localById.get(sp.id)
       if (existing && !existing.auto_matched) continue
       const normalized = withToken({ ...sp, floors: sortProjectFloors(sp.floors) }, existing && tokenField(existing))
@@ -703,7 +705,7 @@ export const myProjects = {
 
     void drawings // auto-grouping by file names is gone; the argument stays for callers
     for (const p of myProjects.list()) consider(p, Boolean(p.auto_matched))
-    for (const p of serverProjects) if (isProjectBundle(p) && keepProject(p)) consider(p, Boolean(p.auto_matched))
+    for (const p of serverProjects) if (isProjectBundle(p) && keepProject(p)) consider(p, true)
 
     return result
   },
