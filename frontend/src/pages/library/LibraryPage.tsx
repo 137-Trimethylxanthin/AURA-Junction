@@ -170,6 +170,11 @@ export default function LibraryPage() {
   const [selectionMeta, setSelectionMeta] = useState<
     Record<string, SelectionFloorMeta>
   >({})
+  // The bundler reports its floor labels from an effect; storing an equal map again must not re-render, or the
+  // page loops (and a stuck render loop blocks every link: navigation only worked after a reload).
+  const setSelectionMetaIfChanged = useCallback((next: Record<string, SelectionFloorMeta>) => {
+    setSelectionMeta((prev) => (sameMeta(prev, next) ? prev : next))
+  }, [])
   // The user's own uploads: finished ones become library cards; the rest stay on /upload.
   const mode = useStoreMode(base)
   const { rows: uploadRows, remove: removeUpload } = useUploadsOrNone(base, mode, refresh)
@@ -395,7 +400,7 @@ export default function LibraryPage() {
                 onGroupingChange={setGrouping}
                 selectedIds={selectedIds}
                 onSelectedIdsChange={setSelectedIds}
-                onSelectionMetaChange={setSelectionMeta}
+                onSelectionMetaChange={setSelectionMetaIfChanged}
               />
             ) : null}
 
@@ -530,6 +535,12 @@ export default function LibraryPage() {
 }
 
 /** The upload hook needs an API base; without one the user has no uploads. */
+function sameMeta(a: Record<string, SelectionFloorMeta>, b: Record<string, SelectionFloorMeta>): boolean {
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => b[k] !== undefined && a[k].order === b[k].order && a[k].label === b[k].label)
+}
+
 function useUploadsOrNone(base: string | null, mode: "full" | "quick" | null, onProjectsDiscovered: () => void) {
   const u = useUploads(base ?? "", { mode, onProjectsDiscovered })
   return base ? u : { ...u, rows: [] }

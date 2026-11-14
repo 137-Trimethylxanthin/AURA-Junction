@@ -45,6 +45,7 @@ def make_app(tmp_path, *, transport=None, use_gemini=False, with_image=False, jo
         assets = tmp_path / "assets"
         assets.mkdir(exist_ok=True)
         shutil.copy(SWISS_IMAGE, assets / "original.png")
+    settings.setdefault("AURA_STORE_DATA_DIR", tmp_path / "store")  # never the repo's backend/.data/store
     s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild", **settings)
     d = tools.load_file(FRONTEND_DRAWING, assets_dir=assets)
     return create_app(s, transport=transport, extra_drawings=[d], job_options=job_options,

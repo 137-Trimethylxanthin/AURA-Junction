@@ -98,7 +98,7 @@ Generated from `backend/aura/config.py` by `backend/scripts/env_table.py --write
 | `AURA_ANSWERER` | backend env | `hybrid` | Answer routing mode (`hybrid`, `agent`, or `exact`) |
 | `AURA_STORE_DSN` | backend env (`scripts/dev.sh` sets it) | `None` | Postgres DSN of the drawing store (jstore); unset = quick mode |
 | `AURA_STORE_READER_PASSWORD` | backend env (`scripts/dev.sh` sets it) | `None` | Password of the read-only `jreader` role used by the sql tool |
-| `AURA_STORE_DATA_DIR` | backend env | `/home/maki/Projects/junction-project/backend/.data/store` | Where the drawing store keeps upload copies and page renders |
+| `AURA_STORE_DATA_DIR` | backend env | `backend/.data/store` | Where the drawing store keeps upload copies and page renders |
 | `AURA_STORE_WORKERS` | backend env | `2` | Worker processes that ingest uploads into the drawing store |
 | `AURA_SIDECAR_URL` | backend env |  | Base URL of the isolated deep-agent sidecar (`agent-service`) |
 | `AURA_SIDECAR_TOKEN_FILE` | backend env |  | Path to the shared bearer token file for `agent-service` |

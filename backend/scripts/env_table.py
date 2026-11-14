@@ -68,6 +68,12 @@ def default(name: str, f) -> str:
     if name in ('GEMINI_API_KEY', 'AURA_PRESENTER_TOKEN', 'AURA_IP_SALT', 'DATA_DIR', 'AURA_BUILD_DIR',
                 'ALLOWED_ORIGINS', 'ALLOWED_ORIGIN_REGEX', 'AURA_SIDECAR_URL', 'AURA_SIDECAR_TOKEN_FILE'):
         return ''
+    if isinstance(f.default, Path):
+        # A path inside the repo is shown from the repo root, so the table reads the same on every machine.
+        try:
+            return f'`{f.default.relative_to(BACKEND.parent).as_posix()}`'
+        except ValueError:
+            return f'`{f.default}`'
     return f'`{f.default:g}`' if isinstance(f.default, float) else f'`{f.default}`'
 
 
