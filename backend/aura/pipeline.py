@@ -43,12 +43,15 @@ from aura.provenance import allowed_numbers, filter_prose
 from aura.router import (
     COLOR_CUE,
     DEICTIC_SIMILARITY,
+    EXACT_INTENTS,
     FIRE_PATTERN,
     QUALIFIER_GUARD,
+    ROUTER_VERSION,
     STAIR_ESCALATE,
     is_followup_message,
     route,
 )
+from aura.steps import answer_with_tools
 from aura.store import Store
 from aura.writer import Writer
 
@@ -716,40 +719,91 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
             stats["check_note"] = "a check of this layer failed a moment ago; not retried yet"
             stats["no_cache"] = True  # the check-less answer must not stick after the pause
             return None  # M5: a slow or failing check is not re-sent on every ask
-        lock = svc.check_locks.setdefault(key, asyncio.Lock())
-        async with lock:  # concurrent first asks share one request
-            full = svc.checks.get(key, None if is_agent_est else d.dir, subject)
-            cached = full is not None
-            if full is None and recently_failed():  # failed while this ask waited for the lock
-                stats["check_note"] = "a check of this layer failed a moment ago; not retried yet"
+        if svc.agent is not None and built.body.get("method") == "cad_geometry":
+            # Hybrid answerer: an exact answer never waits on a model. The first image check of a
+            # layer runs in the background and fills the check cache; this answer goes out now.
+            if key not in _BG_CHECK_KEYS:
+                _BG_CHECK_KEYS.add(key)
+                bg_stats = {"check_meter": Meter(), "check_calls": 0, "check_cost_usd": 0.0,
+                            "check_tokens": 0}
+                bg_built = A.Built(built.body, built.results, list(ids), subject)
+                task = asyncio.create_task(_check_in_background(svc, d, bg_built, caller, bg_stats, key))
+                _BG_CHECKS.add(task)
+                task.add_done_callback(_BG_CHECKS.discard)
+            stats["check_note"] = "the image check of this layer is running in the background"
+            stats["no_cache"] = True  # so the next ask picks up the check
+            return None
+        return await _check_inline(svc, d, built, caller, stats, key, boxes, ids, is_agent_est, image)
+    return _slice(d, full, built, stats, is_agent_est, cached)
+
+
+_BG_CHECKS: set[asyncio.Task] = set()
+_BG_CHECK_KEYS: set[str] = set()
+
+
+async def _check_in_background(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: Caller,
+                               stats: dict, key: str) -> None:
+    try:
+        layer = await asyncio.to_thread(tools.count_objects, d, built.subject or "", {"kind": "floor"})
+        boxes = [b.model_dump() for b in layer.boxes]
+        image = d.image_path()
+        if image is not None:
+            await _check_inline(svc, d, built, caller, stats, key, boxes, [b["id"] for b in boxes],
+                                False, image)
+    except Exception:  # a background check must never take the server down
+        log.exception("background image check failed")
+    finally:
+        _BG_CHECK_KEYS.discard(key)
+
+
+async def _check_inline(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: Caller,
+                        stats: dict, key: str, boxes: list[dict], ids: list[str], is_agent_est: bool,
+                        image) -> dict | None:
+    subject = built.subject or ""
+
+    def recently_failed() -> bool:
+        t = svc.check_failures.get(key)
+        return t is not None and time.time() - t < CHECK_RETRY_AFTER_S
+
+    lock = svc.check_locks.setdefault(key, asyncio.Lock())
+    async with lock:  # concurrent first asks share one request
+        full = svc.checks.get(key, None if is_agent_est else d.dir, subject)
+        cached = full is not None
+        if full is None and recently_failed():  # failed while this ask waited for the lock
+            stats["check_note"] = "a check of this layer failed a moment ago; not retried yet"
+            stats["no_cache"] = True
+            return None
+        if full is None:
+            anchors = d.anchors or default_anchors(d.drawing.get("rooms", []), boxes)
+            cm: Meter = stats["check_meter"]
+            try:
+                async with asyncio.timeout(MODEL_STEP_TIMEOUT_S):
+                    full = await run_check(
+                        svc.client,  # type: ignore[arg-type]
+                        drawing_id=d.id, image_path=image, subject=subject, boxes=boxes,
+                        anchors=anchors, ip_hash=caller.ip_hash, presenter=caller.presenter,
+                        meter=cm)
+            except (BudgetError, GeminiError, TimeoutError) as e:
+                log.warning("check skipped: %s", e or "timeout")
+                if not isinstance(e, BudgetError):
+                    svc.check_failures[key] = time.time()
+                stats["check_note"] = str(e) or "timeout"
                 stats["no_cache"] = True
+                _settle_check_cost(stats)
+                if cm.calls:  # sent but unusable: no numbers, but its cost is reported
+                    return {"method": "decisions_api", "status": "sample",
+                            "image": "upload" if d.drawing.get("kind") == "raster"
+                            else "dataset_png", **_check_cost(stats, False)}
                 return None
-            if full is None:
-                anchors = d.anchors or default_anchors(d.drawing.get("rooms", []), boxes)
-                cm: Meter = stats["check_meter"]
-                try:
-                    async with asyncio.timeout(MODEL_STEP_TIMEOUT_S):
-                        full = await run_check(
-                            svc.client,  # type: ignore[arg-type]
-                            drawing_id=d.id, image_path=image, subject=subject, boxes=boxes,
-                            anchors=anchors, ip_hash=caller.ip_hash, presenter=caller.presenter,
-                            meter=cm)
-                except (BudgetError, GeminiError, TimeoutError) as e:
-                    log.warning("check skipped: %s", e or "timeout")
-                    if not isinstance(e, BudgetError):
-                        svc.check_failures[key] = time.time()
-                    stats["check_note"] = str(e) or "timeout"
-                    stats["no_cache"] = True
-                    _settle_check_cost(stats)
-                    if cm.calls:  # sent but unusable: no numbers, but its cost is reported
-                        return {"method": "decisions_api", "status": "sample",
-                                "image": "upload" if d.drawing.get("kind") == "raster"
-                                else "dataset_png", **_check_cost(stats, False)}
-                    return None
-                full["key"] = key
-                svc.checks.put(key, d.id, subject, full)
-                svc.check_failures.pop(key, None)
-        svc.check_locks.pop(key, None)  # R3: the result is cached; the lock is not needed again
+            full["key"] = key
+            svc.checks.put(key, d.id, subject, full)
+            svc.check_failures.pop(key, None)
+    svc.check_locks.pop(key, None)  # R3: the result is cached; the lock is not needed again
+    return _slice(d, full, built, stats, is_agent_est, cached)
+
+
+def _slice(d: tools.LoadedDrawing, full: dict, built: A.Built, stats: dict, is_agent_est: bool,
+           cached: bool) -> dict | None:
     vision = d.drawing.get("kind") == "raster" or is_agent_est
     sliced = slice_check(full, built.check_ids, image="upload" if d.drawing.get("kind") == "raster" else "dataset_png")
     if sliced is not None and vision:
@@ -899,7 +953,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     question = req.question.strip()
     scope_dump = req.scope.model_dump(exclude_none=True) if req.scope else None
     ov_dump = [o.model_dump() for o in req.overrides] if req.overrides else None
-    key = answer_key(d.id, question, scope_dump, ov_dump, req.lang_hint, models_enabled())
+    key = (answer_key(d.id, question, scope_dump, ov_dump, req.lang_hint, models_enabled())
+           + f"|router:{ROUTER_VERSION}")
     prev_resp = last_turn_response(history)
     r_pre = route(question, d.ctx)
     has_followup_semantics = prev_resp is not None and (
@@ -912,6 +967,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         key += json.dumps(context, sort_keys=True)
 
     hit = svc.answers.get(key)
+    if hit is not None and hit.get("method") == "agent_estimate" and r_pre.intent in EXACT_INTENTS:
+        hit = None  # an exact route always wins over a cached model estimate
     if hit is not None:
         # A fresh answer id, persisted: its CSV link and /stats see this answer too.
         body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
@@ -1128,6 +1185,27 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                         return
             except (BudgetError, GeminiError, TimeoutError) as e:
                 log.warning("hybrid decision gate skipped (%s); escalating to sidecar agent", e or "timeout")
+
+        # 4b. Tool-step answerer: fixed read-only tools over the indexed drawing, a few model calls, no generated code.
+        #     Returns None when it cannot answer; only then does the turn go to the sidecar agent.
+        if svc.models_usable() and d.drawing.get("rooms") and not is_project and not is_deictic_region:
+            gate_node = stats.get("decision_node")
+            tools_built: A.Built | None = None
+            try:
+                tools_built = await answer_with_tools(svc, d, question, lang, caller, stats, history)
+            except Exception:  # the tool path must never take the turn down; the agent still runs
+                log.exception("tool-step answerer failed; escalating to sidecar agent")
+            if tools_built is not None:
+                if gate_node:
+                    tools_built.body["trace"] = [gate_node, *tools_built.body.get("trace", [])]
+                yield "understood", {"detected_lang": tools_built.body["detected_lang"],
+                                     "canonical_en": tools_built.body["canonical_en"], "route": stats["route"]}
+                for ev in _tool_events(tools_built):
+                    yield ev
+                async for ev in _finalize_and_emit(svc, d, req, tools_built, caller, stats, meters, t0, key,
+                                                   allow_cache=True):
+                    yield ev
+                return
 
         # 5. Escalate directly to `agent_client` (`deep_agent`) — NEVER fall back to legacy `understand` or `flash-lite`!
         agent_deadline = max(turn_deadline, agent_deadline_s or 0.0)
