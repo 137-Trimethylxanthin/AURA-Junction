@@ -1,6 +1,7 @@
 {
- "source": "synthetic",
- "note": "SYNTHETIC (not recorded): agent lists rooms, then names no result; the '3' sentence must be dropped by the provenance filter.",
+ "source": "recorded",
+ "note": "Live router miss through POST /ask on the bundled swiss-46639 file: Decisions choice, then the flash-lite agent.",
+ "recorded_at": "2026-11-14T02:52:46+0200",
  "path": "/models/gemini-3.1-flash-lite:generateContent",
  "request": {
   "contents": [
@@ -13,17 +14,19 @@
     ]
    },
    {
-    "role": "model",
     "parts": [
      {
       "functionCall": {
        "name": "list_rooms",
        "args": {
         "scope": "unit:A"
-       }
-      }
+       },
+       "id": "call_14402359167700712785"
+      },
+      "thoughtSignature": "EnMKcQFpFH0Tbujx0ax/XxOT8s4e710fo1dYXwXSoWkPMswnK8/AYMy3XnK2eZ4qrzNRy++YS9QFUT9Dicc6TzF/j8gfHuAoHmqHrfRihMxD1b47YTHbnLjkNNn884OZbjtMnrIFaIhFOFKmPvTLP6rBfnS8"
      }
-    ]
+    ],
+    "role": "model"
    },
    {
     "role": "user",
@@ -132,6 +135,38 @@
       }
      }
     ]
+   },
+   {
+    "parts": [
+     {
+      "functionCall": {
+       "name": "count_objects",
+       "args": {
+        "scope": "unit:A",
+        "subject": "room"
+       },
+       "id": "call_10912993827310571167"
+      },
+      "thoughtSignature": "EnMKcQFpFH0TH9jY0QeebkskOk6ckIQtMa1RqaKOyVyV6F4/ncv3tXYbteJb3N6PePJqugy49aM3+482rERqD+frxEOc0kNf8qyZqimejQeIH/+ziXvgl8F/Y4Uc7LeGpYSsYwj6Lo0lc6z9zJCo30gXSE5W"
+     }
+    ],
+    "role": "model"
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "count_objects",
+       "response": {
+        "result_id": "r-3fb3b7257fcf",
+        "summary": "13 numbered rooms in apartment A; 2 outdoor left out.",
+        "supported": true,
+        "value": 11.0
+       }
+      }
+     }
+    ]
    }
   ],
   "systemInstruction": {
@@ -200,7 +235,7 @@
      },
      {
       "name": "find_text",
-      "description": "Find printed text on the drawing (e.g. fire ratings like EI30) by regex.",
+      "description": "Find printed text on the drawing containing this literal text (case-insensitive, not a regex), e.g. 'EI30'.",
       "parameters": {
        "type": "object",
        "properties": {
@@ -244,25 +279,39 @@
   "candidates": [
    {
     "content": {
-     "role": "model",
      "parts": [
       {
        "functionCall": {
         "name": "final_answer",
         "args": {
-         "result_id": "none",
-         "explanation": "Apartment A has 3 rooms labelled Chambre à coucher. Beds are not drawn, so sleeping places cannot be counted."
-        }
-       }
+         "result_id": "r-718f3c6ecbc3",
+         "explanation": "Apartment A contains 4 rooms labeled \"Chambre à coucher\", which are designated for sleeping."
+        },
+        "id": "call_1494275344327571680"
+       },
+       "thoughtSignature": "EnMKcQFpFH0TslJASnuQBl/fkudXbn+006ycwruMpqD9/sXFrWqKFrZdD4zwqpIUgi085SrPmjqInkPDWJlkE/tpx+aRViMz5hJtCqSsKjQnZ6xc/BEXF/zKNKU5hUmxD+WllNfqWvFG6mI/JKdSVPsCAIVG"
       }
-     ]
+     ],
+     "role": "model"
     },
-    "finishReason": "STOP"
+    "finishReason": "STOP",
+    "index": 0,
+    "finishMessage": "Model generated function call(s)."
    }
   ],
   "usageMetadata": {
-   "promptTokenCount": 450,
-   "candidatesTokenCount": 30
-  }
+   "promptTokenCount": 1280,
+   "candidatesTokenCount": 54,
+   "totalTokenCount": 1334,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 1280
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "3bD3aqyvOJaC7M8P5KLEkQU"
  }
 }

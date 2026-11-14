@@ -33,7 +33,7 @@ def build_mcp(get_svc: Callable[[], Services]) -> FastMCP:
         out = []
         for did in svc.registry.library_ids():
             d = svc.registry.get(did)
-            if d is None:
+            if d is None or did in svc.registry.skipped:
                 continue
             out.append({"id": d.id, "title": d.drawing.get("title", d.id),
                         "kind": d.drawing.get("kind", "cad_dxf"),

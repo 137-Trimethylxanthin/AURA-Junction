@@ -1,7 +1,7 @@
 {
- "source": "derived",
- "note": "intent/subject copied from the recorded single-question E3 response for q16; scope synthetic; on_drawing from q16_needs_image. The request carries the plan image at 'low' (bytes stripped); usage tokens are an estimate.",
- "question": "how many places can people sleep in apartment A",
+ "source": "recorded",
+ "note": "Live router miss through POST /ask on the bundled swiss-46639 file: Decisions choice, then the flash-lite agent.",
+ "recorded_at": "2026-11-14T02:52:29+0200",
  "path": "/decisions",
  "request": {
   "model": "gemini-decision-1",
@@ -12,7 +12,7 @@
    },
    {
     "type": "image",
-    "data": "sha256:74c7f7ac8d156765",
+    "data": "sha256:ae54295b10a24586",
     "mime_type": "image/png",
     "resolution": "low"
    }
@@ -70,49 +70,71 @@
  "status": 200,
  "response": {
   "answers": {
+   "on_drawing": {
+    "confidence": 0.7062573930314711,
+    "noul": 0.7062573930314711,
+    "type": "noul"
+   },
    "intent": {
-    "confidence": 0.9728173648594495,
+    "confidence": 0.9577056874648959,
     "choice": "count",
     "probabilities": {
-     "count": 0.9728173648594495,
-     "length": 0.0024538448315952017,
-     "area": 0.0027283344897914732,
-     "text": 0.022000455819163968
+     "text": 0.03133390313272632,
+     "other": 0.0021697933610136826,
+     "length": 0.0016812786004077834,
+     "count": 0.9577056874648959,
+     "area": 0.0071093374409562605
     },
     "type": "choice"
    },
    "subject": {
-    "confidence": 0.8991609200437191,
-    "choice": "other",
+    "confidence": 0.8050058068147034,
+    "choice": "room",
     "probabilities": {
-     "wc": 0.0011780405919867712,
-     "door": 0.00044151504681089784,
-     "shower": 0.0004256623047001039,
-     "room": 0.09234306779474286,
-     "bathtub": 0.0018155832900634146,
-     "other": 0.8991609200437191,
-     "window": 0.002064290553592044,
-     "apartment": 0.0024340736985505665,
-     "washbasin": 0.00013684667583417507
+     "bathtub": 0.0037605670965021776,
+     "apartment": 0.006205486365973697,
+     "washbasin": 0.000542372096930669,
+     "shower": 0.0024892314809934735,
+     "other": 0.17801431553600192,
+     "wc": 0.0017622969318886103,
+     "door": 0.0003247528192736342,
+     "room": 0.8050058068147034,
+     "window": 0.001895170857732473
     },
     "type": "choice"
    },
    "scope": {
-    "type": "choice",
+    "confidence": 0.7829680982378189,
     "choice": "unit_A",
-    "confidence": 0.93,
     "probabilities": {
-     "unit_A": 0.93
-    }
-   },
-   "on_drawing": {
-    "type": "noul",
-    "noul": 0.56,
-    "confidence": 0.56
+     "label_01": 0.00019357321608117365,
+     "label_05": 0.00024336966037389568,
+     "floor": 0.004434118256964495,
+     "unit_A": 0.7829680982378189,
+     "label_04": 0.0002772099701072294,
+     "unit_B": 0.0009195108766173307,
+     "label_00": 0.0004088640627366985,
+     "label_06": 0.0005479926313766522,
+     "label_03": 0.20914731009610202,
+     "label_07": 0.0007113253449489445,
+     "label_02": 0.00014862764687274428
+    },
+    "type": "choice"
    }
   },
   "usage": {
-   "total_input_tokens": 460,
+   "total_tokens": 832,
+   "total_input_tokens": 832,
+   "input_tokens_by_modality": [
+    {
+     "modality": "text",
+     "tokens": 576
+    },
+    {
+     "modality": "image",
+     "tokens": 256
+    }
+   ],
    "total_output_tokens": 0
   }
  }

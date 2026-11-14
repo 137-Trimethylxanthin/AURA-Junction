@@ -143,6 +143,19 @@ export function Composer() {
         </Suspense>
       ) : null}
 
+      {suggestTidy ? (
+        // Suggested by the local heuristic (several questions, long or rambling text): never a model call to decide.
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">
+            {withModel ? "Looks like several questions." : "Looks like several questions; they can be split locally."}
+          </span>
+          <Button variant="secondary" data-tidy="suggested" onClick={() => startTidy(text)}>
+            <SparklesIcon data-icon="inline-start" />
+            {t(lang, "rw_offer")}
+          </Button>
+        </div>
+      ) : null}
+
       {mark ? (
         <div className="flex">
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-user-surface py-0 pr-0 pl-2.5 text-sm font-medium text-user">
@@ -187,17 +200,17 @@ export function Composer() {
           aria-keyshortcuts="/"
           className="max-h-24 min-h-10 min-w-0 flex-1 resize-none bg-transparent px-2 py-2.5 text-[15px] leading-5 outline-none placeholder:text-muted-foreground focus-visible:outline-none"
         />
-        {!rewriteOpen && tidyAvailable(text) ? (
+        {!rewriteOpen && tidyAvailable(text) && !suggestTidy ? (
+          // Manual tidy-up for any input (the model with the API, a clear local split otherwise).
           <Button
-            variant={suggestTidy ? "secondary" : "ghost"}
-            size={suggestTidy ? "default" : "icon"}
+            variant="ghost"
+            size="icon"
             aria-label={t(lang, "rw_offer")}
             title={withModel ? "Tidy this up with Gemini (1 model request)" : "Split into separate questions (local, no model)"}
-            data-tidy={suggestTidy ? "suggested" : "manual"}
+            data-tidy="manual"
             onClick={() => startTidy(text)}
           >
-            <SparklesIcon data-icon={suggestTidy ? "inline-start" : undefined} />
-            {suggestTidy ? t(lang, "rw_offer") : null}
+            <SparklesIcon />
           </Button>
         ) : null}
         {canSpeak ? (

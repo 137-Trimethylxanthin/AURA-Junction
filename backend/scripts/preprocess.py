@@ -181,6 +181,16 @@ def ifc_gold_rows(model, qlines):
     return rows
 
 
+def ifc_credit(data: Path, model: str) -> dict:
+    """The model's row of data/ifc_models/LICENSE.md: | file | title | licence | credit | source |."""
+    for line in (data / 'data' / IFC_ROOT / 'LICENSE.md').read_text(encoding='utf-8').splitlines():
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        if len(cells) >= 5 and cells[0] == f'{model}.ifc':
+            return {'text': f'{cells[1]}: {cells[3]}. Plan rendered by AURA from the IFC footprints.',
+                    'license': cells[2], 'url': cells[4]}
+    raise SystemExit(f'no licence row for {model}.ifc')
+
+
 def process_ifc(entry: dict, data: Path, qlines) -> dict:
     model = ifc.load(data / 'data' / IFC_ROOT / f"{entry['model']}.ifc", storey=entry['storey'],
                      drawing_id=entry['id'])
@@ -192,7 +202,7 @@ def process_ifc(entry: dict, data: Path, qlines) -> dict:
                  'languages': ['en']}
     img = rifc.raster(model)
     rpng.thumbnail(img).save(d / 'thumb.png', optimize=True)
-    drawing = rifc.build_drawing(model, facts=facts, thumbnail='thumb.png')
+    drawing = rifc.build_drawing(model, facts=facts, thumbnail='thumb.png', credit=ifc_credit(data, entry['model']))
     ev = {s: ifc.boxes(model, s) or [] for s in ifc.BOX_SUBJECTS}
     drawing['evidence'] = ev
     drawing['gold'] = [{k: v for k, v in g.items() if k not in ('solver_family', 'solver_value', 'match')} for g in gold]

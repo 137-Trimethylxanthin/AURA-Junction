@@ -26,7 +26,8 @@ def client():
 
 async def test_flash_lite_function_calling_round_trip(client):
     d = tools.load_file(FRONTEND_DRAWING)
-    decl = [{"functionDeclarations": tools.TOOL_DECLARATIONS}]
+    # The declarations as they were sent when this exchange was recorded.
+    decl = json.loads((FIXTURES / "gemini" / "fc_turn1.json").read_text())["request"]["tools"]
     contents = [{"role": "user", "parts": [{"text": "how many doors does apartment B have?"}]}]
     g1 = await client.generate(contents, tools=decl, purpose="agent", bucket="dev", system=SYSTEM)
     assert [(f.name, f.args) for f in g1.function_calls] == [
@@ -36,9 +37,12 @@ async def test_flash_lite_function_calling_round_trip(client):
     fc = g1.function_calls[0]
     tr = tools.count_objects(d, fc.args["subject"], tools.parse_scope_arg(fc.args["scope"]))
     assert tr.value == 9
-    contents += [g1.content, {"role": "user", "parts": [{"functionResponse": {
-        "name": fc.name,
-        "response": {"result_id": tr.result_id, "value": tr.value, "summary": tr.summary}}}]}]
+    # Replay the function response exactly as it was sent when recorded (summary wording has
+    # changed since); its result_id and value must still equal today's tool result.
+    sent = json.loads((FIXTURES / "gemini" / "fc_turn2.json").read_text())["request"]["contents"][2]
+    reply = sent["parts"][0]["functionResponse"]["response"]
+    assert (reply["result_id"], reply["value"]) == (tr.result_id, tr.value)
+    contents += [g1.content, sent]
     g2 = await client.generate(contents, tools=decl, purpose="agent", bucket="dev", system=SYSTEM)
     (final,) = g2.function_calls
     assert final.name == "final_answer" and final.args["result_id"] == tr.result_id
@@ -85,12 +89,17 @@ def test_unsure_choice_hands_over_to_the_agent(tmp_path):
 
 
 def test_agent_without_a_result_abstains_and_filters_prose(tmp_path):
+    """RECORDED live (choice + 3 flash-lite calls): 'places to sleep' → the agent lists rooms,
+    counts rooms in A, then names the room list and claims '4 rooms labeled Chambre à coucher'.
+    No tool produced 4, so the sentence is removed and the turn abstains."""
     with _app(tmp_path) as c:
         b = c.post("/ask", json={"drawing_id": "swiss-46639",
                                  "question": "how many places can people sleep in apartment A"}).json()
-        assert b["route"] == "agent" and b["answer"]["reason"] == "unclear_question"
-        assert b["explanation"] == ("Beds are not drawn, so sleeping places cannot be counted.")
-        assert any(n.get("tool", {}).get("name") == "list_rooms" for n in b["trace"])
+        assert b["route"] == "agent" and b["calls"] == 4
+        assert b["answer"]["reason"] == "unclear_question" and "explanation" not in b
+        tools_called = [n["tool"]["name"] for n in b["trace"] if "tool" in n]
+        assert tools_called == ["list_rooms", "count_objects"]
+        assert any(n["id"] == "provenance" and n["kind"] == "warn" for n in b["trace"])
 
 
 def test_chat_streams_agent_tool_calls(tmp_path):
@@ -146,3 +155,24 @@ def test_rewrite_refused_when_models_off(tmp_path, monkeypatch):
     with _app(tmp_path) as c:
         r = c.post("/rewrite", json={"drawing_id": "swiss-46639", "text": "how many doors"})
         assert r.status_code == 429 and r.json()["code"] == "budget_exhausted"
+
+
+def test_find_text_is_literal_no_redos():
+    import time
+
+    from aura.router import FIRE_PATTERN
+
+    data = json.loads(FRONTEND_DRAWING.read_text())
+    data["texts"] = [{"id": "text-01", "text": "a" * 5000 + "!", "x": 1, "y": 1, "w": 1, "h": 1},
+                     {"id": "text-02", "text": "EI30", "x": 2, "y": 2, "w": 1, "h": 1},
+                     {"id": "text-03", "text": "20 MIN.", "x": 3, "y": 3, "w": 1, "h": 1}]
+    d = tools.LoadedDrawing(id="t", dir=None, drawing=data, engine=tools.BundleEngine(data))
+    t0 = time.perf_counter()
+    r = tools.find_text_literal(d, "(a+)+$")
+    assert time.perf_counter() - t0 < 0.5 and r.text is None
+    from aura.agent.loop import execute
+
+    assert execute(d, "find_text", {"pattern": "(a+)+$"}).text is None
+    assert execute(d, "find_text", {"pattern": "ei30"}).text == "EI30"
+    fire = tools.find_text(d, FIRE_PATTERN, "fire_rating")
+    assert fire.meta["texts"] == ["EI30", "20 MIN."]

@@ -106,7 +106,8 @@ def test_choice_step_text_list_and_low_subject(live_client):
     q13 = ask(live_client, "Which sanitary fixtures are available in this building?")
     assert q13["answer"]["reason"] == "not_supported_yet" and q13["route"] == "choice"
     q16 = ask(live_client, "how many places can people sleep in apartment A")
-    assert q16["answer"]["reason"] == "unclear_question"  # subject 'other': no tool fits
+    assert q16["answer"]["reason"] == "unclear_question"  # recorded: choice → agent → abstain
+    assert q16["route"] == "agent"
 
 
 def test_abstain_gate(live_client):
@@ -414,3 +415,86 @@ def test_library_precomputed_checks_are_served_at_zero_calls(tmp_path):
             assert b["check"]["cached"] is True and b["check"]["calls"] == 0
             assert b["check"]["total"] == b["answer"]["value"]
         assert fake.calls == []
+
+
+# ---- loader robustness and IFC ---------------------------------------------------------------
+
+def _library_with(tmp_path, entries: dict[str, dict[str, str]]):
+    """A build dir: swiss-46639 (the frontend file) plus the given raw entries."""
+    import shutil
+
+    from aura.config import Settings
+    from aura.main import create_app
+    from tests.conftest import FRONTEND_DRAWING
+
+    build = tmp_path / "build"
+    (build / SWISS).mkdir(parents=True)
+    shutil.copy(FRONTEND_DRAWING, build / SWISS / "drawing.json")
+    for name, files in entries.items():
+        (build / name).mkdir()
+        for fn, text in files.items():
+            (build / name / fn).write_text(text)
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=build)
+    return create_app(s, use_gemini=False)
+
+
+def test_one_unreadable_drawing_never_breaks_the_listing(tmp_path):
+    import json as _json
+
+    from tests.conftest import FRONTEND_DRAWING
+
+    good = _json.loads(FRONTEND_DRAWING.read_text())
+    entries = {
+        "bad-json": {"drawing.json": "{not json"},
+        "bad-model": {"drawing.json": _json.dumps(good | {"id": "bad-model"}),
+                      "model.json": '{"schema": "IFC4", "id": "x"}'},
+        "garbage-model": {"drawing.json": _json.dumps(good | {"id": "garbage-model"}),
+                          "model.json": "[1, 2, 3]"},
+        "unknown-kind": {"drawing.json": _json.dumps(good | {"id": "unknown-kind",
+                                                             "kind": "hologram"})},
+        "no-credit": {"drawing.json": _json.dumps({k: v for k, v in good.items()
+                                                   if k != "credit"} | {"id": "no-credit"})},
+    }
+    with TestClient(_library_with(tmp_path, entries)) as c:
+        r = c.get("/drawings")
+        assert r.status_code == 200
+        assert [x["id"] for x in r.json()["drawings"]] == [SWISS]
+        h = c.get("/health").json()
+        assert h["ok"] is True and h["checks"]["drawings"] >= 1
+        assert h["checks"]["drawings_skipped"] == 5
+        assert "bad-json" not in r.text and "Traceback" not in r.text
+        assert c.get("/drawings/bad-model").status_code == 404
+        a = c.post("/ask", json={"drawing_id": "garbage-model", "question": "How many doors?"})
+        assert a.status_code == 404 and a.json()["code"] == "unknown_drawing"
+        assert ask(c, "How many windows are drawn on this floor plan?")["answer"]["value"] == 12
+
+
+@pytest.mark.dataset
+def test_ifc_entry_loads_lists_and_answers(tmp_path):
+    import shutil
+
+    from tests.conftest import BACKEND
+
+    src = BACKEND / "build" / "ifc_drawings" / "ifc-kit-fzk-haus_ac20-fzk-haus--erdgeschoss"
+    if not (src / "model.json").is_file():
+        pytest.skip("dataset: IFC preprocess output missing")
+    app = _library_with(tmp_path, {})
+    shutil.copytree(src, tmp_path / "build" / src.name)
+    with TestClient(app) as c:
+        ids = [x["id"] for x in c.get("/drawings").json()["drawings"]]
+        assert src.name in ids
+        d = c.get(f"/drawings/{src.name}").json()
+        assert d["kind"] == "ifc" and set(d["capabilities"]) <= {"door", "window", "room"}
+        doors = c.post("/ask", json={"drawing_id": src.name,
+                                     "question": "How many doors are on this floor?"}).json()
+        assert doors["answer"]["kind"] == "count" and doors["calls"] == 0
+        assert len(doors["evidence"]["boxes"]) == doors["answer"]["value"]
+        assert doors.get("check", {}).get("image", "none") == "none"  # no independent image
+        area = c.post("/ask", json={"drawing_id": src.name,
+                                    "question": "What is the net floor area of this floor?"}).json()
+        assert area["answer"]["kind"] == "area" and area["answer"]["value"] > 0
+        wc = c.post("/ask", json={"drawing_id": src.name, "question": "How many WCs?"}).json()
+        assert wc["answer"]["reason"] == "not_supported_yet"
+        apt = c.post("/ask", json={"drawing_id": src.name, "question": "How many apartments?"})
+        assert apt.json()["answer"]["kind"] == "abstain"
+        assert c.get("/health").json()["checks"]["drawings_skipped"] == 0

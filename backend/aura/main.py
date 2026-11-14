@@ -181,10 +181,13 @@ def create_app(
         db_ok = s.store is not None and s.store.ok()
         data_ok = settings.data_dir.is_dir()
         budget = s.budget.snapshot()
-        drawings = len(s.registry.library_ids())
+        ids = s.registry.library_ids()
+        drawings = sum(1 for i in ids if s.registry.get(i) is not None)
+        skipped = len(s.registry.skipped & set(ids))
         ok = db_ok and data_ok
         body = {"ok": ok, "contract_version": CONTRACT_VERSION,
                 "checks": {"db": db_ok, "data_dir": data_ok, "drawings": drawings,
+                           "drawings_skipped": skipped,
                            "models": budget["models"],
                            "budget_left": budget["event"]["cap"] - budget["event"]["used"]}}
         return JSONResponse(body, status_code=200 if ok else 503)
@@ -206,7 +209,11 @@ def create_app(
                 "credit": dr.get("credit"), "source": dr.get("source", d.source),
                 "subtitle": dr.get("subtitle"), "facts": dr.get("facts"),
             }
-            out.append(DrawingSummary.model_validate(summ).model_dump(exclude_none=True))
+            try:
+                out.append(DrawingSummary.model_validate(summ).model_dump(exclude_none=True))
+            except ValueError:  # a malformed entry is skipped, never a 500 for everyone
+                s.registry.skipped.add(did)
+                log.warning("skipped a drawing with an invalid summary")
         return {"contract_version": CONTRACT_VERSION, "drawings": out}
 
     def upload_row(request: Request, drawing_id: str) -> dict | None:

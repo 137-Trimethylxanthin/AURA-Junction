@@ -318,7 +318,8 @@ def test_ifc_library_served_model_and_evidence():
         assert drawing['kind'] == 'ifc' and drawing['frame']['px'] == served.frame['px']
         for fam in ('door', 'window'):
             res = ifc.answer(served, fam)
-            assert len(res['evidence']['boxes']) == res['value'], (e['id'], fam)  # UI recount = answer
+            ev = res['evidence']  # boxes when every element has a footprint on the plan, else GlobalId rows
+            assert len(ev['boxes'] or ev['rows']) == res['value'], (e['id'], fam)  # UI recount = answer
             assert all(0 <= b['x'] and 0 <= b['y'] and b['x'] + b['w'] <= 100.001 and b['y'] + b['h'] <= 100.001
                        for b in res['evidence']['boxes'])
         a = ifc.answer(served, 'area')

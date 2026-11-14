@@ -164,7 +164,8 @@ class BundleEngine:
             doubles = sum(1 for b in layer if b.get("note")) // 2
             summary = f"{len(layer)} {noun(family, len(layer))} on the DXF {family} layer."
             if family == "door" and doubles:
-                summary += f" {doubles} double doors are drawn as two leaves each, and each leaf counts."
+                summary += (f" {doubles * 2} are drawn twice at the same spot in the CAD file; "
+                            "the dataset counts both.")
             if scope.get("kind", "floor") != "floor":
                 summary += f" {n} {where}."
             return {"answer": {"kind": "count", "value": n, "subject": family}, "value": n,
@@ -219,7 +220,7 @@ class BundleEngine:
 
     def find_text(self, pattern: str) -> dict:
         rx = re.compile(pattern, re.IGNORECASE)
-        hits = [t for t in self.texts if rx.search(t.get("text", ""))]
+        hits = [t for t in self.texts if rx.search(t.get("text", "")[:500])]
         boxes = [{k: t[k] for k in ("id", "x", "y", "w", "h")} | {"subject": "label", "note": t["text"]}
                  for t in hits]
         return {
@@ -264,6 +265,45 @@ class RasterEngine:
 
     def room_list(self, scope: dict | None) -> list[dict]:
         return []
+
+
+class IfcEngine:
+    """L1's IFC solver over model.json (no ifcopenshell at serve time). Answers counts of the
+    contract subjects it has and room areas, on the drawing's storey."""
+
+    SUBJECTS = ("door", "window", "room")
+
+    def __init__(self, model: Any):
+        from aura.solvers import ifc
+
+        self.ifc = ifc
+        self.model = model
+
+    def supports(self, subject: str) -> bool:
+        if subject == "area":
+            return bool(self.model.rooms)
+        return subject in self.capabilities()
+
+    def capabilities(self) -> list[str]:
+        return [c for c in self.ifc.capabilities(self.model) if c in self.SUBJECTS]
+
+    def answer(self, family: str, scope: dict, overrides: list[dict] | None) -> dict:
+        if overrides:
+            return {"answer": {"kind": "abstain", "reason": "not_supported_yet"}, "value": None,
+                    "numbers": [], "evidence": {"boxes": [], "rooms": []},
+                    "summary": "What-if sizes are not supported on IFC models."}
+        return self.ifc.answer(self.model, family, scope)
+
+    def find_text(self, pattern: str) -> dict:
+        return {"answer": {"kind": "abstain", "reason": "not_on_drawing"}, "value": None,
+                "numbers": [], "texts": [], "evidence": {"boxes": [], "rooms": []},
+                "summary": "Printed text is not read from IFC models yet."}
+
+    def room_list(self, scope: dict | None) -> list[dict]:
+        st = self.model.storey
+        return [{"room_id": r["room_id"], "name": r["name"], "unit": None,
+                 "area_m2": round(r["area"] or 0, 2), "outdoor": False}
+                for r in self.model.rooms if r["storey"] == st]
 
 
 class SwissEngine:
@@ -349,6 +389,7 @@ class Registry:
         self.dirs = dirs
         self.uploads_dir = uploads_dir  # looked up by id only, never listed
         self._cache: dict[str, LoadedDrawing] = dict(extra or {})
+        self.skipped: set[str] = set()  # unreadable entries (count shown in /health)
 
     def evict(self, drawing_id: str) -> None:
         self._cache.pop(drawing_id, None)
@@ -362,8 +403,12 @@ class Registry:
         seen = [k for k, v in self._cache.items() if v.source != "upload"]
         for base in self.dirs:
             index = base / "index.json"
-            if index.is_file():  # the library order written by preprocess
-                for row in json.loads(index.read_text()):
+            try:
+                rows = json.loads(index.read_text()) if index.is_file() else []
+            except ValueError:
+                rows = []
+            if isinstance(rows, list):  # the library order written by preprocess
+                for row in rows:
                     rid = row.get("id") if isinstance(row, dict) else None
                     if rid and rid not in seen and (base / rid / "drawing.json").is_file():
                         seen.append(rid)
@@ -382,27 +427,55 @@ class Registry:
         for base in bases:
             p = base / drawing_id
             if (p / "drawing.json").is_file():
-                d = load_dir(p)
+                try:
+                    d = load_dir(p)
+                except Exception as e:  # noqa: BLE001 - one bad entry never breaks the rest
+                    if drawing_id not in self.skipped:
+                        log.warning("skipped an unreadable drawing (%s)", type(e).__name__)
+                    self.skipped.add(drawing_id)
+                    return None
+                self.skipped.discard(drawing_id)
                 self._cache[drawing_id] = d
                 return d
         return None
 
 
+class UnreadableDrawing(Exception):
+    pass
+
+
 def load_dir(p: Path, drawing_id: str | None = None) -> LoadedDrawing:
+    """Dispatch on the drawing's kind: raster.json → RasterEngine; kind 'ifc' → IfcEngine;
+    a Swiss model.json → SwissEngine; evidence in drawing.json → BundleEngine.
+    Anything else raises UnreadableDrawing."""
     data = json.loads((p / "drawing.json").read_text())
+    if not isinstance(data, dict) or not isinstance(data.get("rooms", []), list):
+        raise UnreadableDrawing("drawing.json is not a Drawing")
     gold = data.get("gold") or []
     if not gold and (p / "gold.json").is_file():
         g = json.loads((p / "gold.json").read_text())
         gold = g.get("gold", g) if isinstance(g, dict) else g
+    kind = data.get("kind", "cad_dxf")
     engine: Engine
     if (p / "raster.json").is_file():
         engine = RasterEngine(json.loads((p / "raster.json").read_text()))
+    elif kind == "ifc":
+        from aura.solvers import ifc
+
+        engine = IfcEngine(ifc.IfcModel.from_json(json.loads((p / "model.json").read_text())))
     elif (p / "model.json").is_file():
+        if kind != "cad_dxf":
+            raise UnreadableDrawing(f"unknown drawing kind {kind!r}")
         from aura.solvers import swiss
 
-        engine = SwissEngine(swiss.SwissModel.from_json(json.loads((p / "model.json").read_text())))
-    else:
+        m = json.loads((p / "model.json").read_text())
+        if "schema" in m:
+            raise UnreadableDrawing("model.json is not a Swiss model")
+        engine = SwissEngine(swiss.SwissModel.from_json(m))
+    elif kind in ("cad_dxf", "raster"):
         engine = BundleEngine(data)
+    else:
+        raise UnreadableDrawing(f"unknown drawing kind {kind!r}")
     return LoadedDrawing(id=drawing_id or data.get("id") or p.name, dir=p, drawing=data,
                          engine=engine, gold=list(gold), anchors=list(data.get("anchors") or []),
                          source=data.get("source", "library"))
@@ -528,7 +601,20 @@ def compare_with_original(d: LoadedDrawing) -> ToolResult:
     )
 
 
+MAX_LITERAL = 100
+
+
+def find_text_literal(d: LoadedDrawing, text: str, subject: str = "label") -> ToolResult | None:
+    """Case-insensitive substring search for model- or user-supplied text: escaped, never
+    compiled as a pattern of its own."""
+    lit = (text or "").strip()[:MAX_LITERAL]
+    if not lit:
+        return None
+    return find_text(d, re.escape(lit), subject)
+
+
 def find_text(d: LoadedDrawing, pattern: str, subject: str = "label") -> ToolResult:
+    """`pattern` must be one of OUR fixed regexes (router.FIRE_PATTERN) or an escaped literal."""
     t0 = time.perf_counter()
     raw = d.engine.find_text(pattern)
     return _to_result(d, "find_text", {"pattern": pattern, "subject": subject}, raw, _ms(t0),
@@ -570,7 +656,8 @@ TOOL_DECLARATIONS: list[dict] = [
     },
     {
         "name": "find_text",
-        "description": "Find printed text on the drawing (e.g. fire ratings like EI30) by regex.",
+        "description": "Find printed text on the drawing containing this literal text "
+                       "(case-insensitive, not a regex), e.g. 'EI30'.",
         "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}},
                        "required": ["pattern"]},
     },

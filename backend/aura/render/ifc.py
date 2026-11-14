@@ -58,7 +58,7 @@ def render_svg(model: IfcModel) -> str:
 
 
 def build_drawing(model: IfcModel, *, base_url: str | None = None, source: str = 'library',
-                  facts: dict | None = None, thumbnail: str | None = None) -> dict:
+                  facts: dict | None = None, thumbnail: str | None = None, credit: dict | None = None) -> dict:
     base = base_url if base_url is not None else f'/drawings/{model.id}'
     f = model.frame
     W, H = f['px']
@@ -85,7 +85,7 @@ def build_drawing(model: IfcModel, *, base_url: str | None = None, source: str =
                     'm_per_unit': 1, 'y_flip': True, 'px': [W, H]},
              m_per_pct_x=round(W / f['scale'] / 100, 5), m_per_pct_y=round(H / f['scale'] / 100, 5),
              images={'rebuilt': f'{base}/plan.svg'}, rooms=rooms, units=[],
-             credit={'text': f'{CREDITS.get(org, "IFC sample model")} ({model.source}), via the Stoa dataset. '
+             credit=credit or {'text': f'{CREDITS.get(org, "IFC sample model")} ({model.source}), via the Stoa dataset. '
                              'Plan rendered from the IFC footprints.',
                      'license': 'see the dataset LICENSE.md for this model'})
     if facts:

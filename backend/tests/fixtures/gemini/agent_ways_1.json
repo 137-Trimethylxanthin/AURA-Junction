@@ -79,7 +79,7 @@
      },
      {
       "name": "find_text",
-      "description": "Find printed text on the drawing (e.g. fire ratings like EI30) by regex.",
+      "description": "Find printed text on the drawing containing this literal text (case-insensitive, not a regex), e.g. 'EI30'.",
       "parameters": {
        "type": "object",
        "properties": {

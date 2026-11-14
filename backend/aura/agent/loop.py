@@ -55,11 +55,8 @@ def execute(d: tools.LoadedDrawing, name: str, args: dict) -> ToolResult | None:
     if name == "list_rooms":
         return tools.list_rooms(d, scope)
     if name == "find_text":
-        pattern = str(args.get("pattern", ""))[:200]
-        try:
-            return tools.find_text(d, pattern)
-        except Exception:  # noqa: BLE001 - a bad regex from the model is just no result
-            return None
+        # The model's argument is a LITERAL (never compiled as a regex: no ReDoS).
+        return tools.find_text_literal(d, str(args.get("pattern", "")))
     return None
 
 

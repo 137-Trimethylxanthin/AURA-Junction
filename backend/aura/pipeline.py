@@ -210,8 +210,12 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
                     f"The model judged this information is not shown on the drawing "
                     f"(p = {u.on_drawing:.2f}).", intent_body="abstain · not on drawing",
                     intent_tag=tag)
+            # Hand over to the agent when unsure, off-template, or when a room count has no
+            # label (live: "places to sleep in apartment A" → choice 'room' would count all 11).
+            vague_rooms = (u.intent == "count" and u.subject == "room"
+                           and (text_scope or u.scope or {}).get("kind") != "label")
             if (not u.confident or u.intent == "other"
-                    or (u.intent == "count" and not u.subject)):
+                    or (u.intent == "count" and not u.subject) or vague_rooms):
                 return await _agent(svc, d, question, lang, caller, stats, history, tag)
             if u.intent == "count" and u.subject:
                 intent, subject = "count", u.subject
@@ -250,7 +254,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
     if intent == "count":
         subj = subject or "room"
         tr = tools.count_objects(d, subj, scope)
-        if not tr.supported:
+        if not tr.supported or tr.meta.get("abstain") == "not_supported_yet":
             return A.not_supported(question, lang, scope, tr, intent_tag=tag)
         if tr.kind == "none":
             return A.unclear(question, lang, d, scope, intent_tag=tag)
@@ -277,7 +281,8 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
     key = check_key(d.id, subject, ids)
     full = svc.checks.get(key, d.dir, subject)
     cached = full is not None
-    if full is None and d.image_path() is None and d.source == "upload":
+    if full is None and d.image_path() is None and (d.source == "upload"
+                                                     or d.drawing.get("kind") == "ifc"):
         stats["no_image"] = True
         return None
     if full is None:

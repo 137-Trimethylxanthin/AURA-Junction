@@ -34,7 +34,7 @@
        "name": "count_objects",
        "response": {
         "result_id": "r-90f67fb0c166",
-        "summary": "22 doors on the DXF door layer. 2 double doors are drawn as two leaves each, and each leaf counts. 9 in apartment B.",
+        "summary": "22 doors on the DXF door layer. 4 are drawn twice at the same spot in the CAD file; the dataset counts both. 9 in apartment B.",
         "supported": true,
         "value": 9.0
        }
@@ -109,7 +109,7 @@
      },
      {
       "name": "find_text",
-      "description": "Find printed text on the drawing (e.g. fire ratings like EI30) by regex.",
+      "description": "Find printed text on the drawing containing this literal text (case-insensitive, not a regex), e.g. 'EI30'.",
       "parameters": {
        "type": "object",
        "properties": {
