@@ -25,7 +25,13 @@ import {
 import { Credit, PlanStage, PlanToolbar } from "@/features/plan"
 import { useTitle } from "@/hooks/use-title"
 import { BUNDLED_DRAWING_ID } from "@/data/ids"
-import { actions, selectDrawing, useAppStore, type DrawingLoad } from "@/store"
+import {
+  actions,
+  POLL_DEADLINE_MS,
+  selectDrawing,
+  useAppStore,
+  type DrawingLoad,
+} from "@/store"
 
 /** /d/:drawingId: the plan + chat workspace for one drawing. */
 export default function Workspace() {
@@ -146,6 +152,11 @@ function LoadState({ load }: { load: DrawingLoad }) {
           icon: <AlertTriangleIcon />,
           title: "This drawing could not be read",
           text: load.message ?? "The server could not process the file.",
+        },
+        too_slow: {
+          icon: <AlertTriangleIcon />,
+          title: "Reading this drawing is taking too long",
+          text: `The server has not finished after ${POLL_DEADLINE_MS / 60_000} minutes, so this page stopped waiting. Upload the file again, or try later.`,
         },
         not_found: {
           icon: <FileQuestionIcon />,

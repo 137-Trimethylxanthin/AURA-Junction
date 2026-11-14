@@ -198,3 +198,54 @@ describe('streamed answers', () => {
     expect(localStorage.getItem('aura.conversation.swiss-46639')).toBeNull()
   })
 })
+
+describe('limits and drawing switches', () => {
+  it('stops polling after the deadline and reports the drawing as too slow', async () => {
+    let polls = 0
+    const store = createAppStore({
+      pollMs: 2,
+      pollDeadlineMs: 15,
+      source: fakeSource({
+        drawing: async () => {
+          throw processing()
+        },
+        status: async (id) => {
+          polls++
+          return { contract_version: '1.1', id, status: 'processing' }
+        },
+      }),
+    })
+    await store.getState().loadDrawing('up-3')
+    expect(store.getState().session.load).toEqual({ id: 'up-3', state: 'too_slow' })
+    const at = polls
+    await new Promise((r) => setTimeout(r, 20))
+    expect(polls).toBe(at)
+  })
+
+  it('switching drawings while an answer streams aborts it and never carries its conversation id over', async () => {
+    let emit!: (e: { event: 'turn'; data: { conversation_id: string; turn_id: string } }) => void
+    let aborted = false
+    const base = fakeSource({ drawing: async () => other })
+    const src: Source = {
+      ...base,
+      status: () => ({ kind: 'api', state: 'ready' }),
+      chat: (_req, onEvent, signal) =>
+        new Promise((_r, reject) => {
+          emit = onEvent
+          signal?.addEventListener('abort', () => {
+            aborted = true
+            reject(new DOMException('Stopped', 'AbortError'))
+          })
+        }),
+    }
+    const store = createAppStore({ source: src })
+    const p = store.getState().ask('How many windows?')
+    await store.getState().loadDrawing('up-1')
+    expect(aborted).toBe(true)
+    emit({ event: 'turn', data: { conversation_id: 'c-old', turn_id: 't' } })
+    await p
+    expect(store.getState().session.drawing.id).toBe('up-1')
+    expect(store.getState().session.conversationId).toBeNull()
+    expect(store.getState().turns).toHaveLength(0)
+  })
+})

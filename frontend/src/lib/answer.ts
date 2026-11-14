@@ -37,6 +37,8 @@ export interface Derived {
   rejected: string[]
   /** Rooms included after toggles. */
   includedRooms: EvidenceRoom[]
+  /** Area answers: included rooms with no known area (area_m2 null), left out of the sum and named in a note. */
+  noArea: EvidenceRoom[]
   gold: GoldChip
 }
 
@@ -83,10 +85,12 @@ export function deriveAnswer(resp: AskResponse, t: Toggles, drawing?: Drawing): 
     value = answer.value
   } else if (answer.kind === 'area') {
     original = answer.value
-    value = changed ? round2(includedRooms.reduce((s, r) => s + r.area_m2, 0)) : answer.value
+    value = changed ? round2(includedRooms.reduce((s, r) => s + (r.area_m2 === null ? 0 : r.area_m2), 0)) : answer.value
   }
+  // An unknown area is never summed as 0: such rooms are listed apart, whatever the toggles say.
+  const noArea = answer.kind === 'area' ? evidence.rooms.filter((r) => r.area_m2 === null) : []
 
-  return { kind: answer.kind, value, original, changed, counted, rejected, includedRooms, gold: goldChip(resp, changed) }
+  return { kind: answer.kind, value, original, changed, counted, rejected, includedRooms, noArea, gold: goldChip(resp, changed) }
 }
 
 export function goldChip(resp: AskResponse, changed: boolean): GoldChip {

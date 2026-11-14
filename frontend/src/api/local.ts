@@ -1,3 +1,8 @@
+/**
+ * Offline snapshot of the backend's router + answer builder, for the bundled drawing only.
+ * The backend (backend/aura/router.py, answer.py) is authoritative; this side follows it, checked by the shared
+ * golden table (conformance.fixtures.ts / .json, also run by backend/tests/test_contract.py). See contract.md "Conformance".
+ */
 import {
   CONTRACT_VERSION,
   type AbstainReason,
@@ -387,16 +392,17 @@ export function ask(req: AskRequest, drawing: DrawingFile = bundledDrawing): Ask
   const edits: string[] = []
   const rooms: EvidenceRoom[] = inScope.map((rm) => {
     const o = overrides.find((x) => x.room_id === rm.room_id)
-    const included = explicit || !rm.outdoor
+    // A room with no known area is listed but never summed.
+    const included = (explicit || !rm.outdoor) && (rm.area_m2 !== null || !!o)
     if (!o) return { room_id: rm.room_id, included, area_m2: rm.area_m2 }
     const area = round2(o.w_m * o.h_m)
     edits.push(
-      `Room ${rm.room_id} uses your what-if size ${o.w_m} × ${o.h_m} m = ${area.toFixed(2)} m² (printed ${rm.area_m2.toFixed(2)} m²).`,
+      `Room ${rm.room_id} uses your what-if size ${o.w_m} × ${o.h_m} m = ${area.toFixed(2)} m² (printed ${rm.area_m2 === null ? 'no area' : `${rm.area_m2.toFixed(2)} m²`}).`,
     )
     return { room_id: rm.room_id, included, area_m2: area, edited: true }
   })
   const included = rooms.filter((x) => x.included)
-  const value = round2(included.reduce((s, x) => s + x.area_m2, 0))
+  const value = round2(included.reduce((s, x) => s + (x.area_m2 ?? 0), 0))
   const outdoorLeftOut = rooms.length - included.length
   const ids = rooms.map((x) => roomEvidenceId(x.room_id))
   const includedIds = included.map((x) => roomEvidenceId(x.room_id))
@@ -428,7 +434,7 @@ export function ask(req: AskRequest, drawing: DrawingFile = bundledDrawing): Ask
       tag: 'room labels · printed areas',
       body:
         scope.kind === 'room'
-          ? `Room ${scope.room_id} (${inScope[0]?.name}), printed net area ${inScope[0]?.area_m2.toFixed(2)} m².`
+          ? `Room ${scope.room_id} (${inScope[0]?.name}), printed net area ${inScope[0]?.area_m2 == null ? 'not printed' : `${inScope[0].area_m2.toFixed(2)} m²`}.`
           : `${rooms.length} numbered ${rooms.length === 1 ? 'room' : 'rooms'} ${whereEn(scope)}` +
             (outdoorLeftOut ? `; ${outdoorLeftOut} outdoor left out.` : '.'),
       kind: 'exact',

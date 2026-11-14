@@ -120,7 +120,7 @@ export interface AskOptions {
 /** Loading state of the drawing named in the URL. `session.drawing` changes only once a load is `ready`. */
 export interface DrawingLoad {
   id: string
-  state: 'loading' | 'processing' | 'ready' | 'failed' | 'not_found' | 'unavailable' | 'error'
+  state: 'loading' | 'processing' | 'ready' | 'failed' | 'too_slow' | 'not_found' | 'unavailable' | 'error'
   /** 0–1 while processing. */
   progress?: number
   /** Reason shown to the user (failed / error). */
@@ -129,6 +129,8 @@ export interface DrawingLoad {
 
 /** How often a drawing that is still processing is polled. */
 export const POLL_MS = 1500
+/** A drawing still processing after this long is reported as stuck and no longer polled. */
+export const POLL_DEADLINE_MS = 3 * 60_000
 
 export interface AppState {
   session: {
@@ -208,6 +210,7 @@ export interface StoreDeps {
   source?: Source
   drawing?: Drawing
   pollMs?: number
+  pollDeadlineMs?: number
 }
 
 export type AppStore = StoreApi<AppState>
@@ -221,6 +224,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
   const source = deps.source ?? createSource()
   const initial = deps.drawing ?? bundledDrawing
   const pollMs = deps.pollMs ?? POLL_MS
+  const pollDeadlineMs = deps.pollDeadlineMs ?? POLL_DEADLINE_MS
 
   return createStore<AppState>()((set, get) => {
     const patchAgent = (turnId: string, patch: (t: AgentTurn) => Partial<AgentTurn>) =>
@@ -266,19 +270,21 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
     let pollTimer: ReturnType<typeof setTimeout> | undefined
     const setLoad = (load: DrawingLoad) => set((s) => ({ session: { ...s.session, load } }))
     /** Swap in a ready drawing; a different drawing starts a clean conversation. */
-    const showDrawing = (d: Drawing) =>
-      set((s) => {
-        const session = { ...s.session, drawing: d, load: { id: d.id, state: 'ready' } as DrawingLoad }
-        if (s.session.drawing.id === d.id) return { session }
-        // Another drawing: an answer still streaming for the old one must not land here (its conversation id
-        // belongs to the old drawing; the next question would be rejected).
-        inflight?.abort()
-        inflight = null
-        return { session: { ...session, conversationId: null }, turns: [], undoStack: [], ui: freshUi() }
-      })
+    const showDrawing = (d: Drawing) => {
+      const session = { ...get().session, drawing: d, load: { id: d.id, state: 'ready' } as DrawingLoad }
+      if (get().session.drawing.id === d.id) return set({ session })
+      // Another drawing: an answer still streaming for the old one must not land here (its conversation id
+      // belongs to the old drawing; the next question would be rejected).
+      inflight?.abort()
+      inflight = null
+      set({ session: { ...session, conversationId: null }, turns: [], undoStack: [], ui: freshUi() })
+    }
     const loadError = (id: string, e: unknown): DrawingLoad => {
       if (e instanceof ApiError && e.code === 'unknown_drawing') return { id, state: 'not_found' }
       if (e instanceof ApiError && e.status === 404) return { id, state: 'not_found' }
+      // A 5xx means the server is there but failed: say so, not "not connected".
+      if (e instanceof TransportError && e.kind === 'server')
+        return { id, state: 'error', message: 'The server had a problem opening this drawing. Try again in a moment.' }
       if (e instanceof TransportError) return { id, state: 'unavailable', message: e.message }
       return { id, state: 'error', message: e instanceof Error ? e.message : 'The drawing could not be loaded' }
     }
@@ -320,12 +326,14 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
           const d = await source.drawing(id)
           if (live()) showDrawing(d)
         }
+        const started = Date.now()
         const poll = async (): Promise<void> => {
           try {
             const st = await source.drawingStatus(id)
             if (!live()) return
             if (st.status === 'ready') return await fetchFull()
             if (st.status === 'failed') return setLoad({ id, state: 'failed', message: st.error })
+            if (Date.now() - started > pollDeadlineMs) return setLoad({ id, state: 'too_slow' })
             setLoad({ id, state: 'processing', ...(st.progress !== undefined ? { progress: st.progress } : {}) })
             await new Promise<void>((r) => (pollTimer = setTimeout(r, pollMs)))
             if (live()) return await poll()
@@ -416,10 +424,20 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
             patchAgent(pending.id, () => ({ status: 'error', error: { message: t(get().session.lang, 'stopped'), code: 'cancelled' } }))
             return pending.id
           }
+          // Browser transport strings ("Failed to fetch") are not for people; say what happened instead.
           const error =
             e instanceof ApiError
               ? { message: e.message, code: e.code, status: e.status }
-              : { message: e instanceof Error ? e.message : 'Something went wrong' }
+              : e instanceof TransportError
+                ? {
+                    message:
+                      e.kind === 'timeout'
+                        ? 'No answer within a minute. Try again, or ask a simpler question.'
+                        : e.kind === 'server'
+                          ? 'The server had a problem with this question. Try again in a moment.'
+                          : 'The server could not be reached. Try again in a moment.',
+                  }
+                : { message: e instanceof Error ? e.message : 'Something went wrong' }
           patchAgent(pending.id, () => ({ status: 'error', error }))
         }
         if (inflight === ctrl) inflight = null

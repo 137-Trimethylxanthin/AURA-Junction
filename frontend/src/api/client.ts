@@ -1,10 +1,14 @@
 import {
   CONTRACT_VERSION,
   isAskResponse,
+  salvageAskResponse,
+  salvageDrawing,
+  salvageDrawingList,
   isDrawing,
   isDrawingList,
   isDrawingStatusBody,
   isErrorBody,
+  fastApiMessage,
   isFastApiDetail,
   isHealth,
   majorOf,
@@ -50,19 +54,22 @@ export interface ClientOptions {
   fetch?: FetchLike
 }
 
+/** Fields where null is a value ("unknown", e.g. an area that is not printed), not an absent optional field. */
+const NULL_IS_VALUE = new Set(['area_m2'])
+
 /** Optional fields may arrive as null (Pydantic's default); the contract treats them as absent. */
-function dropNulls(v: unknown): unknown {
+export function dropNulls(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(dropNulls)
   if (v && typeof v === 'object')
     return Object.fromEntries(
       Object.entries(v as Record<string, unknown>)
-        .filter(([, x]) => x !== null)
+        .filter(([k, x]) => x !== null || NULL_IS_VALUE.has(k))
         .map(([k, x]) => [k, dropNulls(x)]),
     )
   return v
 }
 
-const join = (base: string, path: string) => base.replace(/\/+$/, '') + path
+export const join = (base: string, path: string) => base.replace(/\/+$/, '') + path
 
 export function checkVersion(v: string, body: unknown) {
   if (majorOf(v) !== majorOf(CONTRACT_VERSION))
@@ -105,7 +112,8 @@ export async function request(opts: ClientOptions, path: string, init: RequestIn
   if (res.status >= 500) throw new TransportError(`Server error ${res.status}`, 'server', res.status)
   if (res.status >= 400) {
     if (isErrorBody(body)) throw new ApiError(body.error, res.status, body.code, body)
-    if (isFastApiDetail(body)) throw new ApiError('The request was not accepted', res.status, 'validation', body)
+    if (isFastApiDetail(body))
+      throw new ApiError(`The request was not accepted: ${fastApiMessage(body) ?? `status ${res.status}`}`, res.status, 'validation', body)
     throw new ApiError(`Request failed (${res.status})`, res.status, 'bad_request', body)
   }
   return body
@@ -127,22 +135,23 @@ export async function postAsk(opts: ClientOptions, req: AskRequest, timeoutMs = 
   )
   if (body && typeof body === 'object' && typeof (body as { contract_version?: unknown }).contract_version === 'string')
     checkVersion((body as { contract_version: string }).contract_version, body)
-  if (!isAskResponse(body)) throw new ApiError('The answer does not match the contract', 200, 'invalid_response', body)
-  return body
+  const answer = salvageAskResponse(body)
+  if (!isAskResponse(answer)) throw new ApiError('The answer does not match the contract', 200, 'invalid_response', body)
+  return answer
 }
 
 export async function getDrawing(opts: ClientOptions, id: string, timeoutMs = 15_000): Promise<Drawing> {
-  const body = await request(opts, `/drawings/${encodeURIComponent(id)}`, { method: 'GET' }, timeoutMs)
+  const body = salvageDrawing(await request(opts, `/drawings/${encodeURIComponent(id)}`, { method: 'GET' }, timeoutMs))
   if (!isDrawing(body)) throw new ApiError('The drawing does not match the contract', 200, 'invalid_response', body)
   checkVersion(body.contract_version, body)
   return body
 }
 
 export async function listDrawings(opts: ClientOptions, timeoutMs = 15_000): Promise<DrawingList> {
-  const body = await request(opts, '/drawings', { method: 'GET' }, timeoutMs)
+  const { list: body, dropped } = salvageDrawingList(await request(opts, '/drawings', { method: 'GET' }, timeoutMs))
   if (!isDrawingList(body)) throw new ApiError('The drawing list does not match the contract', 200, 'invalid_response', body)
   checkVersion(body.contract_version, body)
-  return body
+  return dropped ? { ...body, dropped } : body
 }
 
 export async function getDrawingStatus(opts: ClientOptions, id: string, timeoutMs = 15_000): Promise<DrawingStatusBody> {

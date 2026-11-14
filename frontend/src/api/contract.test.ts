@@ -101,3 +101,12 @@ describe('contract 1.1 (additive)', () => {
     expect(isErrorBody({ contract_version: '1.1', error: 'x', code: 'nope' })).toBe(false)
   })
 })
+
+describe('null as a value', () => {
+  it('dropNulls keeps area_m2: null (unknown area) and drops other nulls', async () => {
+    const { dropNulls } = await import('./client')
+    expect(dropNulls({ a: null, rooms: [{ room_id: '1', included: false, area_m2: null, edited: null }] })).toEqual({
+      rooms: [{ room_id: '1', included: false, area_m2: null }],
+    })
+  })
+})

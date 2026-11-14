@@ -354,7 +354,7 @@ function EditorBody({ room }: { room: RoomPoly }) {
   const { w, h } = useAppStoreShallow((s) => ({ w: s.ui.whatIf.w, h: s.ui.whatIf.h }))
   const lang = useAppStore((s) => s.session.lang)
   const next = round2(w * h)
-  const changed = next !== round2(room.area_m2)
+  const changed = room.area_m2 === null || next !== round2(room.area_m2)
   const { maxW, maxH } = limitsOf(room)
   const [bad, setBad] = useState({ w: false, h: false })
   return (
@@ -385,7 +385,9 @@ function EditorBody({ room }: { room: RoomPoly }) {
       <div className="flex items-baseline justify-between gap-2 rounded-lg bg-muted px-3 py-2">
         <span className="text-xs text-muted-foreground">Area</span>
         <span className="num text-sm" aria-live="polite">
-          <span className={cn('text-muted-foreground', changed && 'line-through')}>{fmtArea(room.area_m2, lang)}</span>
+          <span className={cn('text-muted-foreground', changed && room.area_m2 !== null && 'line-through')}>
+            {room.area_m2 === null ? 'not printed' : fmtArea(room.area_m2, lang)}
+          </span>
           <ArrowRightIcon aria-hidden className="mx-1 inline size-3.5 text-muted-foreground" />
           <strong className={cn('font-semibold', changed && 'text-user')}>{fmtArea(next, lang)} m²</strong>
         </span>

@@ -283,7 +283,7 @@ const RoomLayer = memo(function RoomLayer(p: RoomLayerProps) {
         const userChanged = inc !== er.included
         const isSel = p.selected === id
         const hot = isSel || p.hovered.includes(id)
-        const label = `${roomTitle(poly)}${poly.outdoor ? ' (outdoor)' : ''}, ${fmtArea(er.area_m2, p.lang)} m², ${
+        const label = `${roomTitle(poly)}${poly.outdoor ? ' (outdoor)' : ''}, ${er.area_m2 === null ? 'area not printed' : `${fmtArea(er.area_m2, p.lang)} m²`}, ${
           inc ? 'included' : 'left out'
         }${er.edited ? ', your what-if size' : ''}. Press to ${inc ? 'leave it out' : 'include it'}`
         return (

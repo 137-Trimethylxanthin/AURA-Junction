@@ -2,6 +2,7 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -43,10 +44,14 @@ function isTyping(el: Element | null) {
   )
 }
 
+/** The server's question limit (AskRequest.question max_length); the textarea stops there. */
+const MAX_QUESTION = 2000
+
 export function Composer() {
   const text = useDraft((s) => s.text)
   const focusTick = useDraft((s) => s.focusTick)
   const pending = useAppStore(selectIsPending)
+  const hintId = useId()
   const mark = useAppStore(selectAttachedMark)
   const hasTurns = useAppStore((s) => s.turns.length > 0)
   const lang = useAppStore(selectSessionLang)
@@ -197,6 +202,8 @@ export function Composer() {
           }}
           placeholder="Ask in any language…"
           aria-label="Ask about this drawing"
+          maxLength={MAX_QUESTION}
+          aria-describedby={hintId}
           aria-keyshortcuts="/"
           className="max-h-24 min-h-10 min-w-0 flex-1 resize-none bg-transparent px-2 py-2.5 text-[15px] leading-5 outline-none placeholder:text-muted-foreground focus-visible:outline-none"
         />
@@ -238,6 +245,16 @@ export function Composer() {
           <ArrowUpIcon />
         </Button>
       </div>
+
+      {pending && text.trim() ? (
+        <p id={hintId} className="px-1 text-xs text-muted-foreground" role="status">
+          Waiting for the answer above. Stop it or wait, then send this one.
+        </p>
+      ) : text.length > MAX_QUESTION - 200 ? (
+        <p id={hintId} className="num px-1 text-xs text-muted-foreground" role="status">
+          {text.length} / {MAX_QUESTION} characters
+        </p>
+      ) : null}
 
       <ScrollRow label="Prompt blocks and suggested questions">
         <ul aria-label="Prompt blocks" className="flex shrink-0 gap-1.5">

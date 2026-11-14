@@ -139,3 +139,18 @@ describe('IFC counts with rows and no boxes', () => {
     expect(deriveAnswer(rowsOnly, t).value).toBe(46)
   })
 })
+
+describe('rooms with no printed area', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'Net floor area of apartment A' })
+  const room = base.evidence.rooms[0]
+  const resp = { ...base, evidence: { ...base.evidence, rooms: [...base.evidence.rooms, { room_id: 'x-1', included: false, area_m2: null }] } }
+  it('are listed apart, never summed as 0, and say so', () => {
+    const d = deriveAnswer(resp, emptyToggles())
+    expect(d.noArea.map((r) => r.room_id)).toEqual(['x-1'])
+    expect(d.value).toBe(base.answer.kind === 'area' ? base.answer.value : null)
+    const t = emptyToggles()
+    t.included['room-x-1'] = true
+    t.included[`room-${room.room_id}`] = true
+    expect(deriveAnswer(resp, t).value).toBe(deriveAnswer(base, t).value)
+  })
+})

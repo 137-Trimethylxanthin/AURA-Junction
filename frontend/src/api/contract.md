@@ -21,15 +21,16 @@ This file is for the backend team. The source of truth is `contract.ts`, which s
 ### Timeouts and fallback
 
 **Timeouts.**
-- Aim to answer `/ask` well under 10 s.
-- After **15 s** the frontend aborts the request and ignores any response that arrives later.
+- Aim to answer `/ask` well under 10 s for template questions; the agent route may take up to the 60 s turn deadline.
+- After **65 s** (the server's 60 s turn deadline plus 5 s) the frontend aborts the request, ignores any response that arrives later, and shows an error card. A timeout is not treated as a dead server: the session stays on the API.
 - If you can't answer in time, return an abstain rather than keep the client waiting.
 
 **What each failure does on the bundled drawing (`swiss-46639`).**
 
 | What happens | Effect in the frontend |
 |---|---|
-| Network error, a **5xx** status, or a timeout | Switches the whole session to its local answers, and says so with a source badge and a toast. Sessions never mix sources. |
+| Network error or a **5xx** status | Switches the whole session to its local answers, and says so with a source badge and a toast. Sessions never mix sources. |
+| A client timeout (65 s) | Error card; the session stays on the API. |
 | A **4xx** status (`ErrorBody`, or FastAPI's default `{ "detail": [...] }` from a 422) | Shows an error card. It never falls back. |
 | A body that fails validation | Treated as an error and never falls back. |
 
@@ -502,6 +503,7 @@ Confirmed against the live backend (14 Nov):
 | `presenter_required` | 403 | Raster/PDF upload without a valid `X-AURA-Presenter`. |
 | `processing` | 409 | The drawing is not `ready` yet. |
 | `timeout` | SSE only (`/ask`: 504) | The 60 s turn deadline passed. |
+| `not_found` | 404 | Unknown conversation (`GET /conversations/:id`) or answer (`GET /answers/:id/evidence.csv`). Drawings keep `unknown_drawing`. |
 
 All of these except `timeout` are 4xx, so the frontend shows an error card and never falls back.
 
@@ -544,11 +546,18 @@ interface RewriteResponse {
 
 **Agent route.** `route` may be `'agent'`: on a router miss, flash-lite function calling streams extra `tool_call`/`tool_result` pairs (node ids `agent-N`, tag `agent · flash-lite`). The answer may carry `explanation` (prose after the provenance filter, shown under the sentence) and a `warn` trace node named `provenance` when sentences with invented numbers were removed. Top-level `calls` counts the `choice` call plus the agent calls.
 
+### Health, unknown areas, not_found (14 Nov)
+
+- `GET /health` may add `checks: { db, data_dir, drawings, drawings_skipped, models, budget_left }` (diagnostics; the client ignores them). When the database or the data directory is down it answers **503** with `ok: false` and the same body; the client treats that as a 5xx.
+- `RoomPoly.area_m2` and `EvidenceRoom.area_m2` are `number | null`. `null` means the area is not printed and cannot be measured: it is **never** sent as 0. An `EvidenceRoom` with `area_m2: null` has `included: false`, is not in the answer's value, and the UI shows "area not printed" with a note under the total ("n rooms have no printed area and are not in the total"). The client keeps this null (it does not treat it as an absent optional field).
+
 ### Conformance JSON
 
 `src/api/conformance.fixtures.json` is generated from `conformance.fixtures.ts` (`npm run fixtures:export`) and a unit test keeps the two in sync. `backend/tests/test_contract.py` reads the JSON.
 
 ## Conformance
+
+**Which side is authoritative.** The backend (`backend/aura/router.py`, `answer.py`, the solvers) is the product: every answer the app shows with a server connected comes from it. The TypeScript router and answer builder (`src/lib/route.ts`, `src/lib/detect.ts`, `src/api/local.ts`) are an offline snapshot for the bundled drawing only (no server, or the server failed on `swiss-46639`); they are never used for any other drawing. When the two disagree, the backend is right and the TypeScript side is changed. The shared golden table below is the conformance test both run: `npx vitest run` checks the local adapter against it, and `backend/tests/test_contract.py` checks the backend against the same JSON. Backend-only behaviour (follow-up context, the agent route, the question-word cue rule) is not mirrored offline; offline, such questions abstain or answer from the template only.
 
 `src/api/conformance.fixtures.ts` lists the golden questions and the answers they must produce. The local adapter passes all of them (`npx vitest run`). The backend should pass the same table: the same values, abstain reasons and `gold.match`. These are the key rows:
 

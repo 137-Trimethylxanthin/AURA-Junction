@@ -27,11 +27,11 @@ export function StreamSteps({ turn, lang }: { turn: AgentTurn; lang: Lang }) {
     <div className="flex flex-col gap-3" data-stream-steps={st?.phase ?? 'sent'}>
       <Trace aria-live="polite" aria-label="Progress">
         <motion.div {...enter}>
-          <TraceLine status={st?.understood ? undefined : 'running'}>
+          <TraceLine status={st?.understood ? undefined : 'running'} className="overflow-hidden">
             <TraceIcon>{st?.understood ? done : <Spinner />}</TraceIcon>
-            <TraceTitle>{t(lang, st?.understood ? 'stream_understood' : 'stream_reading')}</TraceTitle>
+            <TraceTitle className="shrink-0">{t(lang, st?.understood ? 'stream_understood' : 'stream_reading')}</TraceTitle>
             {st?.understood ? (
-              <TraceDescription className="min-w-0 truncate" lang="en" title={st.understood.canonical_en}>
+              <TraceDescription className="min-w-0 shrink truncate" lang="en" title={st.understood.canonical_en}>
                 “{st.understood.canonical_en}”
               </TraceDescription>
             ) : null}
@@ -41,12 +41,19 @@ export function StreamSteps({ turn, lang }: { turn: AgentTurn; lang: Lang }) {
           const ok = resolved.has(n.id)
           return (
             <motion.div key={n.id} {...enter} data-stream-node={n.id} data-state={ok ? 'done' : 'running'}>
-              <TraceLine status={ok ? undefined : 'running'}>
+              <TraceLine status={ok ? undefined : 'running'} className="overflow-hidden">
                 <TraceIcon>{ok ? done : <Spinner />}</TraceIcon>
-                <TraceTitle>{n.title}</TraceTitle>
-                {n.tool ? <TraceDescription className="num">{n.tool.name}</TraceDescription> : null}
+                <TraceTitle title={n.title}>{n.title}</TraceTitle>
+                {/* Long tool names truncate inside the sidebar instead of widening it. */}
+                {n.tool ? (
+                  <TraceDescription className="num min-w-0 shrink truncate" title={n.tool.name}>
+                    {n.tool.name}
+                  </TraceDescription>
+                ) : null}
                 {ok && n.evidence_ids?.length ? (
-                  <TraceDescription>· {t(lang, 'stream_on_plan', { n: fmtCount(n.evidence_ids.length, lang) })}</TraceDescription>
+                  <TraceDescription className="whitespace-nowrap">
+                    · {t(lang, 'stream_on_plan', { n: fmtCount(n.evidence_ids.length, lang) })}
+                  </TraceDescription>
                 ) : null}
               </TraceLine>
             </motion.div>

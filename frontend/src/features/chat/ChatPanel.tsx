@@ -16,7 +16,7 @@ import {
 import { AgentCard } from "./AgentCard"
 import { SuggestionList } from "./Suggestions"
 import { UserBubble } from "./UserBubble"
-import { announce } from "./view"
+import { announce, valueParts } from "./view"
 
 const UNDO_TOAST = "evidence-undo"
 
@@ -81,14 +81,14 @@ function useChatSideEffects() {
           const d = x.response
             ? deriveAnswer(x.response, x.toggles, s.session.drawing)
             : null
+          // Formatted like the card (decimal comma in French, the unit or noun after it).
+          const now =
+            x.response && d ? valueParts(x.response, d, x.response.detected_lang) : null
           toast(`${name} ${verb}`, {
             id: UNDO_TOAST,
             toasterId: CHAT_TOASTER,
             duration: REJECT_TOAST_MS,
-            description:
-              d?.value !== null && d?.value !== undefined
-                ? `Answer is now ${d.value}.`
-                : undefined,
+            description: now ? `Answer is now ${now.join(" ")}.` : undefined,
             action: { label: "Undo", onClick: () => actions().undo() },
           })
         }

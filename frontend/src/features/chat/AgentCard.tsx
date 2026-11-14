@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useReducedMotion } from 'motion/react'
 import {
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
+  SquareIcon,
   EyeIcon,
   GitBranchIcon,
   MinusIcon,
@@ -78,6 +79,22 @@ function ChipPill({ chip, turnId }: { chip: Chip; turnId: string }) {
       {chip.tone === 'destructive' ? <CircleAlertIcon className="size-3.5 shrink-0" aria-hidden /> : null}
       {chip.text}
     </span>
+  )
+}
+
+/** A counted element with no box on the plan (IFC): listed for checking, nothing to select or toggle. */
+function ElementRow({ row }: { row: Row }) {
+  return (
+    <li data-evidence-id={row.id} data-evidence-kind="element" className="flex min-h-10 items-center gap-2.5 rounded-lg px-2 py-1" title={row.hint}>
+      <span className="num inline-flex h-6 max-w-24 min-w-7 shrink-0 items-center justify-center rounded-md border border-border px-1.5 text-xs font-semibold text-muted-foreground">
+        <span className="truncate">{row.badge}</span>
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="line-clamp-2 text-sm font-medium [overflow-wrap:anywhere]">{row.title}</span>
+        <span className="num truncate text-xs text-muted-foreground">{row.sub}</span>
+      </span>
+      <span className="shrink-0 text-xs font-medium text-success">{row.state}</span>
+    </li>
   )
 }
 
@@ -185,7 +202,10 @@ function EvidenceList({ turn, lang, active }: { turn: AgentTurn; lang: Lang; act
     : t(lang, isArea ? 'arithmetic_n' : 'evidence_n', { n: list.length })
   const listId = `ev-${turn.id}`
   const subject = resp.evidence.boxes[0]?.subject ?? 'room'
-  const summary = t(lang, 'summary_boxes', { n: `${fmtCount(list.length, lang)} ${noun(subject, list.length, lang)}` })
+  const onlyElements = list.every((r) => r.kind === 'element')
+  const summary = onlyElements
+    ? t(lang, 'rows_n', { n: fmtCount(list.length, lang) })
+    : t(lang, 'summary_boxes', { n: `${fmtCount(list.length, lang)} ${noun(subject, list.length, lang)}` })
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
@@ -204,9 +224,13 @@ function EvidenceList({ turn, lang, active }: { turn: AgentTurn; lang: Lang; act
       {turn.listOpen ? (
         <CappedScroll label={`${label}: ${summary}`} lang={lang}>
           <ul id={listId} ref={ref} className="flex flex-col gap-0.5" aria-label={label}>
-            {list.map((r) => (
-              <EvidenceRow key={r.id} turnId={turn.id} row={r} active={active} />
-            ))}
+            {list.map((r) =>
+              r.kind === 'element' ? (
+                <ElementRow key={r.id} row={r} />
+              ) : (
+                <EvidenceRow key={r.id} turnId={turn.id} row={r} active={active} />
+              ),
+            )}
           </ul>
         </CappedScroll>
       ) : null}
@@ -304,24 +328,27 @@ function Feedback({ turn, lang }: { turn: AgentTurn; lang: Lang }) {
 }
 
 function Actions({ turn, active, lang }: { turn: AgentTurn; active: boolean; lang: Lang }) {
+  // French, Finnish and German labels are longer: they need more card width before the text shows.
+  const wide = lang === 'en' ? 'hidden truncate @[21rem]:inline' : 'hidden truncate @[27rem]:inline'
+  const treeText = active ? (lang === 'en' ? 'hidden truncate @[13rem]:inline' : 'hidden truncate @[18rem]:inline') : wide
   return (
-    // One row always: below ~22rem of card width the two text buttons drop to icons (names stay in aria-label/title).
-    <div className="@container flex flex-nowrap items-center gap-1">
+    // One row always: below the threshold the two text buttons drop to icons (names stay in aria-label/title).
+    <div className="@container flex min-w-0 flex-nowrap items-center gap-1">
       {!active ? (
         <Button
           variant="outline"
-          className="min-w-10 px-2.5"
+          className="min-w-10 shrink px-2.5"
           aria-label={t(lang, 'show_on_plan')}
           title={t(lang, 'show_on_plan')}
           onClick={() => actions().setActive(turn.id)}
         >
           <EyeIcon data-icon="inline-start" />
-          <span className="hidden @[21rem]:inline">{t(lang, 'show_on_plan')}</span>
+          <span className={wide}>{t(lang, 'show_on_plan')}</span>
         </Button>
       ) : null}
       <Button
         variant="outline"
-        className="min-w-10 px-2.5"
+        className="min-w-10 shrink px-2.5"
         aria-label={t(lang, 'reasoning_tree')}
         title={t(lang, 'reasoning_tree')}
         data-trace-opener
@@ -332,7 +359,7 @@ function Actions({ turn, active, lang }: { turn: AgentTurn; active: boolean; lan
         }}
       >
         <GitBranchIcon data-icon="inline-start" />
-        <span className={active ? 'hidden @[13rem]:inline' : 'hidden @[21rem]:inline'}>{t(lang, 'reasoning_tree')}</span>
+        <span className={treeText}>{t(lang, 'reasoning_tree')}</span>
       </Button>
       <span className="flex-1" />
       {!turn.feedback ? (
@@ -391,7 +418,32 @@ function CardShell({
   )
 }
 
-export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lang }) {
+/** Printed text (a label, a fire rating) is read, not glanced at: body size, quoted, clamped to 4 lines with "Show all". */
+function TextValue({ value, label, lang }: { value: string; label: string; lang: Lang }) {
+  const [all, setAll] = useState(false)
+  const long = value.length > 160
+  return (
+    <figure className="flex flex-col gap-1" data-answer-value={value}>
+      <figcaption className="text-xs font-medium text-muted-foreground">{label}</figcaption>
+      <blockquote
+        className={cn(
+          'border-l-2 border-border pl-3 text-lg leading-snug font-medium text-pretty [overflow-wrap:anywhere]',
+          long && !all && 'line-clamp-4',
+        )}
+      >
+        {value}
+      </blockquote>
+      {long ? (
+        <Button variant="link" className="h-10 self-start px-0" onClick={() => setAll((v) => !v)} aria-expanded={all}>
+          {t(lang, all ? 'show_less' : 'show_all')}
+        </Button>
+      ) : null}
+    </figure>
+  )
+}
+
+/** Memoised on the turn object: patchAgent keeps other turns referentially stable, so a streaming turn re-renders alone. */
+export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lang }) {
   const active = useAppStore((s) => s.ui.activeTurnId === turn.id)
   const derived = useDerived(turn.id)
   const drawing = useAppStore(selectDrawing)
@@ -413,6 +465,23 @@ export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lan
             <p className="text-sm text-muted-foreground">{t(userLang, 'pending')}</p>
           </>
         )}
+      </CardShell>
+    )
+
+  // The user's own Stop, or a spent model budget, is not a failure: a quiet, neutral card.
+  if (turn.status === 'error' && (turn.error?.code === 'cancelled' || turn.error?.code === 'budget_exhausted'))
+    return (
+      <CardShell active={false} turnId={turn.id} lang={userLang}>
+        <div className="flex min-w-0 items-start gap-2 text-muted-foreground" data-error-code={turn.error.code}>
+          {turn.error.code === 'cancelled' ? (
+            <SquareIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
+          ) : (
+            <CircleAlertIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
+          )}
+          <p className="min-w-0 text-sm [overflow-wrap:anywhere]">
+            {turn.error.code === 'cancelled' ? turn.error.message : t(userLang, 'budget_out')}
+          </p>
+        </div>
       </CardShell>
     )
 
@@ -465,7 +534,9 @@ export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lan
   return (
     <CardShell active={active} turnId={turn.id} lang={lang}>
       <div className="flex flex-col gap-1.5">
-        {parts ? (
+        {parts && resp.answer.kind === 'text' ? (
+          <TextValue value={parts[0]} label={parts[1]} lang={lang} />
+        ) : parts ? (
           <p className="flex flex-wrap items-baseline gap-x-2" data-answer-value={parts[0]}>
             <span className="text-[44px] leading-none font-semibold tracking-tight tabular-nums [overflow-wrap:anywhere]">
               {parts[0]}
@@ -474,6 +545,18 @@ export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lan
           </p>
         ) : null}
         <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        {resp.dropped_items ? (
+          <p className="text-sm text-warning" data-dropped-items={resp.dropped_items}>
+            {t(lang, 'dropped_n', { n: fmtCount(resp.dropped_items, lang) })}
+          </p>
+        ) : null}
+        {derived.noArea.length ? (
+          <p className="text-sm text-warning" data-no-area={derived.noArea.length}>
+            {derived.noArea.length === 1
+              ? t(lang, 'no_area_1')
+              : t(lang, 'no_area_n', { n: fmtCount(derived.noArea.length, lang) })}
+          </p>
+        ) : null}
         {resp.evidence.rows?.length ? (
           <p className="text-sm text-muted-foreground" data-evidence-rows={resp.evidence.rows.length}>
             {t(lang, 'rows_n', { n: fmtCount(resp.evidence.rows.length, lang) })}
@@ -516,4 +599,4 @@ export function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lan
       <Footer parts={footerParts(resp, lang)} />
     </CardShell>
   )
-}
+})

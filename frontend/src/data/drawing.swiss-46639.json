@@ -1123,12 +1123,13 @@
   "credit": {
     "text": "Swiss Dwellings v3.0.0 by Matthias Standfest et al. (Archilyse AG), doi:10.5281/zenodo.7788422, CC BY 4.0. Rendered from the dataset geometry; labels and numbering are synthetic.",
     "license": "CC BY 4.0",
+    "license_name": "CC BY 4.0",
     "url": "https://doi.org/10.5281/zenodo.7788422"
   },
   "facts": {
     "gold_total": 19,
     "correct": 19,
-    "measured_at": "2026-11-13T23:40:31+00:00",
+    "measured_at": "2026-11-14T01:15:26+00:00",
     "languages": [
       "en"
     ]

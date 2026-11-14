@@ -62,7 +62,9 @@ export function PlanContextMenu({
         {room ? (
           <>
             <span className="truncate text-sm font-semibold text-foreground">{roomTitle(room)}</span>
-            <span className="num shrink-0 text-xs text-muted-foreground">· {fmtArea(room.area_m2, lang)} m²</span>
+            <span className="num shrink-0 text-xs text-muted-foreground">
+              · {room.area_m2 === null ? 'area not printed' : `${fmtArea(room.area_m2, lang)} m²`}
+            </span>
           </>
         ) : (
           <span className="text-sm text-muted-foreground">No room here</span>

@@ -1,5 +1,5 @@
 import { ApiError, TransportError } from './client'
-import { isErrorBody, isUploadResult, type UploadResult } from './contract'
+import { fastApiMessage, isErrorBody, isUploadResult, type UploadResult } from './contract'
 
 /**
  * Thin, JSON-free helpers for the library page: API base, presenter token, the user's own uploads and the upload
@@ -144,7 +144,10 @@ export function uploadErrorText(e: unknown): string {
         return e.message
     }
   }
-  if (e instanceof TransportError) return 'The server could not be reached. Try again in a moment.'
+  if (e instanceof TransportError)
+    return e.kind === 'server'
+      ? 'The server had a problem with this file. Try again in a moment.'
+      : 'The server could not be reached. Try again in a moment.'
   return e instanceof Error ? e.message : 'The upload failed.'
 }
 
@@ -176,7 +179,8 @@ export function uploadFile(
       if (xhr.status >= 500) return reject(new TransportError(`Server error ${xhr.status}`, 'server', xhr.status))
       if (xhr.status >= 400) {
         if (isErrorBody(body)) return reject(new ApiError(body.error, xhr.status, body.code, body))
-        return reject(new ApiError(`Upload failed (${xhr.status})`, xhr.status, 'bad_request', body))
+        const detail = fastApiMessage(body)
+        return reject(new ApiError(detail ? `Upload not accepted: ${detail}` : `Upload failed (${xhr.status})`, xhr.status, 'bad_request', body))
       }
       if (!isUploadResult(body)) return reject(new ApiError('The upload reply does not match the contract', xhr.status, 'invalid_response', body))
       opts.onProgress?.(1)

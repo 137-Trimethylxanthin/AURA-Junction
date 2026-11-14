@@ -5,7 +5,7 @@ import {
   SearchXIcon,
   TriangleAlertIcon,
 } from "lucide-react"
-import { listDrawings } from "@/api/client"
+import { ApiError, listDrawings } from "@/api/client"
 import type { DrawingKind, DrawingSummary } from "@/api/contract"
 import { apiBase } from "@/api/library"
 import { SiteHeader } from "@/components/shell/SiteHeader"
@@ -34,8 +34,8 @@ import { UploadPanel } from "./UploadPanel"
 
 type ListState =
   | { state: "loading" }
-  | { state: "ready"; drawings: DrawingSummary[] }
-  | { state: "error"; message: string }
+  | { state: "ready"; drawings: DrawingSummary[]; dropped?: number }
+  | { state: "error"; message: string; unreadable?: boolean }
 
 /** Library drawings come from GET /drawings; without an API only the bundled sample is listed (and says so). */
 function useLibrary(base: string | null) {
@@ -55,6 +55,7 @@ function useLibrary(base: string | null) {
           setList({
             state: "ready",
             drawings: r.drawings.filter((d) => d.source !== "upload"),
+            dropped: r.dropped,
           })
       )
       .catch(
@@ -64,6 +65,8 @@ function useLibrary(base: string | null) {
             state: "error",
             message:
               e instanceof Error ? e.message : "The list could not be loaded",
+            // The server answered, but with something this app cannot read.
+            unreadable: e instanceof ApiError && e.code === "invalid_response",
           })
       )
     return () => {
@@ -196,8 +199,10 @@ export default function LibraryPage() {
                 <TriangleAlertIcon />
                 <AlertTitle>The drawing list could not be loaded</AlertTitle>
                 <AlertDescription>
-                  The server did not answer. The bundled sample below still
-                  works offline.
+                  {list.unreadable
+                    ? "The server answered, but this app could not read the list."
+                    : "The server did not answer."}{" "}
+                  The bundled sample below still works offline.
                 </AlertDescription>
                 <AlertAction>
                   <Button variant="outline" onClick={retry}>
@@ -206,6 +211,13 @@ export default function LibraryPage() {
                   </Button>
                 </AlertAction>
               </Alert>
+            ) : null}
+            {list.state === "ready" && list.dropped ? (
+              <p className="text-xs text-warning" data-library-dropped>
+                {list.dropped === 1
+                  ? "1 drawing in the list could not be read and is not shown."
+                  : `${list.dropped} drawings in the list could not be read and are not shown.`}
+              </p>
             ) : null}
             {!base ? (
               <p className="text-xs text-muted-foreground" data-offline-note>

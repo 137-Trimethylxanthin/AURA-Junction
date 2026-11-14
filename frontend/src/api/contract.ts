@@ -79,7 +79,8 @@ export interface RoomPoly {
   num: string
   name: string
   unit?: string
-  area_m2: number
+  /** null: no area printed and none measurable from an outline. Never 0 for unknown (1.1). */
+  area_m2: number | null
   outdoor: boolean
   points: [Pct, Pct][]
   label_at: [Pct, Pct]
@@ -176,6 +177,8 @@ export interface DrawingSummary {
 export interface DrawingList {
   contract_version: string
   drawings: DrawingSummary[]
+  /** Client-only, never sent: rows left out because they failed validation (salvageDrawingList). */
+  dropped?: number
 }
 
 /** `GET /drawings/:id/status` body (1.1). */
@@ -286,8 +289,10 @@ export interface EvidenceRow {
 
 export interface EvidenceRoom {
   room_id: RoomId
+  /** Always false when `area_m2` is null: a room with no known area is never summed. */
   included: boolean
-  area_m2: number
+  /** null: the area is not printed (1.1). Never 0 for unknown. */
+  area_m2: number | null
   edited?: boolean
 }
 
@@ -336,6 +341,8 @@ export type Method = 'cad_geometry' | 'ocr' | 'detector' | 'vision' | 'none'
 
 export interface AskResponse {
   contract_version: string
+  /** Client-only, never sent: evidence or trace items dropped because they failed validation (see salvageAskResponse). */
+  dropped_items?: number
   answer: Answer
   /** `rows` (1.1): counted elements without a 2D box (IFC walls, columns, whole-model counts); id = IFC GlobalId. */
   evidence: { boxes: Box[]; rooms: EvidenceRoom[]; rows?: EvidenceRow[] }
@@ -465,6 +472,8 @@ export type ErrorCode =
   | 'processing'
   /** The 60 s chat-turn deadline passed (SSE `error` event; /ask answers 504). */
   | 'timeout'
+  /** 404 for an unknown conversation or answer (`/conversations/:id`, `/answers/:id/evidence.csv`). */
+  | 'not_found'
 export const ERROR_CODES: readonly ErrorCode[] = [
   'bad_request',
   'unknown_drawing',
@@ -476,6 +485,7 @@ export const ERROR_CODES: readonly ErrorCode[] = [
   'presenter_required',
   'processing',
   'timeout',
+  'not_found',
 ]
 
 export interface ErrorBody {
@@ -489,9 +499,12 @@ export interface FastApiDetail {
   detail: unknown
 }
 
+/** 200 with ok:true when the server can answer; 503 with ok:false (same body) when the database or data dir is down. */
 export interface Health {
   ok: true
   contract_version: string
+  /** Diagnostics, informational only (not used by the client): db, data_dir, drawings, drawings_skipped, models, budget_left. */
+  checks?: Record<string, unknown>
 }
 
 /** Evidence subjects that have boxes in the bundled drawing file (wc/bathtub/shower since the regenerated file). */
@@ -636,13 +649,9 @@ export function isAskResponse(v: unknown): v is AskResponse {
   const ev = v.evidence
   if (!isObj(ev) || !Array.isArray(ev.boxes) || !Array.isArray(ev.rooms)) return false
   if (!ev.boxes.every(isBox)) return false
-  if (!ev.rooms.every((r) => isObj(r) && isStr(r.room_id) && typeof r.included === 'boolean' && isNum(r.area_m2)))
-    return false
-  if (
-    ev.rows !== undefined &&
-    !(Array.isArray(ev.rows) && ev.rows.every((r) => isObj(r) && isStr(r.id) && optStr(r.name) && optNum(r.value)))
-  )
-    return false
+  if (!ev.rooms.every(evRoomOk)) return false
+  if (ev.rows !== undefined && !(Array.isArray(ev.rows) && ev.rows.every(evRowOk))) return false
+  if (v.dropped_items !== undefined && !isNum(v.dropped_items)) return false
   if (v.gold !== undefined) {
     const g = v.gold
     if (!isObj(g) || !isStr(g.dataset_qid) || !isNum(g.value) || typeof g.match !== 'boolean') return false
@@ -676,7 +685,7 @@ function isRoomPoly(v: unknown): v is RoomPoly {
     isStr(v.room_id) &&
     isStr(v.num) &&
     isStr(v.name) &&
-    isNum(v.area_m2) &&
+    (v.area_m2 === null || isNum(v.area_m2)) &&
     typeof v.outdoor === 'boolean' &&
     Array.isArray(v.points) &&
     v.points.every(isPair) &&
@@ -756,6 +765,51 @@ export function isDrawingSummary(v: unknown): v is DrawingSummary {
   )
 }
 
+// ---- one bad item can't take down a list ----------------------------------------------------------
+
+const evRoomOk = (r: unknown) =>
+  isObj(r) && isStr(r.room_id) && typeof r.included === 'boolean' && (r.area_m2 === null || isNum(r.area_m2))
+const evRowOk = (r: unknown) => isObj(r) && isStr(r.id) && optStr(r.name) && optNum(r.value)
+
+/**
+ * Drops the evidence boxes, rooms, rows and trace nodes that fail validation instead of rejecting the whole answer,
+ * and counts them in `dropped_items` so the card can say so. The answer itself (value, scope, …) is still validated
+ * strictly by isAskResponse afterwards. Anything that is not a list is left as is for the guard to reject.
+ */
+export function salvageAskResponse(v: unknown): unknown {
+  if (!isObj(v) || !isObj(v.evidence)) return v
+  const ev = v.evidence
+  let dropped = 0
+  const keep = <T,>(list: unknown, ok: (x: unknown) => boolean): T[] | unknown => {
+    if (!Array.isArray(list)) return list
+    const out = list.filter(ok)
+    dropped += list.length - out.length
+    return out
+  }
+  const evidence = {
+    ...ev,
+    boxes: keep(ev.boxes, isBox),
+    rooms: keep(ev.rooms, evRoomOk),
+    ...(ev.rows !== undefined ? { rows: keep(ev.rows, evRowOk) } : {}),
+  }
+  const trace = keep(v.trace, isTraceNode)
+  return dropped ? { ...v, evidence, trace, dropped_items: dropped } : v
+}
+
+/** Drawing summaries that fail validation are left out; the list stays. `dropped` says how many. */
+export function salvageDrawingList(v: unknown): { list: unknown; dropped: number } {
+  if (!isObj(v) || !Array.isArray(v.drawings)) return { list: v, dropped: 0 }
+  const drawings = v.drawings.filter(isDrawingSummary)
+  return { list: { ...v, drawings }, dropped: v.drawings.length - drawings.length }
+}
+
+/** Rooms that fail validation are left out of a drawing (their evidence then has no outline); the drawing stays. */
+export function salvageDrawing(v: unknown): unknown {
+  if (!isObj(v) || !Array.isArray(v.rooms)) return v
+  const rooms = v.rooms.filter(isRoomPoly)
+  return rooms.length === v.rooms.length ? v : { ...v, rooms }
+}
+
 export function isDrawingList(v: unknown): v is DrawingList {
   return isObj(v) && isStr(v.contract_version) && Array.isArray(v.drawings) && v.drawings.every(isDrawingSummary)
 }
@@ -804,6 +858,18 @@ export function isErrorBody(v: unknown): v is ErrorBody {
 
 export function isFastApiDetail(v: unknown): v is FastApiDetail {
   return isObj(v) && 'detail' in v
+}
+
+/** A readable line from FastAPI's 422 body ("String should have at most 2000 characters"), or null. Plain text only. */
+export function fastApiMessage(v: unknown): string | null {
+  if (!isFastApiDetail(v)) return null
+  const d = (v as { detail: unknown }).detail
+  if (typeof d === 'string') return d.slice(0, 300)
+  if (Array.isArray(d)) {
+    const first = d.find((x) => isObj(x) && isStr(x.msg)) as { msg: string } | undefined
+    if (first) return first.msg.slice(0, 300)
+  }
+  return null
 }
 
 export function isHealth(v: unknown): v is Health {

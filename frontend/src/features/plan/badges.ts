@@ -12,18 +12,18 @@ export interface BadgeAt {
   dy: number
 }
 
-/** Double doors: boxes with identical rectangles. The first one seen is leaf 1, any repeat is leaf 2. */
+/**
+ * Objects drawn twice: only the explicit `duplicate_of` signal (contract 1.1), the same rule as the card rows.
+ * The box it points at is leaf 1, the box carrying it is leaf 2; a pointer to a box not in the list is ignored.
+ */
 export function doubleLeaves(boxes: readonly Box[]): { firstLeaf: Set<string>; secondLeaf: Set<string> } {
-  const seen = new Map<string, string>()
+  const ids = new Set(boxes.map((b) => b.id))
   const firstLeaf = new Set<string>()
   const secondLeaf = new Set<string>()
   for (const b of boxes) {
-    const k = `${b.x}|${b.y}|${b.w}|${b.h}`
-    const prev = seen.get(k)
-    if (prev) {
-      firstLeaf.add(prev)
-      secondLeaf.add(b.id)
-    } else seen.set(k, b.id)
+    if (!b.duplicate_of || !ids.has(b.duplicate_of)) continue
+    firstLeaf.add(b.duplicate_of)
+    secondLeaf.add(b.id)
   }
   return { firstLeaf, secondLeaf }
 }

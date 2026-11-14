@@ -1,7 +1,9 @@
-import { ApiError, TransportError, checkVersion, type ClientOptions, type FetchLike } from './client'
+import { ApiError, TransportError, checkVersion, dropNulls, join, type ClientOptions, type FetchLike } from './client'
 import {
   isAskResponse,
+  salvageAskResponse,
   isErrorBody,
+  fastApiMessage,
   isCheck,
   type ChatEvent,
   type ChatRequest,
@@ -15,13 +17,15 @@ import {
 
 /** /chat is not served by this backend (an older one, or a static host): use /ask instead. */
 export class ChatUnavailable extends Error {
-  constructor(message = 'Streaming chat is not available on this server') {
+  /** true for a 404 (may be a deploy or proxy hiccup); false when the server says /chat does not exist (405, not SSE). */
+  readonly transient: boolean
+  constructor(transient = false, message = 'Streaming chat is not available on this server') {
     super(message)
     this.name = 'ChatUnavailable'
+    this.transient = transient
   }
 }
 
-const join = (base: string, path: string) => base.replace(/\/+$/, '') + path
 
 /** Split an SSE buffer into complete frames; returns the frames and the unfinished rest. */
 export function splitFrames(buffer: string): { frames: { event: string; data: string }[]; rest: string } {
@@ -60,16 +64,22 @@ export function toChatEvent(event: string, data: unknown): ChatEvent | null {
     case 'tool_call':
       if (!isObj(data) || !isObj(data.node) || typeof data.node.id !== 'string') throw bad()
       return { event, data: data as never }
-    case 'tool_result':
+    case 'tool_result': {
       if (!isObj(data) || typeof data.node_id !== 'string' || !isObj(data.evidence)) throw bad()
-      return { event, data: data as never }
+      // Bad boxes or rooms are dropped one by one; the step and the rest of its evidence stay.
+      const { evidence } = salvageAskResponse({ evidence: data.evidence }) as { evidence: Record<string, unknown> }
+      if (!Array.isArray(evidence.boxes) || !Array.isArray(evidence.rooms)) throw bad()
+      return { event, data: { ...data, evidence } as never }
+    }
     case 'check':
       if (!isObj(data) || !isCheck(data.check)) throw bad()
       return { event, data: data as never }
-    case 'answer':
-      if (!isObj(data) || !isAskResponse(data.response)) throw bad()
-      checkVersion(data.response.contract_version, data.response)
-      return { event, data: data as never }
+    case 'answer': {
+      const response = isObj(data) ? salvageAskResponse(data.response) : undefined
+      if (!isAskResponse(response)) throw bad()
+      checkVersion(response.contract_version, response)
+      return { event, data: { ...(data as object), response } as never }
+    }
     case 'error':
       if (!isObj(data) || typeof data.error !== 'string') throw bad()
       return { event, data: data as never }
@@ -78,17 +88,6 @@ export function toChatEvent(event: string, data: unknown): ChatEvent | null {
     default:
       return null
   }
-}
-
-function dropNulls(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(dropNulls)
-  if (v && typeof v === 'object')
-    return Object.fromEntries(
-      Object.entries(v as Record<string, unknown>)
-        .filter(([, x]) => x !== null)
-        .map(([k, x]) => [k, dropNulls(x)]),
-    )
-  return v
 }
 
 export interface ChatStreamOptions extends ClientOptions {
@@ -134,7 +133,7 @@ export async function streamChat(req: ChatRequest, opts: ChatStreamOptions): Pro
       if (timedOut) throw new TransportError(`No answer within ${idleMs / 1000} s`, 'timeout')
       throw new TransportError(e instanceof Error ? e.message : 'Network error', 'network')
     }
-    if (res.status === 404 || res.status === 405) throw new ChatUnavailable()
+    if (res.status === 404 || res.status === 405) throw new ChatUnavailable(res.status === 404)
     if (res.status >= 500) throw new TransportError(`Server error ${res.status}`, 'server', res.status)
     if (res.status >= 400) {
       let body: unknown = null
@@ -144,6 +143,8 @@ export async function streamChat(req: ChatRequest, opts: ChatStreamOptions): Pro
         body = null
       }
       if (isErrorBody(body)) throw new ApiError(body.error, res.status, body.code, body)
+      const detail = fastApiMessage(body)
+      if (detail) throw new ApiError(`The request was not accepted: ${detail}`, res.status, 'validation', body)
       throw new ApiError(`Request failed (${res.status})`, res.status, 'bad_request', body)
     }
     if (!(res.headers.get('content-type') ?? '').includes('text/event-stream') || !res.body) throw new ChatUnavailable()
@@ -220,7 +221,7 @@ export async function getConversation(opts: ClientOptions, id: string, timeoutMs
         isObj(t) &&
         typeof t.turn_id === 'string' &&
         typeof t.message === 'string' &&
-        (t.response === undefined || isAskResponse(t.response)),
+        (t.response === undefined || isAskResponse((t.response = salvageAskResponse(t.response)))),
     )
     return { ...(body as unknown as Conversation), turns }
   } finally {

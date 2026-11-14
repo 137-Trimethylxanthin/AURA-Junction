@@ -80,7 +80,9 @@ export function createSource(opts: SourceOptions = {}): Source {
     : { kind: 'local', state: 'ready', reason: 'no_api_url' }
   let probing: Promise<SourceStatus> | null = null
   /** Set once the server shows it has no /chat; later turns go straight to /ask. */
-  let chatUnavailable = false
+  /** Until when questions go to /ask instead of /chat: for good after a 405 or a non-stream reply, 5 min after a 404. */
+  let chatOffUntil = 0
+  const CHAT_RETRY_MS = 5 * 60_000
 
   const set = (s: SourceStatus) => {
     status = s
@@ -151,7 +153,7 @@ export function createSource(opts: SourceOptions = {}): Source {
         ...(turn.overrides ? { overrides: turn.overrides } : {}),
         ...(turn.lang_hint ? { lang_hint: turn.lang_hint } : {}),
       }
-      if (status.kind === 'local' || !baseUrl || chatUnavailable) return this.ask(askReq)
+      if (status.kind === 'local' || !baseUrl || Date.now() < chatOffUntil) return this.ask(askReq)
       let response: AskResponse | undefined
       let seen = false
       try {
@@ -180,7 +182,7 @@ export function createSource(opts: SourceOptions = {}): Source {
         // The stream broke after a complete answer arrived (before `done`): the answer stands.
         if (response && !(e instanceof ApiError)) return { response, fellBack: false }
         if (e instanceof ChatUnavailable) {
-          chatUnavailable = true
+          chatOffUntil = e.transient ? Date.now() + CHAT_RETRY_MS : Infinity
           return this.ask(askReq)
         }
         if (

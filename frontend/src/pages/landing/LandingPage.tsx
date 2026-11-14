@@ -254,8 +254,9 @@ function HowItWorks() {
   const cells = [
     {
       term: "The answer",
-      value: "0 model calls",
-      detail: "Geometry and arithmetic in code. $0.00 per question.",
+      value: "0 model calls on a template match",
+      detail:
+        "Questions that match a template are answered by geometry and arithmetic in code, at $0.00. Other questions use a model, and every call is shown with its cost.",
     },
     {
       term: "The check",

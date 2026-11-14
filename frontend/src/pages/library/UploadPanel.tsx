@@ -65,9 +65,13 @@ import { cn } from "@/lib/utils"
 
 /** How often an upload that is still being processed is polled. */
 export const UPLOAD_POLL_MS = 1500
+/** An upload still queued or processing this long after it was sent is reported as stuck and no longer polled. */
+export const UPLOAD_DEADLINE_MS = 3 * 60_000
+/** Files taken from one drop or pick; the rest are listed as not uploaded. */
+export const UPLOAD_BATCH = 5
 
 type Row = StoredUpload & {
-  phase: "uploading" | DrawingStatus | "expired"
+  phase: "uploading" | DrawingStatus | "expired" | "too_slow"
   /** 0–1: upload bytes while uploading, server progress while processing. */
   progress?: number
   error?: string
@@ -77,6 +81,14 @@ type Row = StoredUpload & {
   leaving?: boolean
 }
 
+let uploadSeq = 0
+
+/** "Not uploaded" / "6 files not uploaded" (a batch overflow line names several files). */
+const all = (r: { n?: number }[]) => {
+  const n = r.reduce((k, x) => k + (x.n ?? 1), 0)
+  return n === 1 ? "Not uploaded" : `${n} files not uploaded`
+}
+
 /** The user's own uploads: stored ids + delete tokens, with live status from the API. */
 function useUploads(base: string) {
   const [rows, setRows] = useState<Row[]>(() =>
@@ -84,30 +96,40 @@ function useUploads(base: string) {
   )
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const alive = useRef(true)
+  /** Deleted here: a status poll still in flight must not re-arm its timer. */
+  const removed = useRef(new Set<string>())
 
   const patch = useCallback((id: string, p: Partial<Row>) => {
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...p } : r)))
   }, [])
 
   const poll = useCallback(
-    (id: string) => {
+    (id: string, createdAt: string) => {
+      const sent = Date.parse(createdAt)
+      const overdue = () =>
+        Number.isFinite(sent) && Date.now() - sent > UPLOAD_DEADLINE_MS
       const tick = async () => {
         clearTimeout(timers.current.get(id))
         try {
           const st = await getDrawingStatus({ baseUrl: base }, id)
-          if (!alive.current) return
+          if (!alive.current || removed.current.has(id)) return
+          const pending = st.status === "queued" || st.status === "processing"
+          if (pending && overdue()) {
+            patch(id, { phase: "too_slow", progress: undefined, error: undefined })
+            return
+          }
           patch(id, {
             phase: st.status,
             progress: st.progress,
             error: st.error,
           })
-          if (st.status === "queued" || st.status === "processing")
+          if (pending)
             timers.current.set(
               id,
               setTimeout(() => void tick(), UPLOAD_POLL_MS)
             )
         } catch (e) {
-          if (!alive.current) return
+          if (!alive.current || removed.current.has(id)) return
           if (
             e instanceof ApiError &&
             (e.code === "unknown_drawing" || e.status === 404)
@@ -115,6 +137,10 @@ function useUploads(base: string) {
             // Expired (24 h) or deleted elsewhere: forget it.
             myUploads.remove(id)
             patch(id, { phase: "expired" })
+            return
+          }
+          if (overdue()) {
+            patch(id, { phase: "too_slow", progress: undefined, error: undefined })
             return
           }
           patch(id, { error: uploadErrorText(e) })
@@ -132,7 +158,7 @@ function useUploads(base: string) {
   useEffect(() => {
     alive.current = true
     const map = timers.current
-    for (const u of myUploads.list()) poll(u.id)
+    for (const u of myUploads.list()) poll(u.id, u.created_at)
     return () => {
       alive.current = false
       for (const t of map.values()) clearTimeout(t)
@@ -142,7 +168,7 @@ function useUploads(base: string) {
 
   const start = useCallback(
     async (file: File) => {
-      const temp = `local-${Date.now()}`
+      const temp = `local-${Date.now()}-${++uploadSeq}`
       const row: Row = {
         id: temp,
         name: file.name,
@@ -172,7 +198,7 @@ function useUploads(base: string) {
               : r
           )
         )
-        poll(res.drawing_id)
+        poll(res.drawing_id, stored.created_at)
       } catch (e) {
         setRows((rs) => rs.filter((r) => r.id !== temp))
         toast.error(`${file.name} was not uploaded`, {
@@ -199,6 +225,7 @@ function useUploads(base: string) {
           return
         }
       }
+      removed.current.add(r.id)
       clearTimeout(timers.current.get(r.id))
       myUploads.remove(r.id)
       // Fade the row out (same path it came in), then drop it.
@@ -219,6 +246,7 @@ const PHASE_LABEL: Record<Row["phase"], string> = {
   ready: "Ready",
   failed: "Could not be read",
   expired: "Expired",
+  too_slow: "Took too long",
 }
 
 const ATTACHMENT_STATE = {
@@ -228,12 +256,13 @@ const ATTACHMENT_STATE = {
   ready: "done",
   failed: "error",
   expired: "idle",
+  too_slow: "error",
 } as const
 
 const PhaseIcon = ({ phase }: { phase: Row["phase"] }) =>
   phase === "ready" ? (
     <FileCheckIcon />
-  ) : phase === "failed" ? (
+  ) : phase === "failed" || phase === "too_slow" ? (
     <FileWarningIcon />
   ) : phase === "uploading" || phase === "queued" || phase === "processing" ? (
     <Spinner />
@@ -257,7 +286,12 @@ function UploadRow({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
         <AttachmentTitle title={r.name}>{r.name}</AttachmentTitle>
         <AttachmentDescription aria-live="polite" className="whitespace-normal">
           {PHASE_LABEL[r.phase]}
-          {r.phase === "failed" && r.error ? `: ${r.error}` : ""}
+          {r.phase === "failed" && r.error
+            ? `: ${r.error.replace(/^(DXF |The file |This file )?could not be read:?\s*/i, "")}`
+            : ""}
+          {r.phase === "too_slow"
+            ? `: the server did not finish within ${UPLOAD_DEADLINE_MS / 60_000} minutes. Delete it and upload again.`
+            : ""}
           {busy && pct !== null ? (
             <span className="num"> · {pct} %</span>
           ) : null}
@@ -367,22 +401,35 @@ function Uploader({ base }: { base: string }) {
   const { rows, start, remove } = useUploads(base)
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
-  const [rejection, setRejection] = useState<string | null>(null)
+  /** One line per file that was not uploaded (file name, reason). */
+  const [rejection, setRejection] = useState<{ name: string; reason: string; n?: number }[]>([])
   const hasPresenter = useSyncExternalStore(
     presenter.subscribe,
     () => !!presenter.get()
   )
 
   const take = (files: FileList | null) => {
-    const file = files?.[0]
-    if (!file) return
-    const check = checkFile(file, hasPresenter)
-    if (!check.ok) {
-      setRejection(`${file.name}: ${check.message}`)
-      return
+    const all = Array.from(files ?? [])
+    if (!all.length) return
+    const out: { name: string; reason: string; n?: number }[] = []
+    const ok: File[] = []
+    for (const file of all.slice(0, UPLOAD_BATCH)) {
+      const check = checkFile(file, hasPresenter)
+      if (check.ok) ok.push(file)
+      else out.push({ name: file.name, reason: check.message })
     }
-    setRejection(null)
-    void start(file)
+    const extra = all.slice(UPLOAD_BATCH)
+    if (extra.length)
+      out.push({
+        name: extra.map((f) => f.name).join(", "),
+        n: extra.length,
+        reason: `only ${UPLOAD_BATCH} files are uploaded at a time; drop ${extra.length === 1 ? "it" : "them"} again afterwards.`,
+      })
+    setRejection(out)
+    // One after another, so the server's per-IP limits see a steady trickle, not a burst.
+    void (async () => {
+      for (const f of ok) await start(f)
+    })()
   }
 
   return (
@@ -411,7 +458,8 @@ function Uploader({ base }: { base: string }) {
           <p className="text-sm text-foreground">Drop a DXF file here</p>
           <p className="text-xs text-muted-foreground">
             <span className="num">DXF ≤ {UPLOAD_CAPS.dxf.bytes / MB} MB</span>{" "}
-            for everyone
+            for everyone · up to <span className="num">{UPLOAD_BATCH}</span>{" "}
+            at a time
           </p>
         </div>
         <Button variant="outline" onClick={() => input.current?.click()}>
@@ -420,6 +468,7 @@ function Uploader({ base }: { base: string }) {
         <input
           ref={input}
           type="file"
+          multiple
           accept={ACCEPT}
           className="sr-only"
           tabIndex={-1}
@@ -463,11 +512,21 @@ function Uploader({ base }: { base: string }) {
         )}
       </div>
 
-      {rejection ? (
+      {rejection.length ? (
         <Alert variant="destructive" data-upload-rejected>
           <TriangleAlertIcon />
-          <AlertTitle>Not uploaded</AlertTitle>
-          <AlertDescription>{rejection}</AlertDescription>
+          <AlertTitle>
+            {all(rejection)}
+          </AlertTitle>
+          <AlertDescription className="min-w-0 [overflow-wrap:anywhere]">
+            <ul className="flex flex-col gap-1">
+              {rejection.map((r, i) => (
+                <li key={i} className="line-clamp-3" title={`${r.name}: ${r.reason}`}>
+                  <b className="font-medium break-all">{r.name}</b>: {r.reason}
+                </li>
+              ))}
+            </ul>
+          </AlertDescription>
         </Alert>
       ) : null}
 

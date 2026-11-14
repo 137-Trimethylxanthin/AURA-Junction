@@ -1,4 +1,6 @@
+import { useState } from "react"
 import { Link } from "react-router"
+import { FileIcon } from "lucide-react"
 import { licenceLabel, type DrawingKind, type DrawingSummary } from "@/api/contract"
 import { apiUrl } from "@/api/library"
 import { Badge } from "@/components/ui/badge"
@@ -31,6 +33,7 @@ export function factsRatio(d: Pick<DrawingSummary, "facts">): string | null {
 function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
   const ready = d.status === "ready"
   const facts = factsRatio(d)
+  const [broken, setBroken] = useState(false)
   const pct =
     d.progress !== undefined
       ? Math.round(Math.min(1, Math.max(0, d.progress)) * 100)
@@ -38,22 +41,31 @@ function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
   return (
     <Card size="sm" className="h-full gap-3 pt-0">
       <div className="relative aspect-[3/2] w-full overflow-hidden border-b bg-muted/60">
-        {d.thumbnail ? (
+        {d.thumbnail && !broken ? (
           <img
             src={apiUrl(d.thumbnail)}
             alt=""
             loading="lazy"
             decoding="async"
+            onError={() => setBroken(true)}
             className="size-full object-contain p-3 mix-blend-multiply transition-transform duration-300 ease-out motion-reduce:transition-none [@media(hover:hover)]:group-hover/drawing:scale-[1.02]"
           />
-        ) : null}
+        ) : (
+          // No preview (missing or failed to load): a quiet placeholder with the kind, never a broken image.
+          <div className="flex size-full flex-col items-center justify-center gap-1.5 text-muted-foreground" data-no-thumbnail>
+            <FileIcon className="size-6" aria-hidden />
+            <span className="text-xs">{KIND_LABEL[d.kind]} · no preview</span>
+          </div>
+        )}
       </div>
       <CardHeader>
-        <CardTitle>
-          <h3 className="truncate">{d.title}</h3>
+        <CardTitle className="min-w-0">
+          <h3 className="truncate" title={d.title}>
+            {d.title}
+          </h3>
         </CardTitle>
         {d.subtitle ? (
-          <CardDescription className="num truncate text-xs">
+          <CardDescription className="num min-w-0 truncate text-xs" title={d.subtitle}>
             {d.subtitle}
           </CardDescription>
         ) : null}
@@ -74,7 +86,10 @@ function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
         ) : null}
         {!ready ? (
           d.status === "failed" ? (
-            <p className="text-destructive">
+            <p
+              className="line-clamp-2 text-destructive [overflow-wrap:anywhere]"
+              title={d.error}
+            >
               Could not be read{d.error ? `: ${d.error}` : ""}
             </p>
           ) : (

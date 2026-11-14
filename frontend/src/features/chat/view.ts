@@ -95,7 +95,8 @@ export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
       text: t(lang, 'chip_vision_sample'),
       tone: 'neutral',
       outline: true,
-      title: 'Sample value. The Gemini Decisions API check is not wired yet.',
+      title:
+        'No check result. Answers computed in your browser are not checked; on the server, a check that failed or timed out gives no numbers (its cost is still counted).',
     })
   else if (c?.status === 'live' && c.ranking?.length) {
     // Ranked check (1.1): no fixed-threshold "agree" count; say what was checked and point at the weakest box.
@@ -149,8 +150,11 @@ export interface Row {
   /** Counted / added (true) vs rejected / left out (false). */
   on: boolean
   state: string
-  kind: 'box' | 'room'
+  /** element: an IFC row counted without a 2D box (nothing to show or toggle on the plan). */
+  kind: 'box' | 'room' | 'element'
   edited?: boolean
+  /** Hover text for elements: the IFC GlobalId. */
+  hint?: string
   /** The solver's note, verbatim (neutral secondary line). */
   note?: string
 }
@@ -187,19 +191,30 @@ export function rows(resp: AskResponse, toggles: Toggles, drawing: Drawing, lang
   const rooms = resp.evidence.rooms.map((r): Row => {
     const on = isRoomIncluded(r, toggles)
     const poly = byId.get(r.room_id)
-    const area = `${fmtArea(r.area_m2, lang)} m²`
+    const area = r.area_m2 === null ? t(lang, 'area_not_printed') : `${fmtArea(r.area_m2, lang)} m²`
     return {
       id: roomEvidenceId(r.room_id),
       kind: 'room',
       badge: poly?.num ?? r.room_id,
       title: `${poly?.name ?? r.room_id}${poly?.outdoor ? ` (${t(lang, 'outdoor')})` : ''}`,
-      sub: `${on ? '+ ' : ''}${area}${r.edited ? ` · ${t(lang, 'your_whatif_size')}` : ''}`,
+      sub: `${on && r.area_m2 !== null ? '+ ' : ''}${area}${r.edited ? ` · ${t(lang, 'your_whatif_size')}` : ''}`,
       on,
       state: on ? t(lang, 'added') : t(lang, 'left_out'),
       edited: r.edited,
     }
   })
-  return [...boxes, ...rooms]
+  const before = boxes.length + rooms.length
+  const elements = (resp.evidence.rows ?? []).map((e, i): Row => ({
+    id: `row-${e.id}`,
+    kind: 'element',
+    badge: String(before + i + 1),
+    title: e.name || e.id,
+    sub: [e.value !== undefined ? fmtArea(e.value, lang) : '', t(lang, 'no_box')].filter(Boolean).join(' · '),
+    hint: `IFC GlobalId ${e.id}`,
+    on: true,
+    state: t(lang, 'counted'),
+  }))
+  return [...boxes, ...rooms, ...elements]
 }
 
 /** Cost rounded to the precision we display (4 dp), so the header sum equals the sum of the footers. */
@@ -209,6 +224,8 @@ export const roundCost = (usd: number) => Math.round(usd * 10_000) / 10_000
 export function fmtUsd(usd: number): string {
   const v = roundCost(usd)
   if (v === 0) return '$0.00'
+  // From a dollar up, cents are enough.
+  if (v >= 1) return `$${v.toFixed(2)}`
   return Math.round(v * 100) / 100 === v ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`
 }
 

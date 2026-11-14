@@ -15,6 +15,7 @@ export const BUNDLED_SUMMARY: DrawingSummary = {
   credit: {
     text: 'Swiss Dwellings v3.0.0 by Matthias Standfest et al. (Archilyse AG), doi:10.5281/zenodo.7788422, CC BY 4.0. Rendered from the dataset geometry; labels and numbering are synthetic.',
     license: 'CC BY 4.0',
+    license_name: 'CC BY 4.0',
     url: 'https://doi.org/10.5281/zenodo.7788422',
   },
 }

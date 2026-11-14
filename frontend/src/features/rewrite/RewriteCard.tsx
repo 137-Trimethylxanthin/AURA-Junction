@@ -5,7 +5,7 @@ import type { BoxSubjectAny, Lang } from "@/api/contract"
 import { BOX_SUBJECT_NAMES } from "@/api/contract"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Spinner } from "@/components/ui/spinner"
 import { t } from "@/i18n/strings"
 import { fmtCount, noun } from "@/lib/format"
@@ -39,7 +39,7 @@ export function RewriteCard() {
   // Move focus into the card once its questions are ready, so Tab/Enter work right away.
   useEffect(() => {
     if (st.status === "ready")
-      root.current?.querySelector<HTMLInputElement>("input")?.focus()
+      root.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus()
   }, [st.status])
 
   const lang = st.lang
@@ -71,7 +71,7 @@ export function RewriteCard() {
               useDraft.getState().focus()
             }
           }}
-          className="flex max-h-[min(62dvh,34rem)] flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm"
+          className="flex max-h-[min(50dvh,34rem)] flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm"
         >
           <div className="flex items-start gap-2 p-3 pb-2">
             <SparklesIcon
@@ -247,14 +247,18 @@ function Block({
           ) : null}
         </div>
       ) : null}
-      <Input
+      {/* Grows with the sentence (up to about 8 lines) so the whole question can be read before it is sent. */}
+      <Textarea
+        rows={1}
         value={b.question}
         aria-label={`Question ${n}`}
         disabled={b.asked}
+        maxLength={2000}
         onChange={(e) => st.edit(b.key, e.target.value)}
         onKeyDown={(e) => {
           if (
             e.key === "Enter" &&
+            !e.shiftKey &&
             !e.nativeEvent.isComposing &&
             !disabled &&
             !pending
@@ -263,7 +267,7 @@ function Block({
             void st.askOne(b.key)
           }
         }}
-        className="h-10"
+        className="max-h-44 min-h-10 resize-none [overflow-wrap:anywhere]"
       />
       {!b.routable ? (
         <p className="text-xs text-muted-foreground">
