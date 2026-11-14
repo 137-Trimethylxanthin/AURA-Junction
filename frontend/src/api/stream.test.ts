@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { ApiError, TransportError } from './client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError, TransportError, deleteProject, listProjects, saveProject } from './client'
 import type { ChatEvent } from './contract'
 import { ask } from './local'
+import { createSource } from './source'
 import { ChatUnavailable, splitFrames, streamChat, toChatEvent } from './stream'
 
 const answer = ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
@@ -86,5 +87,154 @@ describe('toChatEvent', () => {
     expect(toChatEvent('check', { check: { method: 'decisions_api', status: 'sample', image: 'none' } })).not.toBeNull()
     expect(toChatEvent('check', { check: { method: 'decisions_api', status: 'live', scope: 'drawn_boxes', ranking: ['win-01'] } })).not.toBeNull()
     expect(() => toChatEvent('check', { check: { method: 'guess' } })).toThrow()
+  })
+
+  it('validates 1.2 progress queue_position events and rejects negative or non-numeric ones', () => {
+    expect(toChatEvent('progress', { queue_position: 2 })).toEqual({ event: 'progress', data: { queue_position: 2 } })
+    expect(toChatEvent('progress', { queue_position: 0 })).toEqual({ event: 'progress', data: { queue_position: 0 } })
+    expect(() => toChatEvent('progress', { queue_position: -1 })).toThrow(ApiError)
+    expect(() => toChatEvent('progress', { queue_position: Number.NaN })).toThrow(ApiError)
+    expect(() => toChatEvent('progress', {})).toThrow(ApiError)
+  })
+})
+
+describe('1.2 SSE heartbeat keep-alive & deep_agent streaming', () => {
+  const req = { drawing_id: 'swiss-46639', message: 'What is the width of the narrowest doorway?' }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps a 90s agent stream alive past the 75s idle timeout when : progress heartbeats arrive every 15s', async () => {
+    vi.useFakeTimers()
+    const enc = new TextEncoder()
+    const agentAnswer = {
+      ...answer,
+      contract_version: '1.2',
+      answer: { kind: 'note' as const, value: '0.78 m clear doorway width in room 3.02', number: 0.78, unit: 'm' },
+      method: 'agent_estimate' as const,
+      route: 'agent' as const,
+      calls: 4,
+      cost_usd: 0.12,
+      estimate: { confidence: 0.85 },
+      source: 'api' as const,
+    }
+    const agentNode = {
+      id: 'agent-1',
+      title: 'Inspecting doorway openings',
+      tag: 'AGENT',
+      body: 'Measured jambs',
+      kind: 'model' as const,
+      tool: { name: 'deep_agent' as const, args: { step: 'Inspecting doorway openings', seq: 1 }, result_id: 'ar1', ms: 1400 },
+    }
+    const fetchWithHeartbeats = async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode(frame('turn', { conversation_id: 'c-9', turn_id: 't-9' })))
+          c.enqueue(enc.encode(frame('progress', { queue_position: 1 })))
+          setTimeout(() => c.enqueue(enc.encode(': progress 15\n\n')), 15_000)
+          setTimeout(() => c.enqueue(enc.encode(frame('progress', { queue_position: 0 }))), 30_000)
+          setTimeout(() => c.enqueue(enc.encode(': progress 45\n\n')), 45_000)
+          setTimeout(() => c.enqueue(enc.encode(frame('tool_call', { node: agentNode }))), 60_000)
+          setTimeout(() => c.enqueue(enc.encode(': progress 75\n\n')), 75_000)
+          setTimeout(() => {
+            c.enqueue(enc.encode(frame('answer', { response: agentAnswer })))
+            c.enqueue(enc.encode(frame('done', {})))
+            c.close()
+          }, 90_000)
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+
+    const events: ChatEvent[] = []
+    const p = streamChat(req, {
+      baseUrl: 'http://x',
+      fetch: fetchWithHeartbeats,
+      idleTimeoutMs: 75_000,
+      onEvent: (e) => events.push(e),
+    })
+    await vi.advanceTimersByTimeAsync(90_000)
+    await p
+    expect(events.map((e) => e.event)).toEqual(['turn', 'progress', 'progress', 'tool_call', 'answer', 'done'])
+  })
+
+  it('rejects with TransportError timeout after 75s of complete silence', async () => {
+    vi.useFakeTimers()
+    const silentFetch = async (_: string, init?: RequestInit) => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          init?.signal?.addEventListener('abort', () => c.error(new DOMException('Timed out', 'AbortError')))
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    const p = streamChat(req, { baseUrl: 'http://x', fetch: silentFetch, idleTimeoutMs: 75_000, onEvent: () => {} })
+    const assertion = expect(p).rejects.toMatchObject({ name: 'TransportError', kind: 'timeout' })
+    await vi.advanceTimersByTimeAsync(75_001)
+    await assertion
+  })
+})
+
+describe('1.2 /health answerer & /projects client transport', () => {
+  const sampleBundle = {
+    id: 'proj-villa-1',
+    title: 'Villa Sunset',
+    floors: [
+      { drawing_id: 'up-eg', label: 'EG', order: 0 },
+      { drawing_id: 'up-og1', label: '1. OG', order: 1 },
+    ],
+    auto_matched: true,
+  }
+
+  it('populates answerer and agentOk on SourceStatus when /health includes them, and omits them otherwise', async () => {
+    const withAgent = createSource({
+      baseUrl: 'http://x',
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true, contract_version: '1.2', answerer: 'hybrid', agent_ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    })
+    expect(await withAgent.init()).toEqual({ kind: 'api', state: 'ready', answerer: 'hybrid', agentOk: true })
+
+    const plain = createSource({
+      baseUrl: 'http://x',
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true, contract_version: '1.2' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    })
+    expect(await plain.init()).toEqual({ kind: 'api', state: 'ready' })
+  })
+
+  it('lists, saves, and deletes project bundles via /projects', async () => {
+    const calls: { method: string; url: string }[] = []
+    const mockFetch = async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      calls.push({ method, url })
+      if (method === 'GET' && url.endsWith('/projects')) {
+        return new Response(JSON.stringify({ contract_version: '1.2', projects: [sampleBundle] }), { status: 200 })
+      }
+      if (method === 'POST' && url.endsWith('/projects')) {
+        return new Response(JSON.stringify({ contract_version: '1.2', project: sampleBundle }), { status: 200 })
+      }
+      if (method === 'DELETE' && url.endsWith('/projects/proj-villa-1')) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ok: true, contract_version: '1.2' }), { status: 200 })
+    }
+
+    const listed = await listProjects({ baseUrl: 'http://x', fetch: mockFetch })
+    expect(listed).toEqual([sampleBundle])
+    const saved = await saveProject({ baseUrl: 'http://x', fetch: mockFetch }, sampleBundle)
+    expect(saved).toEqual(sampleBundle)
+    await deleteProject({ baseUrl: 'http://x', fetch: mockFetch }, 'proj-villa-1')
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      'GET http://x/projects',
+      'POST http://x/projects',
+      'DELETE http://x/projects/proj-villa-1',
+    ])
   })
 })

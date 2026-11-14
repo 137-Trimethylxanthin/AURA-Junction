@@ -155,7 +155,24 @@ describe('rooms with no printed area', () => {
   })
 })
 
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
+import { MemoryRouter, useLocation } from 'react-router'
 import { countPhrase, noun } from '@/lib/format'
+import {
+  evidenceGroupsOf,
+  filterSlashCommands,
+  groupCssVars,
+  resolveSlashCommand,
+  scopeChipText,
+  whereText,
+} from '@/features/chat/view'
+import { BoxCropThumb } from '@/features/chat/BoxCropThumb'
+import { AgentCard } from '@/features/chat/AgentCard'
+import { Composer } from '@/features/chat/Composer'
+import { DrawingTitle } from '@/features/chat/Header'
+import { useDraft } from '@/features/chat/draft'
+import { actions, appStore, type AgentTurn } from '@/store'
 
 describe('nouns for the raster subjects', () => {
   it('have singular and plural forms in every language', () => {
@@ -165,5 +182,603 @@ describe('nouns for the raster subjects', () => {
     expect(noun('bathroom', 2, 'fr')).toBe('salles de bains')
     expect(noun('bedroom', 3, 'fi')).toBe('makuuhuonetta')
     expect(countPhrase('storey', 1, 'fi')).toBe('1 kerros')
+  })
+})
+
+describe('1.2 agent_estimate, AnswerNote, categorical groups, and multi-floor rows', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+
+  it('renders agent_estimate chip and upper-bound cost, never Exact · CAD geometry', () => {
+    const resp = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      route: 'agent' as const,
+      calls: 5,
+      cost_usd: 0.12,
+      answer: { kind: 'note' as const, value: '0.78 m clear doorway width in room 3.02', number: 0.78, unit: 'm' },
+      source: 'api' as const,
+    }
+    const d = deriveAnswer(resp, emptyToggles())
+    expect(valueParts(resp, d, 'en')).toEqual(['0.78', 'm'])
+    expect(valueParts(resp, d, 'de')).toEqual(['0,78', 'm'])
+    expect(sentence(resp, d, bundledDrawing, 'en')).toBe('Estimated from the drawing by the blueprint agent.')
+
+    const chipList = chips(resp, d, 'en')
+    expect(chipList.find((c) => c.key === 'method')).toEqual({
+      key: 'method',
+      text: 'Model estimate · agent',
+      tone: 'info',
+    })
+    expect(chipList.some((c) => c.text.includes('Exact'))).toBe(false)
+    expect(chipList.find((c) => c.key === 'cost')?.text).toBe('≤ $0.12 (upper bound)')
+    expect(footerParts(resp, 'en')).toContain('≤ $0.12 (upper bound)')
+  })
+
+  it('formats integer AnswerNote numbers without .00 unless area unit, and omits "Rooms included: 0" on unboxed area estimates', () => {
+    const intNote = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      answer: { kind: 'note' as const, value: '2 stair flights connect EG and 1. OG', number: 2, unit: 'stairs' },
+    }
+    expect(valueParts(intNote, deriveAnswer(intNote, emptyToggles()), 'en')).toEqual(['2', 'stairs'])
+
+    const agentArea = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      answer: { kind: 'area' as const, value: 84.5, unit: 'm2' as const },
+      evidence: { boxes: [], rooms: [] },
+    }
+    const areaSentence = sentence(agentArea, deriveAnswer(agentArea, emptyToggles()), bundledDrawing, 'en')
+    expect(areaSentence).not.toContain('Rooms included: 0')
+    expect(areaSentence).toContain('Estimated from the drawing by the blueprint agent.')
+  })
+
+  it('maps ScopeProject, categorical EvidenceGroup tokens, leastCertain, and cross-floor labels on rows', () => {
+    const projectScope = { kind: 'project' as const, project_id: 'proj-1', drawing_ids: ['swiss-46639', 'up-og1', 'up-og2'] }
+    expect(whereText(projectScope, 'en')).toBe('across all 3 floors')
+    expect(scopeChipText(projectScope, 'de')).toBe('Über alle 3 Geschosse')
+    expect(whereText({ kind: 'project', project_id: 'proj-1', drawing_ids: [] }, 'en')).toBe('across all floors')
+    expect(whereText({ kind: 'project', project_id: 'proj-1', drawing_ids: [] }, 'fr')).toBe('sur tous les étages')
+    expect(groupCssVars('c2')).toEqual({
+      solid: 'var(--group-2, #6d3ab7)',
+      surface: 'var(--group-2-surface, #efe7fb)',
+    })
+
+    const groupedResp = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      check: {
+        method: 'decisions_api' as const,
+        status: 'live' as const,
+        scope: 'drawn_boxes' as const,
+        ranking: ['stair-2', 'stair-1'],
+        least_certain_id: 'stair-2',
+      },
+      evidence: {
+        boxes: [
+          { id: 'stair-1', x: 10, y: 20, w: 8, h: 12, subject: 'door' as const, group_id: 's1', drawing_id: 'swiss-46639' },
+          { id: 'stair-2', x: 12, y: 22, w: 8, h: 12, subject: 'door' as const, group_id: 's1', drawing_id: 'up-og1' },
+        ],
+        rooms: [],
+        groups: [{ id: 's1', label: 'Stair S1 → 1. OG', color: 'c3' as const, target_drawing_id: 'up-og1' }],
+      },
+    } as unknown as typeof base
+
+    expect(evidenceGroupsOf(groupedResp)).toHaveLength(1)
+    const floorMap = new Map([
+      ['swiss-46639', 'EG'],
+      ['up-og1', '1. OG'],
+    ])
+    const rList = evidenceRows(groupedResp, emptyToggles(), bundledDrawing, 'en', floorMap)
+    expect(rList[0]).toMatchObject({
+      id: 'stair-1',
+      groupId: 's1',
+      groupColor: 'c3',
+      groupLabel: 'Stair S1 → 1. OG',
+      drawingId: 'swiss-46639',
+    })
+    expect(rList[0].floorLabel).toBeUndefined()
+    expect(rList[1]).toMatchObject({
+      id: 'stair-2',
+      leastCertain: true,
+      groupColor: 'c3',
+      drawingId: 'up-og1',
+      floorLabel: '1. OG',
+    })
+  })
+})
+
+describe('1.2 Slash commands (/clear, /zoom, /color, filtering & Composer DOM execution)', () => {
+  it('filters slash commands by prefix or alias and ignores multiline or non-slash inputs', () => {
+    expect(filterSlashCommands('How many windows?')).toEqual([])
+    expect(filterSlashCommands('/clear\nmore')).toEqual([])
+    expect(filterSlashCommands('/').length).toBeGreaterThanOrEqual(12)
+    expect(filterSlashCommands('/cl').map((c) => c.id)).toEqual(['clear'])
+    expect(filterSlashCommands('/csv').map((c) => c.id)).toEqual(['export'])
+    expect(filterSlashCommands('/?').map((c) => c.id)).toEqual(['help'])
+    expect(filterSlashCommands('/co').map((c) => c.id)).toEqual(['color', 'compare'])
+    expect(filterSlashCommands('/zoom 250').map((c) => c.id)).toEqual(['zoom'])
+  })
+
+  it('parses /clear, /zoom <100..450>, /color contextual prompts, and aliases cleanly', () => {
+    expect(resolveSlashCommand('/clear', { hasTurns: true })).toEqual({ kind: 'client', id: 'clear' })
+    expect(resolveSlashCommand('/new', { hasTurns: true })).toEqual({ kind: 'client', id: 'clear' })
+    expect(resolveSlashCommand('/reset', { hasTurns: false })).toEqual({ kind: 'client', id: 'clear' })
+    expect(resolveSlashCommand('/csv', { hasTurns: true })).toEqual({ kind: 'client', id: 'export' })
+    expect(resolveSlashCommand('/?', { hasTurns: false })).toEqual({ kind: 'client', id: 'help' })
+    expect(resolveSlashCommand('/zoom 250', { hasTurns: false })).toEqual({ kind: 'client', id: 'zoom', zoom: 250 })
+    expect(resolveSlashCommand('/zoom 999%', { hasTurns: false })).toEqual({ kind: 'client', id: 'zoom', zoom: 450 })
+    expect(resolveSlashCommand('/zoom 40', { hasTurns: false })).toEqual({ kind: 'client', id: 'zoom', zoom: 100 })
+    expect(resolveSlashCommand('/zoom', { hasTurns: false })).toEqual({ kind: 'client', id: 'fit' })
+    expect(resolveSlashCommand('/zoom nope', { hasTurns: false })).toMatchObject({ kind: 'invalid', id: 'zoom' })
+
+    // Smart contextual /color prompt: empty chat vs follow-up turn vs explicit [by] criteria
+    expect(resolveSlashCommand('/color', { hasTurns: false })).toEqual({
+      kind: 'prompt',
+      id: 'color',
+      prompt: 'How many apartments are there? Color-code each in different colors',
+    })
+    expect(resolveSlashCommand('/color', { hasTurns: true })).toEqual({
+      kind: 'prompt',
+      id: 'color',
+      prompt: 'Color-code these into different colors',
+    })
+    expect(resolveSlashCommand('/color by room type', { hasTurns: true })).toEqual({
+      kind: 'prompt',
+      id: 'color',
+      prompt: 'Color-code these into different colors by room type',
+    })
+    expect(resolveSlashCommand('/stairs', { hasTurns: false })).toEqual({
+      kind: 'prompt',
+      id: 'stairs',
+      prompt: 'Show all stairs and where they lead to in different colors',
+    })
+  })
+
+  it('mounts Composer, opens role="listbox" on "/", and executes /zoom 250, /color, and /clear', async () => {
+    // Ensure ResizeObserver exists in jsdom
+    if (typeof globalThis.ResizeObserver === 'undefined') {
+      globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver
+    }
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    actions().newConversation()
+    actions().resetZoom()
+    useDraft.getState().setText('')
+
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(MemoryRouter, null, createElement(Composer)))
+    })
+
+    // Type "/" into draft -> listbox opens with min-h-10 options
+    await act(async () => {
+      useDraft.getState().setText('/zo')
+    })
+    const listbox = host.querySelector('[role="listbox"][data-slash-menu]')
+    expect(listbox).not.toBeNull()
+    expect(host.querySelectorAll('[role="option"]').length).toBe(1)
+
+    // Execute /zoom 250 via Enter keydown on textarea without making an API/chat turn
+    await act(async () => {
+      useDraft.getState().setText('/zoom 250')
+    })
+    const ta = host.querySelector('textarea')!
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().ui.zoom).toBe(250)
+    expect(appStore.getState().turns).toHaveLength(0)
+    expect(useDraft.getState().text).toBe('')
+
+    // Execute /color on empty chat -> submits apartment color-coding question into turns
+    await act(async () => {
+      useDraft.getState().setText('/color')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().turns.length).toBeGreaterThan(0)
+    expect(appStore.getState().turns[0]).toMatchObject({
+      role: 'user',
+      text: 'How many apartments are there? Color-code each in different colors',
+    })
+
+    // Execute /clear -> clears conversation turns immediately
+    await act(async () => {
+      useDraft.getState().setText('/clear')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().turns).toHaveLength(0)
+
+    // Clicking a slash option in the listbox preserves typed arguments (/zoom 320 and /color by room type)
+    await act(async () => {
+      useDraft.getState().setText('/zoom 320')
+    })
+    const zoomOpt = host.querySelector('[data-slash-cmd="zoom"]')!
+    expect(zoomOpt).not.toBeNull()
+    await act(async () => {
+      zoomOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().ui.zoom).toBe(320)
+
+    await act(async () => {
+      useDraft.getState().setText('/color by room type')
+    })
+    const colorOpt = host.querySelector('[data-slash-cmd="color"]')!
+    expect(colorOpt).not.toBeNull()
+    await act(async () => {
+      colorOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().turns[0]).toMatchObject({
+      role: 'user',
+      text: 'Show and color-code items on this floor plan in different colors by room type',
+    })
+
+    // Guard /whatif in agent mode, and cancel What-If draft when switching to /select
+    await act(async () => {
+      actions().newConversation()
+      actions().setAnswererMode('agent')
+      useDraft.getState().setText('/whatif')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().ui.tool).not.toBe('whatif')
+
+    await act(async () => {
+      actions().setAnswererMode('hybrid')
+      actions().startWhatIf('3.04')
+      useDraft.getState().setText('/select')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().ui.tool).toBe('select')
+    expect(appStore.getState().ui.whatIf.roomId).toBeNull()
+
+    // Multi-floor project scope chip ("All 3 floors") + /all-floors toggle
+    await act(async () => {
+      actions().setActiveProject({
+        id: 'proj-1',
+        title: 'Haus Nord',
+        floors: [
+          { drawing_id: 'swiss-46639', label: 'EG', order: 0 },
+          { drawing_id: 'up-og1', label: '1. OG', order: 1 },
+          { drawing_id: 'up-og2', label: '2. OG', order: 2 },
+        ],
+      })
+      useDraft.getState().setText('/all-floors')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(appStore.getState().crossPlanScope).toBe(true)
+    expect(host.querySelector('[data-project-scope-chip="proj-1"]')?.textContent).toContain('All 3 floors')
+
+    await act(async () => {
+      actions().setActiveProject(null)
+      root.unmount()
+    })
+    host.remove()
+  })
+})
+
+describe('1.2 BoxCropThumb, AgentCard, and DrawingTitle DOM verification', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+
+  it('renders 56x56 BoxCropThumb SVG viewBox crop, enforces minSide clamp, and hides when cross-floor drawing is absent', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const tinyCornerBox = { id: 'win-corner', x: 99, y: 99, w: 0.2, h: 0.2, subject: 'window' as const }
+
+    await act(async () => {
+      root.render(
+        createElement(BoxCropThumb, {
+          box: tinyCornerBox,
+          drawing: bundledDrawing,
+          on: true,
+        }),
+      )
+    })
+    const svg = host.querySelector('svg')
+    expect(svg).not.toBeNull()
+    const [vx, vy, vw, vh] = (svg!.getAttribute('viewBox') ?? '').split(' ').map(Number)
+    const [W, H] = bundledDrawing.frame.px
+    const expectedMin = Math.max(24, Math.min(W, H) * 0.06)
+    expect(vw).toBeGreaterThanOrEqual(expectedMin - 0.01)
+    expect(vx + vw).toBeLessThanOrEqual(W + 0.01)
+    expect(vy + vh).toBeLessThanOrEqual(H + 0.01)
+
+    // Cross-floor box without targetDrawing loaded returns null rather than cropping wrong floor
+    await act(async () => {
+      root.render(
+        createElement(BoxCropThumb, {
+          box: tinyCornerBox,
+          drawing: bundledDrawing,
+          boxDrawingId: 'other-floor-id',
+        }),
+      )
+    })
+    expect(host.querySelector('svg')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('renders AgentCard neutral Stopped card, GroupLegend pills, self_confidence, and hides Reject on non-count agent_estimate', async () => {
+    if (typeof globalThis.ResizeObserver === 'undefined') {
+      globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver
+    }
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    const cancelledTurn: AgentTurn = {
+      id: 'a-stop',
+      role: 'agent',
+      replyTo: 'u-stop',
+      status: 'error',
+      error: { code: 'cancelled', message: 'Stopped. Nothing was answered.' },
+      toggles: emptyToggles(),
+      listOpen: false,
+      showCanonical: false,
+      feedback: null,
+    }
+    await act(async () => {
+      root.render(createElement(MemoryRouter, null, createElement(AgentCard, { turn: cancelledTurn, lang: 'en' })))
+    })
+    expect(host.textContent).toContain('Stopped')
+    expect(host.textContent).toContain('Stopped. Nothing was answered.')
+
+    const noteResp = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      calls: 3,
+      cost_usd: 0.08,
+      estimate: { confidence: 0.82 },
+      answer: { kind: 'note' as const, value: 'Stair S1 leads to 1. OG.' },
+      check: {
+        method: 'decisions_api' as const,
+        status: 'live' as const,
+        scope: 'drawn_boxes' as const,
+        ranking: ['b-1'],
+        least_certain_id: 'b-1',
+      },
+      evidence: {
+        boxes: [{ id: 'b-1', x: 20, y: 30, w: 10, h: 10, subject: 'door' as const, group_id: 'g-1' }],
+        rooms: [],
+        rows: [{ id: 'ifc-1', name: 'StairFlight 1' }],
+        groups: [{ id: 'g-1', label: 'Stair S1 → 1. OG', color: 'c2' as const, target_drawing_id: 'up-og1' }],
+      },
+    } as unknown as typeof base
+    const noteTurn: AgentTurn = {
+      id: 'a-note',
+      role: 'agent',
+      replyTo: 'u-note',
+      status: 'done',
+      response: noteResp,
+      toggles: emptyToggles(),
+      listOpen: true,
+      showCanonical: false,
+      feedback: null,
+    }
+    await act(async () => {
+      appStore.setState((s) => ({ ...s, turns: [noteTurn], ui: { ...s.ui, activeTurnId: 'a-note' } }))
+      root.render(
+        createElement(
+          MemoryRouter,
+          null,
+          createElement(DrawingTitle),
+          createElement(AgentCard, { turn: noteTurn, lang: 'en' }),
+        ),
+      )
+    })
+    expect(host.querySelector('h1')).not.toBeNull()
+    expect(host.querySelector('[data-group-pill="g-1"]')?.textContent).toContain('Stair S1 → 1. OG')
+    expect(host.querySelector('[data-box-crop="b-1"]')).not.toBeNull()
+    expect(host.querySelector('[data-estimate]')?.textContent).toContain('Self-reported confidence: 82 %')
+    // Non-count agent_estimate row does not render a Reject button
+    expect(host.querySelector('button[aria-label^="Reject "]')).toBeNull()
+
+    // Pending stream turn renders queuePosition and deep_agent step
+    const streamingTurn: AgentTurn = {
+      id: 'a-stream',
+      role: 'agent',
+      replyTo: 'u-stream',
+      status: 'pending',
+      stream: {
+        phase: 'working',
+        queuePosition: 2,
+        evidence: { boxes: [], rooms: [] },
+        nodes: [
+          {
+            id: 'ag-1',
+            title: '',
+            tag: 'AGENT',
+            body: '',
+            kind: 'model',
+            tool: { name: 'deep_agent', args: { seq: 1, step: 'Cropping stairwell S1' }, result_id: 'r1', ms: 10 },
+          },
+        ],
+        resolved: [],
+      },
+      toggles: emptyToggles(),
+      listOpen: false,
+      showCanonical: false,
+      feedback: null,
+    }
+    await act(async () => {
+      appStore.setState((s) => ({ ...s, turns: [streamingTurn] }))
+      root.render(createElement(MemoryRouter, null, createElement(AgentCard, { turn: streamingTurn, lang: 'en' })))
+    })
+    expect(host.querySelector('[data-stream-queue="2"]')?.textContent).toContain('In queue (#2)')
+    expect(host.textContent).toContain('Inspecting drawing (step 1)')
+    expect(host.textContent).toContain('Cropping stairwell S1')
+
+    await act(async () => {
+      actions().newConversation()
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('pins GroupLegend on mouse enter+click without un-focusing, clears unpinned hover on leave, jumps to target floor member, and renders cached cross-floor BoxCropThumb', async () => {
+    if (typeof globalThis.ResizeObserver === 'undefined') {
+      globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver
+    }
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    let currentPath = '/d/swiss-46639'
+    function LocationProbe() {
+      const loc = useLocation()
+      currentPath = loc.pathname
+      return null
+    }
+
+    const siblingDrawing = {
+      ...bundledDrawing,
+      id: 'up-og1',
+      title: 'Haus · 1. OG',
+    }
+
+    const crossResp = {
+      ...base,
+      contract_version: '1.2',
+      method: 'agent_estimate' as const,
+      answer: { kind: 'note' as const, value: '2 apartments and 1 stairwell' },
+      check: {
+        method: 'decisions_api' as const,
+        status: 'live' as const,
+        scope: 'drawn_boxes' as const,
+        ranking: ['stair-og1', 'stair-eg'],
+        least_certain_id: 'stair-og1',
+      },
+      evidence: {
+        boxes: [
+          { id: 'apt-a-1', x: 10, y: 15, w: 8, h: 8, subject: 'door' as const, group_id: 'apt-A', drawing_id: 'swiss-46639' },
+          { id: 'stair-eg', x: 30, y: 35, w: 8, h: 8, subject: 'door' as const, group_id: 'stair-1', drawing_id: 'swiss-46639' },
+          { id: 'stair-og1', x: 32, y: 36, w: 8, h: 8, subject: 'door' as const, group_id: 'stair-1', drawing_id: 'up-og1' },
+        ],
+        rooms: [],
+        groups: [
+          { id: 'apt-A', label: 'Apartment A', color: 'c1' as const },
+          { id: 'stair-1', label: 'Stair S1 → 1. OG', color: 'c3' as const, target_drawing_id: 'up-og1' },
+        ],
+      },
+    } as unknown as typeof base
+
+    const turn: AgentTurn = {
+      id: 'a-groups',
+      role: 'agent',
+      replyTo: 'u-groups',
+      status: 'done',
+      response: crossResp,
+      toggles: emptyToggles(),
+      listOpen: true,
+      showCanonical: false,
+      feedback: null,
+    }
+
+    await act(async () => {
+      appStore.setState((s) => ({
+        ...s,
+        turns: [turn],
+        focusedGroupId: null,
+        drawingById: { ...s.drawingById, 'swiss-46639': bundledDrawing, 'up-og1': siblingDrawing },
+        ui: { ...s.ui, activeTurnId: 'a-groups', selectedEvidenceId: null, focusedGroupId: null },
+      }))
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ['/d/swiss-46639'] },
+          createElement(LocationProbe),
+          createElement(AgentCard, { turn, lang: 'en' }),
+        ),
+      )
+    })
+
+    // Cross-floor least-certain box (`stair-og1` on `up-og1`) renders its 56x56 SVG crop from cached `drawingById`!
+    expect(host.querySelector('[data-box-crop="stair-og1"] svg')).not.toBeNull()
+
+    const aptPill = host.querySelector<HTMLButtonElement>('[data-group-pill="apt-A"]')!
+    expect(aptPill.getAttribute('aria-pressed')).toBe('false')
+
+    const fireMousePointer = (el: HTMLElement, type: 'pointerover' | 'pointerout') => {
+      const ev = new MouseEvent(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(ev, 'pointerType', { value: 'mouse' })
+      el.dispatchEvent(ev)
+    }
+
+    // 1. Hover enter -> previews `apt-A` without setting aria-pressed; hover leave -> clears back to null!
+    await act(async () => {
+      fireMousePointer(aptPill, 'pointerover')
+    })
+    expect(appStore.getState().focusedGroupId).toBe('apt-A')
+    expect(aptPill.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => {
+      fireMousePointer(aptPill, 'pointerout')
+    })
+    expect(appStore.getState().focusedGroupId).toBeNull()
+
+    // 2. Hover enter -> click -> hover leave -> pins `apt-A` (`aria-pressed="true"` and `focusedGroupId === 'apt-A'`)!
+    await act(async () => {
+      fireMousePointer(aptPill, 'pointerover')
+    })
+    await act(async () => {
+      aptPill.click()
+    })
+    await act(async () => {
+      fireMousePointer(aptPill, 'pointerout')
+    })
+    expect(appStore.getState().focusedGroupId).toBe('apt-A')
+    expect(aptPill.getAttribute('aria-pressed')).toBe('true')
+
+    // 3. Clicking cross-floor pill `stair-1` (`target_drawing_id: 'up-og1'`) navigates to `/d/up-og1` AND selects `stair-og1`!
+    const stairPill = host.querySelector<HTMLButtonElement>('[data-group-pill="stair-1"]')!
+    await act(async () => {
+      fireMousePointer(stairPill, 'pointerover')
+    })
+    await act(async () => {
+      stairPill.click()
+    })
+    expect(appStore.getState().focusedGroupId).toBe('stair-1')
+    expect(currentPath).toBe('/d/up-og1')
+    expect(appStore.getState().ui.selectedEvidenceId).toBe('stair-og1')
+
+    await act(async () => {
+      actions().newConversation()
+      root.unmount()
+    })
+    host.remove()
   })
 })

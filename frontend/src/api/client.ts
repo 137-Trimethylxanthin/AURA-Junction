@@ -20,7 +20,12 @@ import {
   type DrawingStatusBody,
   type ErrorCode,
   type Health,
+  type ProjectBundle,
+  type ProjectFloor,
+  type ProjectList,
 } from './contract'
+
+export type { ProjectBundle, ProjectFloor, ProjectList }
 
 /** The presenter token, when this browser has one: the server lets only presenters spend model calls on uploads. */
 export function presenterHeader(): Record<string, string> {
@@ -199,6 +204,73 @@ export async function deleteDrawing(opts: ClientOptions, id: string, deleteToken
     opts,
     `/drawings/${encodeURIComponent(id)}`,
     { method: 'DELETE', headers: { 'X-Delete-Token': deleteToken } },
+    timeoutMs,
+  )
+}
+
+const isObjRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+export function isProjectFloor(v: unknown): v is ProjectFloor {
+  return (
+    isObjRecord(v) &&
+    typeof v.drawing_id === 'string' &&
+    v.drawing_id.length > 0 &&
+    typeof v.label === 'string' &&
+    typeof v.order === 'number' &&
+    Number.isFinite(v.order)
+  )
+}
+
+export function isProjectBundle(v: unknown): v is ProjectBundle {
+  return (
+    isObjRecord(v) &&
+    typeof v.id === 'string' &&
+    v.id.length > 0 &&
+    typeof v.title === 'string' &&
+    Array.isArray(v.floors) &&
+    v.floors.every(isProjectFloor) &&
+    (v.auto_matched === undefined || typeof v.auto_matched === 'boolean') &&
+    (v.created_at === undefined || typeof v.created_at === 'string')
+  )
+}
+
+/** `GET /projects` (1.2): multi-plan house / project bundles stored or auto-grouped by the server. */
+export async function listProjects(opts: ClientOptions, timeoutMs = 15_000): Promise<ProjectBundle[]> {
+  const body = await request(opts, '/projects', { method: 'GET' }, timeoutMs)
+  if (Array.isArray(body)) return body.filter(isProjectBundle)
+  if (isObjRecord(body)) {
+    if (typeof body.contract_version === 'string') checkVersion(body.contract_version, body)
+    if (Array.isArray(body.projects)) return body.projects.filter(isProjectBundle)
+  }
+  throw new ApiError('The project list does not match the contract', 200, 'invalid_response', body)
+}
+
+/** `POST /projects` (1.2): create or update a multi-plan house / project bundle. */
+export async function saveProject(opts: ClientOptions, bundle: ProjectBundle, timeoutMs = 15_000): Promise<ProjectBundle> {
+  const body = await request(
+    opts,
+    '/projects',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...presenterHeader() },
+      body: JSON.stringify(bundle),
+    },
+    timeoutMs,
+  )
+  if (isObjRecord(body) && typeof body.contract_version === 'string') checkVersion(body.contract_version, body)
+  const candidate = isObjRecord(body) && 'project' in body ? body.project : body
+  if (!isProjectBundle(candidate))
+    throw new ApiError('The saved project does not match the contract', 200, 'invalid_response', body)
+  return candidate
+}
+
+/** `DELETE /projects/:id` (1.2): ungroup/delete a server-stored project bundle. */
+export async function deleteProject(opts: ClientOptions, id: string, timeoutMs = 15_000): Promise<void> {
+  await request(
+    opts,
+    `/projects/${encodeURIComponent(id)}`,
+    { method: 'DELETE', headers: { ...presenterHeader() } },
     timeoutMs,
   )
 }

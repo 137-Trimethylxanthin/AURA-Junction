@@ -7,9 +7,52 @@ import { t, type StringKey } from '@/i18n/strings'
 
 export const LANG_NAME_EN: Record<Lang, string> = { en: 'English', fr: 'French', fi: 'Finnish', de: 'German' }
 
+export type GroupColorKey = 'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c6'
+
+export interface EvidenceGroupItem {
+  id: string
+  label: string
+  color: GroupColorKey
+  target_drawing_id?: string
+}
+
+export interface ProjectScopeLike {
+  kind: 'project'
+  project_id: string
+  drawing_ids: string[]
+}
+
+const GROUP_CSS: Record<GroupColorKey, { solid: string; surface: string }> = {
+  c1: { solid: 'var(--group-1, #1260b8)', surface: 'var(--group-1-surface, #ddeaf7)' },
+  c2: { solid: 'var(--group-2, #6d3ab7)', surface: 'var(--group-2-surface, #efe7fb)' },
+  c3: { solid: 'var(--group-3, #a82465)', surface: 'var(--group-3-surface, #fbe5f0)' },
+  c4: { solid: 'var(--group-4, #0b6b8a)', surface: 'var(--group-4-surface, #dff3f9)' },
+  c5: { solid: 'var(--group-5, #475569)', surface: 'var(--group-5-surface, #e8edf3)' },
+  c6: { solid: 'var(--group-6, #7c4a15)', surface: 'var(--group-6-surface, #f6eadc)' },
+}
+
+export function groupCssVars(color: GroupColorKey | undefined): { solid: string; surface: string } | null {
+  if (!color || !(color in GROUP_CSS)) return null
+  return GROUP_CSS[color]
+}
+
+export function evidenceGroupsOf(resp: AskResponse): EvidenceGroupItem[] {
+  const raw = (resp.evidence as { groups?: unknown }).groups
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (g): g is EvidenceGroupItem =>
+      typeof g === 'object' &&
+      g !== null &&
+      typeof (g as EvidenceGroupItem).id === 'string' &&
+      typeof (g as EvidenceGroupItem).label === 'string' &&
+      typeof (g as EvidenceGroupItem).color === 'string' &&
+      (g as EvidenceGroupItem).color in GROUP_CSS,
+  )
+}
+
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
-export function whereText(scope: Scope, lang: Lang): string {
+export function whereText(scope: Scope | ProjectScopeLike, lang: Lang): string {
   switch (scope.kind) {
     case 'floor':
       return t(lang, 'where_floor')
@@ -25,13 +68,13 @@ export function whereText(scope: Scope, lang: Lang): string {
       return t(lang, 'where_region', { label: scope.label })
     case 'project':
       return scope.drawing_ids.length > 0
-        ? t(lang, 'where_project', { n: scope.drawing_ids.length })
+        ? t(lang, 'where_project', { n: fmtCount(scope.drawing_ids.length, lang) })
         : t(lang, 'where_project_any')
   }
 }
 
 /** Scope chip under the user's question, in the answer's language ("Scoped to Area 1", "Limité à Area 1"). */
-export function scopeChipText(scope: Scope, lang: Lang): string {
+export function scopeChipText(scope: Scope | ProjectScopeLike, lang: Lang): string {
   if (scope.kind === 'region') return t(lang, 'scoped_to', { label: scope.label })
   return cap(whereText(scope, lang))
 }
@@ -39,8 +82,17 @@ export function scopeChipText(scope: Scope, lang: Lang): string {
 /** Formatted value with the unit/noun, e.g. ["12", "windows"] or ["139,34", "m²"]. */
 export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, string] | null {
   if (resp.answer.kind === 'text') return [resp.answer.value, t(lang, resp.answer.subject === 'fire_rating' ? 'text_fire_rating' : 'text_label')]
-  if (resp.answer.kind === 'note')
-    return resp.answer.number !== undefined ? [fmtArea(resp.answer.number, lang), resp.answer.unit ?? ''] : [resp.answer.value, '']
+  if (resp.answer.kind === 'note') {
+    if (resp.answer.number !== undefined) {
+      const unit = resp.answer.unit ?? ''
+      const isAreaUnit = unit === 'm²' || unit === 'm2'
+      const numStr = !isAreaUnit && Number.isInteger(resp.answer.number)
+        ? fmtCount(resp.answer.number, lang)
+        : fmtArea(resp.answer.number, lang)
+      return [numStr, unit]
+    }
+    return [resp.answer.value, '']
+  }
   if (d.value === null) return null
   if (resp.answer.kind === 'count') return [fmtCount(d.value, lang), noun(resp.answer.subject, d.value, lang)]
   if (resp.answer.kind === 'area') return [fmtArea(d.value, lang), 'm²']
@@ -50,16 +102,24 @@ export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, 
 }
 
 const fmtFor = (resp: AskResponse, n: number, lang: Lang) =>
-  resp.answer.kind === 'area' || resp.answer.kind === 'quantity' ? fmtArea(n, lang) : fmtCount(n, lang)
+  resp.answer.kind === 'area' || resp.answer.kind === 'quantity' || (resp.answer.kind === 'note' && !Number.isInteger(n))
+    ? fmtArea(n, lang)
+    : fmtCount(n, lang)
 
 export function sentence(resp: AskResponse, d: Derived, drawing: Drawing, lang: Lang): string {
-  const where = whereText(resp.scope, lang)
+  const where = whereText(resp.scope as Scope | ProjectScopeLike, lang)
   if (resp.answer.kind === 'count') return t(lang, 'counted_where', { where })
   if (resp.answer.kind === 'quantity') return t(lang, 'measured_where', { where })
   if (resp.answer.kind === 'text') return t(lang, 'text_found')
+  if (resp.answer.kind === 'note') return t(lang, 'agent_note_found')
   if (resp.answer.kind !== 'area') return ''
   const byId = new Map(drawing.rooms.map((r) => [r.room_id, r]))
-  const parts = [t(lang, 'area_where', { where }), t(lang, 'rooms_included', { n: fmtCount(d.includedRooms.length, lang) })]
+  const parts = [t(lang, 'area_where', { where })]
+  if (resp.evidence.rooms.length > 0) {
+    parts.push(t(lang, 'rooms_included', { n: fmtCount(d.includedRooms.length, lang) }))
+  } else if (resp.method === 'agent_estimate') {
+    parts.push(t(lang, 'agent_note_found'))
+  }
   const outdoorLeftOut = resp.evidence.rooms.some(
     (r) => byId.get(r.room_id)?.outdoor && !d.includedRooms.some((x) => x.room_id === r.room_id),
   )
@@ -90,7 +150,17 @@ const METHOD_KEY: Record<Exclude<Method, 'cad_geometry'>, StringKey> = {
 export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
   const out: Chip[] = []
   if (resp.method === 'cad_geometry') out.push({ key: 'method', text: t(lang, 'chip_exact'), tone: 'success' })
-  else out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'neutral' })
+  else if (resp.method === 'agent_estimate') {
+    out.push({ key: 'method', text: t(lang, 'chip_agent_estimate'), tone: 'info' })
+    if (resp.cost_usd > 0 || resp.calls > 0) {
+      out.push({
+        key: 'cost',
+        text: t(lang, 'cost_upper_bound', { cost: fmtUsd(resp.cost_usd) }),
+        tone: 'neutral',
+        outline: true,
+      })
+    }
+  } else out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'neutral' })
 
   const c = resp.check
   if (c?.image === 'none')
@@ -164,6 +234,17 @@ export interface Row {
   hint?: string
   /** The solver's note, verbatim (neutral secondary line). */
   note?: string
+  /** Underlying box geometry for inline 56x56 blueprint crop previews. */
+  box?: Box
+  /** True when Gemini ranked check flagged this box as least_certain_id. */
+  leastCertain?: boolean
+  /** Optional categorical group metadata (`c1..c6`). */
+  groupId?: string
+  groupColor?: GroupColorKey
+  groupLabel?: string
+  /** Optional cross-floor target drawing id & short floor label (`EG`, `1. OG`, …). */
+  drawingId?: string
+  floorLabel?: string
 }
 
 /** "Drawn twice" only from the explicit `duplicate_of` signal (contract 1.1), never from the presence of a note. */
@@ -177,20 +258,37 @@ function roomLabel(room: RoomPoly | undefined, id: string | undefined): string {
   return `${room.name} ${room.num}`
 }
 
-export function rows(resp: AskResponse, toggles: Toggles, drawing: Drawing, lang: Lang): Row[] {
+export function rows(
+  resp: AskResponse,
+  toggles: Toggles,
+  drawing: Drawing,
+  lang: Lang,
+  floorLabels?: ReadonlyMap<string, string>,
+): Row[] {
   const byId = new Map(drawing.rooms.map((r) => [r.room_id, r]))
+  const groupById = new Map(evidenceGroupsOf(resp).map((g) => [g.id, g]))
+  const leastId = resp.check?.least_certain_id
   const boxes = resp.evidence.boxes.map((b, i): Row => {
     const on = !isBoxRejected(b.id, toggles)
     const leaf = duplicateNote(b, resp.evidence.boxes)
     const room = b.room_id ? byId.get(b.room_id) : undefined
+    const bExtra = b as Box & { group_id?: string; drawing_id?: string }
+    const grp = bExtra.group_id ? groupById.get(bExtra.group_id) : undefined
+    const drawingId = bExtra.drawing_id
+    const floorLabel = drawingId && drawingId !== drawing.id ? (floorLabels?.get(drawingId) ?? drawingId) : undefined
     return {
       id: b.id,
       kind: 'box',
       badge: String(i + 1),
       title: `${cap(noun(b.subject, 1, lang))} ${i + 1}${leaf ? ` · ${t(lang, leaf as 'leaf_1' | 'leaf_2')}` : ''}`,
-      sub: [roomLabel(room, b.room_id), b.unit ? `${b.unit}` : ''].filter(Boolean).join(' · '),
+      sub: [roomLabel(room, b.room_id), b.unit ? `${b.unit}` : '', grp && !b.unit ? grp.label : ''].filter(Boolean).join(' · '),
       // A duplicate's note only repeats its label; any other note is shown as is.
       ...(b.note && !leaf ? { note: b.note } : {}),
+      box: b,
+      ...(leastId === b.id ? { leastCertain: true } : {}),
+      ...(grp ? { groupId: grp.id, groupColor: grp.color, groupLabel: grp.label } : {}),
+      ...(drawingId ? { drawingId } : {}),
+      ...(floorLabel ? { floorLabel } : {}),
       on,
       state: on ? t(lang, 'counted') : t(lang, 'rejected'),
     }
@@ -199,12 +297,19 @@ export function rows(resp: AskResponse, toggles: Toggles, drawing: Drawing, lang
     const on = isRoomIncluded(r, toggles)
     const poly = byId.get(r.room_id)
     const area = r.area_m2 === null ? t(lang, 'area_not_printed') : `${fmtArea(r.area_m2, lang)} m²`
+    const rExtra = r as typeof r & { group_id?: string; drawing_id?: string }
+    const grp = rExtra.group_id ? groupById.get(rExtra.group_id) : undefined
+    const drawingId = rExtra.drawing_id
+    const floorLabel = drawingId && drawingId !== drawing.id ? (floorLabels?.get(drawingId) ?? drawingId) : undefined
     return {
       id: roomEvidenceId(r.room_id),
       kind: 'room',
       badge: poly?.num ?? r.room_id,
       title: `${poly?.name ?? r.room_id}${poly?.outdoor ? ` (${t(lang, 'outdoor')})` : ''}`,
-      sub: `${on && r.area_m2 !== null ? '+ ' : ''}${area}${r.edited ? ` · ${t(lang, 'your_whatif_size')}` : ''}`,
+      sub: `${on && r.area_m2 !== null ? '+ ' : ''}${area}${r.edited ? ` · ${t(lang, 'your_whatif_size')}` : ''}${grp ? ` · ${grp.label}` : ''}`,
+      ...(grp ? { groupId: grp.id, groupColor: grp.color, groupLabel: grp.label } : {}),
+      ...(drawingId ? { drawingId } : {}),
+      ...(floorLabel ? { floorLabel } : {}),
       on,
       state: on ? t(lang, 'added') : t(lang, 'left_out'),
       edited: r.edited,
@@ -280,10 +385,14 @@ function fmtTokens(n: number, lang: Lang): string {
 }
 
 export function footerParts(resp: AskResponse, lang: Lang): string[] {
+  const costText =
+    resp.method === 'agent_estimate' && (resp.cost_usd > 0 || resp.calls > 0)
+      ? t(lang, 'cost_upper_bound', { cost: fmtUsd(resp.cost_usd) })
+      : fmtUsd(resp.cost_usd)
   return [
     `${t(lang, 'footer_answer')}: ${t(lang, METHOD_FOOTER[resp.method])}`,
     callsText(resp.calls, lang),
-    fmtUsd(resp.cost_usd),
+    costText,
     ...checkParts(resp, lang),
     `${fmtCount(resp.latency_ms, lang)} ms`,
     t(lang, resp.source === 'local' ? 'source_local' : 'source_api'),
@@ -308,5 +417,154 @@ export function announce(resp: AskResponse, d: Derived): string {
     none: '',
   }
   return v ? `${v[0]} ${v[1]}.${gold[d.gold.state]}` : ''
+}
+
+export type SlashCommandId =
+  | 'clear'
+  | 'export'
+  | 'trace'
+  | 'compare'
+  | 'all-floors'
+  | 'fit'
+  | 'zoom'
+  | 'select'
+  | 'mark'
+  | 'whatif'
+  | 'undo'
+  | 'help'
+  | 'color'
+  | 'stairs'
+  | 'summary'
+
+export interface SlashCommandSpec {
+  id: SlashCommandId
+  /** Canonical slash command, e.g. "/clear" or "/zoom". */
+  cmd: string
+  /** Optional argument hint displayed beside the command in the palette. */
+  argHint?: string
+  /** Accepted aliases without the leading "/". */
+  aliases: readonly string[]
+  /** Concise action summary shown in the slash listbox. */
+  description: string
+  /** True when Tab-completion should append a trailing space for arguments. */
+  acceptsArgs?: boolean
+}
+
+export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
+  { id: 'clear', cmd: '/clear', aliases: ['new', 'reset'], description: 'Clear conversation (with Undo)' },
+  {
+    id: 'color',
+    cmd: '/color',
+    argHint: '[by]',
+    aliases: ['colour', 'colors'],
+    description: 'Color-code apartments or prior chat items',
+    acceptsArgs: true,
+  },
+  { id: 'stairs', cmd: '/stairs', aliases: ['stair'], description: 'Show all stairs and where they lead in colors' },
+  { id: 'summary', cmd: '/summary', aliases: ['breakdown'], description: 'Complete breakdown of rooms, area, doors & windows' },
+  { id: 'all-floors', cmd: '/all-floors', aliases: ['floors'], description: 'Toggle cross-plan matching across all floors' },
+  { id: 'export', cmd: '/export', aliases: ['csv'], description: 'Download active answer evidence as CSV' },
+  { id: 'trace', cmd: '/trace', aliases: ['tree'], description: 'Toggle reasoning tree panel' },
+  { id: 'compare', cmd: '/compare', aliases: ['diff'], description: 'Toggle original vs rebuilt comparison' },
+  { id: 'fit', cmd: '/fit', aliases: [], description: 'Reset drawing zoom to 100 %' },
+  {
+    id: 'zoom',
+    cmd: '/zoom',
+    argHint: '<100..450>',
+    aliases: [],
+    description: 'Set drawing zoom percentage (100–450 %)',
+    acceptsArgs: true,
+  },
+  { id: 'select', cmd: '/select', aliases: [], description: 'Switch to Select tool' },
+  { id: 'mark', cmd: '/mark', aliases: [], description: 'Switch to Mark area tool' },
+  { id: 'whatif', cmd: '/whatif', aliases: ['what-if'], description: 'Switch to What-if room resize tool' },
+  { id: 'undo', cmd: '/undo', aliases: [], description: 'Undo last evidence toggle' },
+  { id: 'help', cmd: '/help', aliases: ['shortcuts', '?'], description: 'Open keyboard shortcuts cheatsheet' },
+]
+
+export type ParsedSlashAction =
+  | {
+      kind: 'client'
+      id: Exclude<SlashCommandId, 'zoom' | 'color' | 'stairs' | 'summary'>
+    }
+  | { kind: 'client'; id: 'zoom'; zoom: number }
+  | { kind: 'prompt'; id: 'color' | 'stairs' | 'summary'; prompt: string }
+  | { kind: 'invalid'; id: SlashCommandId; message: string }
+
+/** Filter slash palette candidates while the composer starts with `/` and has no newline. */
+export function filterSlashCommands(input: string): SlashCommandSpec[] {
+  if (!input.startsWith('/') || input.includes('\n')) return []
+  const body = input.slice(1)
+  const spaceIdx = body.search(/\s/)
+  const token = (spaceIdx < 0 ? body : body.slice(0, spaceIdx)).toLowerCase()
+  if (!token) return [...SLASH_COMMANDS]
+  if (spaceIdx >= 0) {
+    return SLASH_COMMANDS.filter((c) => c.cmd.slice(1) === token || c.aliases.includes(token))
+  }
+  return SLASH_COMMANDS.filter(
+    (c) => c.cmd.slice(1).startsWith(token) || c.aliases.some((a) => a.startsWith(token)),
+  )
+}
+
+/** Resolve an exact slash command line into either an instant client action or a smart contextual prompt. */
+export function resolveSlashCommand(input: string, ctx: { hasTurns: boolean }): ParsedSlashAction | null {
+  const trimmed = input.trim()
+  if (!trimmed.startsWith('/') || trimmed.includes('\n')) return null
+  const body = trimmed.slice(1)
+  if (!body) return null
+  const spaceIdx = body.search(/\s/)
+  const token = (spaceIdx < 0 ? body : body.slice(0, spaceIdx)).toLowerCase()
+  const arg = spaceIdx < 0 ? '' : body.slice(spaceIdx + 1).trim()
+  const spec = SLASH_COMMANDS.find((c) => c.cmd.slice(1) === token || c.aliases.includes(token))
+  if (!spec) return null
+
+  switch (spec.id) {
+    case 'clear':
+    case 'export':
+    case 'trace':
+    case 'compare':
+    case 'all-floors':
+    case 'fit':
+    case 'select':
+    case 'mark':
+    case 'whatif':
+    case 'undo':
+    case 'help':
+      return { kind: 'client', id: spec.id }
+    case 'zoom': {
+      if (!arg) return { kind: 'client', id: 'fit' }
+      const rawNum = Number(arg.replace(/%$/, '').trim())
+      if (!Number.isFinite(rawNum)) {
+        return { kind: 'invalid', id: 'zoom', message: 'Usage: /zoom <100..450>' }
+      }
+      const clamped = Math.min(450, Math.max(100, Math.round(rawNum)))
+      return { kind: 'client', id: 'zoom', zoom: clamped }
+    }
+    case 'color': {
+      if (arg) {
+        const criteria = arg.replace(/^by\s+/i, '').trim() || arg
+        const prompt = ctx.hasTurns
+          ? `Color-code these into different colors by ${criteria}`
+          : `Show and color-code items on this floor plan in different colors by ${criteria}`
+        return { kind: 'prompt', id: 'color', prompt }
+      }
+      const prompt = ctx.hasTurns
+        ? 'Color-code these into different colors'
+        : 'How many apartments are there? Color-code each in different colors'
+      return { kind: 'prompt', id: 'color', prompt }
+    }
+    case 'stairs': {
+      const prompt = arg
+        ? `Show all stairs and where they lead to in different colors (${arg})`
+        : 'Show all stairs and where they lead to in different colors'
+      return { kind: 'prompt', id: 'stairs', prompt }
+    }
+    case 'summary':
+      return {
+        kind: 'prompt',
+        id: 'summary',
+        prompt: 'Give a complete breakdown of rooms, total area, doors, and windows on this floor plan',
+      }
+  }
 }
 
