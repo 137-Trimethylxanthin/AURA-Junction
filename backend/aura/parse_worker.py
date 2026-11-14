@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 AS_LIMIT = 4096 * 1024 * 1024
+WORK_PIXELS = 80_000_000  # served copy of an uploaded image; below Pillow's own bomb warning (89 MP)
 CPU_LIMIT_S = 60
 
 
@@ -87,10 +88,19 @@ def parse_dxf(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
 def parse_raster(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
     from PIL import Image
 
-    Image.MAX_IMAGE_PIXELS = None  # no pixel limit on uploaded images; the byte cap still applies
+    # No pixel limit on what is uploaded: this child (memory and CPU limited) decodes any size. The copy the
+    # app serves and the main process reopens is scaled down to WORK_PIXELS, so nothing outside this child
+    # ever decodes an unbounded image. `w, h` stay the source size; `px` is the size of the served copy.
+    Image.MAX_IMAGE_PIXELS = None
     with Image.open(src) as im:
         w, h = im.size
-        im = im.convert("RGB")
+        if w * h > WORK_PIXELS:
+            im.draft("RGB", (w, h))
+            k = (WORK_PIXELS / (w * h)) ** 0.5
+            im = im.convert("RGB").resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
+        else:
+            im = im.convert("RGB")
+        pw, ph = im.size
         im.save(out / "original.png", optimize=True)
         t = im.copy()
         t.thumbnail((480, 1920))
@@ -101,7 +111,7 @@ def parse_raster(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
         "kind": "raster", "status": "ready", "source": "upload", "capabilities": [],
         "thumbnail": f"{base}/thumb.png",
         "frame": {"dxf_min": [0, 0], "dxf_max": [w, h], "margin_m": 0, "m_per_unit": 1,
-                  "y_flip": True, "px": [w, h]},
+                  "y_flip": True, "px": [pw, ph]},
         "m_per_pct_x": 0, "m_per_pct_y": 0,
         "images": {"rebuilt": f"{base}/original.png", "original": f"{base}/original.png",
                    "original_alignment": "exact"},
@@ -110,7 +120,7 @@ def parse_raster(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
         **meta,
     }
     _write_json(out / "drawing.json", drawing)
-    return {"px": [w, h]}
+    return {"px": [pw, ph], "source_px": [w, h]}
 
 
 def parse_pdf(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
