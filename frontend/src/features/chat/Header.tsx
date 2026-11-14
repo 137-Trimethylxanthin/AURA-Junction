@@ -49,6 +49,8 @@ function SessionButton() {
     <Button
       variant="outline"
       disabled={!canOpen}
+      // The session total is information even before there is a tree to open: keep it readable (5.7:1).
+      className="disabled:text-muted-foreground disabled:opacity-100"
       data-trace-opener
       onClick={() => actions().setTraceOpen(true)}
       title={

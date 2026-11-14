@@ -126,7 +126,8 @@ async def _agent(svc: Services, d: tools.LoadedDrawing, question: str, lang: str
     final = ar.final
     nodes = []
     for i, tr in enumerate(ar.results, 1):
-        if final is not None and tr.result_id == final.result_id:
+        if (final is not None and tr.result_id == final.result_id
+                and final.kind in ("count", "area", "text") and final.supported):
             continue  # the answer's own read/collect node carries this call
         nodes.append({"id": f"agent-{i}", "parent": "q", "title": "Tool call", "tag": AGENT_TAG,
                       "body": tr.summary or describe_call(tr), "kind": "exact",

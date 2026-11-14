@@ -20,7 +20,8 @@ function AuraMark() {
   )
 }
 
-export function Wordmark() {
+/** `compact` hides the long name (the workspace header gives that room to the drawing's title). */
+export function Wordmark({ compact = false }: { compact?: boolean }) {
   return (
     <div
       className="flex shrink-0 items-center gap-2"
@@ -28,7 +29,7 @@ export function Wordmark() {
     >
       <AuraMark />
       <span className="text-sm font-semibold tracking-[0.08em]">AURA</span>
-      <span className="hidden text-xs text-muted-foreground min-[1280px]:inline">
+      <span className={compact ? "sr-only" : "hidden text-xs text-muted-foreground min-[1280px]:inline"}>
         Automated Understanding of Rooms &amp; Areas
       </span>
     </div>
