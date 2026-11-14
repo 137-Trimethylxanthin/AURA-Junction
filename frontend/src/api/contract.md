@@ -582,12 +582,23 @@ interface RewriteResponse {
 
 The table also includes FR, FI and DE phrasings of the window, door and apartment A area questions.
 
-## §1.2 Deep agent sidecar & progress events
+## §1.2 Deep agent sidecar, progress events, color-coded groups & project bundles
 
 1.2 is additive over 1.1:
 - `ToolName` adds `'deep_agent'` for sandboxed deep-agent Python/shell inspection steps.
 - `Method` adds `'agent_estimate'` (always shown with model estimate chip, self-reported confidence, and upper-bound cost; never `"Exact · CAD geometry"`).
 - `Answer` adds `{ kind: 'note'; value: string; number?: number; unit?: string }` for open-ended answers, comparisons, or units outside `'m' | 'm2' | 'm3'`.
 - `ChatEvent` adds `{ event: 'progress'; data: { queue_position: number } }`, plus SSE `: progress` keepalive comment lines.
-- `Drawing` and `DrawingSummary` add optional `source_ext?: string` (e.g. `'.pdf'` when `kind === 'raster'`).
+- `Drawing` and `DrawingSummary` add optional `source_ext?: string` (e.g. `'.pdf'` when `kind === 'raster'`), `project_id?: string`, `floor_label?: string`, and `floor_order?: number`.
 - `GET /health` may include optional `answerer?: 'hybrid' | 'agent' | 'exact'` and `agent_ok?: boolean`.
+- **Categorical color-coding & directional flow links**:
+  - `GroupColor = 'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c6'` maps to `--group-1..6` and `--group-1..6-surface` in `STACK.md`.
+  - `EvidenceGroup`: `{ id, label, color: GroupColor, target_drawing_id? }`.
+  - `EvidenceLink`: `{ id, from_pos: [Pct, Pct], to_pos: [Pct, Pct], waypoints?: [Pct, Pct][], group_id?, label?, drawing_id?, target_drawing_id? }`.
+  - `Box` and `EvidenceRoom` add optional `group_id?: string` and `drawing_id?: string`.
+  - `Evidence` (on `AskResponse` and `ChatEvent` `tool_result`) adds optional `groups?: EvidenceGroup[]` and `links?: EvidenceLink[]`.
+- **Multi-plan house / project bundles**:
+  - `Scope` adds `{ kind: 'project'; project_id: string; drawing_ids: string[] }`.
+  - `ProjectFloor`: `{ drawing_id: string; label: string; order: number }`.
+  - `ProjectBundle`: `{ id: string; title: string; floors: ProjectFloor[]; auto_matched?: boolean; created_at?: string }`.
+  - `GET /projects` returns `ProjectList` (`{ contract_version, projects: ProjectBundle[] }`); `POST /projects` saves a `ProjectBundle`; `DELETE /projects/:id` ungroups it.

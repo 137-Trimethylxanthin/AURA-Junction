@@ -52,13 +52,6 @@ export function evidenceGroupsOf(resp: AskResponse): EvidenceGroupItem[] {
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
-const WHERE_PROJECT_FALLBACK: Record<Lang, (n: string) => string> = {
-  en: (n) => `across ${n} floors`,
-  fr: (n) => `sur ${n} niveaux`,
-  fi: (n) => `${n} kerroksessa`,
-  de: (n) => `über ${n} Geschosse`,
-}
-
 export function whereText(scope: Scope | ProjectScopeLike, lang: Lang): string {
   switch (scope.kind) {
     case 'floor':
@@ -74,7 +67,9 @@ export function whereText(scope: Scope | ProjectScopeLike, lang: Lang): string {
     case 'region':
       return t(lang, 'where_region', { label: scope.label })
     case 'project':
-      return WHERE_PROJECT_FALLBACK[lang](fmtCount(scope.drawing_ids.length, lang))
+      return scope.drawing_ids.length > 0
+        ? t(lang, 'where_project', { n: fmtCount(scope.drawing_ids.length, lang) })
+        : t(lang, 'where_project_any')
   }
 }
 

@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { createSource } from '@/api/source'
+import type { AskRequest, Drawing, ProjectBundle } from '@/api/contract'
+import { createSource, type Source } from '@/api/source'
 import { bundledDrawing } from '@/data/drawing'
 import { limitsOf, markLabel, nextLabel, overlayOpen, shouldIgnoreShortcut } from '@/features/plan/shared'
 import { deriveAnswer } from '@/lib/answer'
-import { ZOOM_STEPS, createAppStore, reduceStream, type AgentTurn, type AppStore, type StreamState } from './appStore'
+import {
+  CONVERSATION_KEY,
+  ZOOM_STEPS,
+  createAppStore,
+  reduceStream,
+  type AgentTurn,
+  type AppStore,
+  type StreamState,
+} from './appStore'
 
 const make = () => createAppStore({ source: createSource({ baseUrl: null }) })
 const agentTurn = (store: AppStore, id: string) => store.getState().turns.find((t) => t.id === id) as AgentTurn
@@ -230,6 +239,129 @@ describe('store', () => {
     })
     const id = await store.getState().ask('How many windows?')
     expect(agentTurn(store, id)).toMatchObject({ status: 'error', error: { message: 'boom' } })
+  })
+
+  it('reduceStream merges streamed groups and links alongside boxes and rooms', () => {
+    const init: StreamState = { phase: 'working', nodes: [], resolved: [], evidence: { boxes: [], rooms: [] } }
+    const step1 = reduceStream(init, {
+      event: 'tool_result',
+      data: {
+        node_id: 'n1',
+        summary: 'Apartments A and B',
+        evidence: {
+          boxes: [{ id: 'st-1', subject: 'door', x: 10, y: 10, w: 5, h: 5, group_id: 'stair-1', drawing_id: 'swiss-46639' }],
+          rooms: [{ room_id: '3.04', included: true, area_m2: 14.8, group_id: 'unit-A' }],
+          groups: [{ id: 'unit-A', label: 'Apartment A', color: 'c1' }],
+          links: [{ id: 'lnk-1', from_pos: [12, 12], to_pos: [40, 20], group_id: 'stair-1', label: 'Leads to 1. OG', target_drawing_id: 'fl-1' }],
+        },
+      },
+    })
+    const step2 = reduceStream(step1, {
+      event: 'tool_result',
+      data: {
+        node_id: 'n2',
+        summary: 'Apartment B',
+        evidence: {
+          boxes: [{ id: 'st-1', subject: 'door', x: 10, y: 10, w: 5, h: 5 }],
+          rooms: [{ room_id: '3.08', included: true, area_m2: 12.1, group_id: 'unit-B' }],
+          groups: [
+            { id: 'unit-A', label: 'Apartment A', color: 'c1' },
+            { id: 'unit-B', label: 'Apartment B', color: 'c2' },
+          ],
+          links: [{ id: 'lnk-2', from_pos: [50, 50], to_pos: [60, 60], group_id: 'unit-B' }],
+        },
+      },
+    })
+    expect(step2.evidence.boxes).toHaveLength(1)
+    expect(step2.evidence.rooms.map((r) => r.room_id)).toEqual(['3.04', '3.08'])
+    expect(step2.evidence.groups?.map((g) => [g.id, g.color])).toEqual([
+      ['unit-A', 'c1'],
+      ['unit-B', 'c2'],
+    ])
+    expect(step2.evidence.links?.map((l) => l.id)).toEqual(['lnk-1', 'lnk-2'])
+  })
+
+  it('supports activeProject floor stepping, focusedGroupId, crossPlanScope and shared conversation across floors', async () => {
+    const floorEg: Drawing = { ...bundledDrawing, id: 'house-eg', title: 'Haus · EG' }
+    const floorOg: Drawing = { ...bundledDrawing, id: 'house-og', title: 'Haus · 1. OG' }
+    const floorKg: Drawing = { ...bundledDrawing, id: 'house-kg', title: 'Haus · KG' }
+    const unrelated: Drawing = { ...bundledDrawing, id: 'other-plan', title: 'Other' }
+    const map: Record<string, Drawing> = {
+      'swiss-46639': bundledDrawing,
+      'house-kg': floorKg,
+      'house-eg': floorEg,
+      'house-og': floorOg,
+      'other-plan': unrelated,
+    }
+    const seenReqs: AskRequest[] = []
+    const base = createSource({ baseUrl: null })
+    const baseResp = (await base.ask({ drawing_id: 'swiss-46639', question: 'How many apartments are there?' })).response
+    const src: Source = {
+      ...base,
+      hasApi: () => true,
+      status: () => ({ kind: 'api', state: 'ready' }),
+      drawing: async (id) => map[id],
+      async chat(req, onEvent) {
+        seenReqs.push(req)
+        onEvent({ event: 'turn', data: { conversation_id: 'conv-house-1', turn_id: 't-1' } })
+        return { response: baseResp, fellBack: false }
+      },
+    }
+
+    const bundle: ProjectBundle = {
+      id: 'proj-house-1',
+      title: 'Haus Sonnenberg',
+      floors: [
+        { drawing_id: 'house-og', label: '1. OG', order: 1 },
+        { drawing_id: 'house-kg', label: 'KG', order: -1 },
+        { drawing_id: 'house-eg', label: 'EG', order: 0 },
+      ],
+    }
+
+    localStorage.removeItem(CONVERSATION_KEY('house-eg', 'proj-house-1'))
+    const store = createAppStore({ source: src, drawing: floorEg })
+    const s = store.getState
+    s().setActiveProject(bundle)
+
+    // Floors sorted [-1, 0, 1]: stepping from EG (0) goes up to 1. OG and down to KG, clamping at ends
+    expect(s().activeProject?.floors.map((f) => f.drawing_id)).toEqual(['house-kg', 'house-eg', 'house-og'])
+    expect(s().stepFloor(1)).toBe('house-og')
+    expect(s().stepFloor(-1)).toBe('house-kg')
+
+    // Pre-warm 1. OG and ask a cross-plan question on EG
+    await s().warmDrawing('house-og')
+    expect(s().drawingById['house-og']?.title).toBe('Haus · 1. OG')
+    s().setCrossPlanScope(true)
+    const turnId = await s().ask('Match stairs across all floors')
+    expect(seenReqs[0].scope).toEqual({
+      kind: 'project',
+      project_id: 'proj-house-1',
+      drawing_ids: ['house-kg', 'house-eg', 'house-og'],
+    })
+    expect(localStorage.getItem(CONVERSATION_KEY('house-eg', 'proj-house-1'))).toBe('conv-house-1')
+
+    s().setFocusedGroup('unit-A')
+    expect(s().focusedGroupId).toBe('unit-A')
+    expect(s().ui.focusedGroupId).toBe('unit-A')
+
+    // Switching to sibling floor `house-og` preserves turns, conversationId, activeTurnId and focusedGroupId!
+    await s().loadDrawing('house-og')
+    expect(s().session.drawing.id).toBe('house-og')
+    expect(s().turns).toHaveLength(2)
+    expect(s().session.conversationId).toBe('conv-house-1')
+    expect(s().ui.activeTurnId).toBe(turnId)
+    expect(s().focusedGroupId).toBe('unit-A')
+    // Clamped at top floor (`1. OG`)
+    expect(s().stepFloor(1)).toBeNull()
+    expect(s().stepFloor(-1)).toBe('house-eg')
+
+    // Switching to an unrelated drawing resets turns, conversationId, activeProject and focusedGroupId
+    await s().loadDrawing('other-plan')
+    expect(s().turns).toHaveLength(0)
+    expect(s().session.conversationId).toBeNull()
+    expect(s().activeProject).toBeNull()
+    expect(s().crossPlanScope).toBe(false)
+    expect(s().focusedGroupId).toBeNull()
   })
 })
 

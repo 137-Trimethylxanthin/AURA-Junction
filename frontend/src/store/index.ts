@@ -34,6 +34,10 @@ export const selectAgentTurn =
 export const selectActiveTurn = (s: AppState): AgentTurn | undefined => selectAgentTurn(s.ui.activeTurnId)(s)
 export const selectSource = (s: AppState) => s.session.source
 export const selectAnswererMode = (s: AppState) => s.session.answererMode
+export const selectActiveProject = (s: AppState) => s.activeProject
+export const selectCrossPlanScope = (s: AppState) => s.crossPlanScope
+export const selectFocusedGroupId = (s: AppState) => s.ui.focusedGroupId
+export const selectDrawingById = (s: AppState) => s.drawingById
 export const selectDrawing = (s: AppState) => s.session.drawing
 export const selectSessionLang = (s: AppState) => s.session.lang
 export const selectCanUndo = (s: AppState) => s.undoStack.length > 0
