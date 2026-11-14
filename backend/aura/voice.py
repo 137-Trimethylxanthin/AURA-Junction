@@ -379,6 +379,40 @@ def build_script(facts: dict[str, Any], lang: str) -> str:
     return " ".join(out).strip()
 
 
+MAX_SCRIPT_CHARS = 600
+CLIENT_KINDS = {"count", "area", "quantity"}
+CLIENT_UNITS = {"m", "m2", "m3"}
+
+
+def client_facts(resp: dict[str, Any]) -> dict[str, Any] | None:
+    """Facts from an answer the browser sent (no stored copy): structured kinds only, numbers and
+    enums only. No free text (notes, labels, group names, where_to_find, unit strings) is kept,
+    so the endpoint cannot be used to make the voice say arbitrary words."""
+    facts = spoken_facts(resp)
+    kind = facts.get("kind")
+    if kind not in CLIENT_KINDS or facts.get("value") is None:
+        return None
+    if kind == "count" and facts.get("subject") not in SUBJECTS:
+        return None
+    if kind == "quantity" and facts.get("unit") not in CLIENT_UNITS:
+        return None
+    out = {k: facts[k] for k in ("kind", "value", "subject", "unit", "rooms", "no_area",
+                                 "check", "confidence") if facts.get(k) is not None}
+    if kind == "area":
+        out["unit"] = "m2"
+    if facts.get("method") in METHOD:
+        out["method"] = facts["method"]
+    return out
+
+
+def _cap(script: str) -> str:
+    if len(script) <= MAX_SCRIPT_CHARS:
+        return script
+    cut = script[:MAX_SCRIPT_CHARS]
+    end = max(cut.rfind(". "), cut.rfind("; "))
+    return cut[: end + 1] if end > 0 else cut.rsplit(" ", 1)[0] + "…"
+
+
 @router.post("/speak")
 async def speak(body: SpeakRequest, request: Request):
     if body.voice not in VOICES:
@@ -393,12 +427,16 @@ async def speak(body: SpeakRequest, request: Request):
             resp = None
         if resp is not None:
             source = "store"
-    if resp is None:
-        resp = body.response
-    if not isinstance(resp, dict) or not isinstance(resp.get("answer"), dict):
+    if resp is not None:
+        facts = spoken_facts(resp) if isinstance(resp.get("answer"), dict) else None
+    elif isinstance(body.response, dict) and isinstance(body.response.get("answer"), dict):
+        facts = client_facts(body.response)  # numbers and enums only
+    else:
         return _err("bad_request", "Send an answer_id or the answer response to read out.", 400)
-    facts = spoken_facts(resp)
-    script = build_script(facts, body.lang)
+    if facts is None:
+        return _err("bad_request", "Only stored answers, or count, area and quantity answers, "
+                                   "can be read out.", 400)
+    script = _cap(build_script(facts, body.lang))
     if not script:
         return _err("bad_request", "This answer has nothing to read out.", 400)
     key = hashlib.sha256(json.dumps([facts, body.lang, body.voice, TTS_MODEL], sort_keys=True,

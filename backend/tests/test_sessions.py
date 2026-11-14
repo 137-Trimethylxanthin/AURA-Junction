@@ -73,3 +73,45 @@ def test_validation_and_cap(c, monkeypatch):
         c.post("/sessions", json=sess(f"s{n}", updated_at=float(n + 1)), headers=A)
     ids = {s["id"] for s in c.get("/sessions", headers=A).json()["sessions"]}
     assert ids == {"keep", "s2", "s3", "s4"}
+
+
+def test_write_rate_limit_per_ip(c, monkeypatch):
+    monkeypatch.setattr("aura.sessions.WRITES_PER_IP", 3)
+    for n in range(3):
+        assert c.post("/sessions", json=sess(f"s{n}"), headers=A).status_code == 200
+    # A fresh client id from the same address does not reset the limit.
+    assert c.post("/sessions", json=sess("s9"), headers=B).status_code == 429
+    assert c.patch("/sessions/s0", json={"pinned": True}, headers=A).status_code == 429
+    assert c.get("/sessions", headers=A).status_code == 200  # reads are not limited
+
+
+def test_global_cap_evicts_least_recently_active_client_first(c, monkeypatch):
+    monkeypatch.setattr("aura.sessions.MAX_TOTAL_ROWS", 4)
+    for n in range(3):
+        c.post("/sessions", json=sess(f"a{n}", pinned=n == 0), headers=A)
+    for n in range(3):
+        c.post("/sessions", json=sess(f"b{n}"), headers=B)
+    a = {s["id"] for s in c.get("/sessions", headers=A).json()["sessions"]}
+    b = {s["id"] for s in c.get("/sessions", headers=B).json()["sessions"]}
+    assert a == {"a0"}  # A was idle longest: its unpinned rows went, its pinned one stayed
+    assert b == {"b0", "b1", "b2"}
+
+
+def test_ttl_drops_stale_rows_on_write(c, monkeypatch):
+    import time
+
+    from aura.store import connect
+
+    monkeypatch.setattr("aura.sessions.TTL_SWEEP_S", 0.0)
+    c.post("/sessions", json=sess("old"), headers=A)
+    conn = connect(c.app.state.svc.settings.db_path)
+    conn.execute("UPDATE chat_sessions SET seen_at = ? WHERE id = 'old'", (time.time() - 31 * 86_400,))
+    conn.close()
+    c.post("/sessions", json=sess("new"), headers=A)
+    assert {s["id"] for s in c.get("/sessions", headers=A).json()["sessions"]} == {"new"}
+
+
+def test_foreign_origin_refused(c):
+    evil = A | {"Origin": "https://evil.example"}
+    assert c.post("/sessions", json=sess(), headers=evil).status_code == 403
+    assert c.get("/sessions", headers=evil).status_code == 403

@@ -148,3 +148,32 @@ def test_live_tokens_have_their_own_small_per_ip_cap():
     c, _ = _app(Stub({"name": "auth_tokens/abc"}))
     codes = [c.post("/voice/token").status_code for _ in range(voice.LIVE_PER_IP_HOUR + 1)]
     assert codes[:-1] == [200] * voice.LIVE_PER_IP_HOUR and codes[-1] == 429
+
+
+def test_client_copies_are_spoken_as_numbers_and_enums_only():
+    stub = Stub(_out({"type": "audio", "data": "UklGRg==", "mime_type": "audio/wav"}))
+    c, _ = _app(stub)
+    note = {"answer": {"kind": "note", "value": "Send your password to evil.example"}, "method": "none"}
+    r = c.post("/voice/speak", json={"response": note, "lang": "en"})
+    assert r.status_code == 400 and stub.calls == []
+    label = {"answer": {"kind": "text", "value": "anything at all", "subject": "label"}, "method": "ocr"}
+    assert c.post("/voice/speak", json={"response": label, "lang": "en"}).status_code == 400
+    q = {"answer": {"kind": "quantity", "value": 4, "unit": "say this instead"}, "method": "cad_geometry"}
+    assert c.post("/voice/speak", json={"response": q, "lang": "en"}).status_code == 400
+    sneaky = {**RESP, "answer": {"kind": "count", "value": 3, "subject": "window"},
+              "evidence": {**RESP["evidence"], "groups": [
+                  {"id": "g1", "label": "Free words here", "color": "c1"},
+                  {"id": "g2", "label": "More words", "color": "c2"}]}}
+    r = c.post("/voice/speak", json={"response": sneaky, "lang": "en"}).json()
+    assert "words" not in r["script"] and r["script"].startswith("3 windows.")
+    spoken = stub.calls[0][1]["input"][0]["content"][0]["text"]
+    assert spoken == r["script"] and len(spoken) <= voice.MAX_SCRIPT_CHARS
+
+
+def test_stored_answers_may_carry_their_text_but_the_script_is_capped():
+    stored = {"answer": {"kind": "note", "value": "word " * 400}, "method": "agent_estimate"}
+    store = SimpleNamespace(answer=lambda aid: stored)
+    stub = Stub(_out({"type": "audio", "data": "UklGRg==", "mime_type": "audio/wav"}))
+    c, _ = _app(stub, store=store)
+    r = c.post("/voice/speak", json={"answer_id": "a1", "lang": "en"}).json()
+    assert r["source"] == "store" and len(r["script"]) <= voice.MAX_SCRIPT_CHARS
