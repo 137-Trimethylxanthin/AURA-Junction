@@ -17,10 +17,8 @@ import {
 import { fmtArea } from '@/lib/format'
 import { nearestRoom } from '@/lib/geometry'
 import { actions, useAppStore } from '@/store'
-import { markLabel, nextLabel } from './MarkTool'
 import { useUi } from '@/i18n/uiLang'
-import { swipeSplit } from './shared'
-import { roomTitle } from './shared'
+import { markLabel, nextLabel, roomTitle, swipeSplit } from './shared'
 
 const SPOT = 4
 
@@ -35,6 +33,7 @@ export function PlanContextMenu({
   onFocusOutside?: (e: Event) => void
 }) {
   const rooms = useAppStore((s) => s.session.drawing.rooms)
+  const answererMode = useAppStore((s) => s.session.answererMode)
   const { lang, tu } = useUi()
   const hasOriginal = useAppStore((s) => !!s.session.drawing.images.original)
   const [x, y] = point ?? [50, 50]
@@ -90,7 +89,7 @@ export function PlanContextMenu({
             <span className="truncate">{tu('ctx_area_of', { room: roomTitle(room) })}</span>
           </ContextMenuItem>
         ) : null}
-        {room?.rect ? (
+        {room?.rect && answererMode !== 'agent' ? (
           <ContextMenuItem onSelect={() => actions().startWhatIf(room.room_id)}>
             <RulerIcon />
             {tu('change_sizes', { room: room.num })}

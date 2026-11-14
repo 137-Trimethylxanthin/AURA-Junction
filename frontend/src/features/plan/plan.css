@@ -1,7 +1,29 @@
-/* Plan stage motion. Owned by features/plan. Token colours only. */
+/* Plan stage motion & categorical series tokens. Owned by features/plan. Token colours only. */
 
 :root {
   --plan-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Zero-specificity fallback for Wave 0.5 WCAG AA categorical series tokens (--group-1..6). */
+:where(:root) {
+  --group-1: #1260b8;
+  --group-1-surface: #ddeaf7;
+  --group-2: #6d3ab7;
+  --group-2-surface: #efe7fb;
+  --group-3: #a82465;
+  --group-3-surface: #fbe5f0;
+  --group-4: #0b6b8a;
+  --group-4-surface: #dff3f9;
+  --group-5: #475569;
+  --group-5-surface: #e8edf3;
+  --group-6: #7c4a15;
+  --group-6-surface: #f6eadc;
+}
+
+@keyframes plan-fade-in {
+  from {
+    opacity: 0;
+  }
 }
 
 /* Evidence entrance: a short settle, staggered by inline animation-delay. */
@@ -13,7 +35,10 @@
 }
 
 .plan-evidence-in {
-  animation: plan-evidence-in 260ms var(--plan-ease-out) both;
+  animation: plan-fade-in 120ms linear both;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: plan-evidence-in 260ms var(--plan-ease-out) both;
+  }
 }
 
 /* One pulse ring when a box is located (from the plan or a chat row). */
@@ -29,7 +54,10 @@
 }
 
 .plan-pulse {
-  animation: plan-pulse 700ms var(--plan-ease-out) 1 both;
+  opacity: 0;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: plan-pulse 700ms var(--plan-ease-out) 1 both;
+  }
 }
 
 /* Located room: one fill flash. */
@@ -40,21 +68,54 @@
 }
 
 .plan-room-flash {
-  animation: plan-room-flash 700ms var(--plan-ease-out) 1;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: plan-room-flash 700ms var(--plan-ease-out) 1;
+  }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .plan-evidence-in {
-    animation: plan-fade-in 120ms linear both;
+/* Live candidate box & HUD dot: compositor-only opacity pulse (never transform). */
+@keyframes plan-candidate-pulse {
+  0%,
+  100% {
+    opacity: 0.92;
   }
-  .plan-pulse {
-    animation: none;
+  50% {
+    opacity: 0.48;
+  }
+}
+
+.plan-candidate-pulse {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: plan-candidate-pulse 1.5s ease-in-out infinite;
+  }
+}
+
+/* 60fps compositor-only Crop Inspection Reticle parts (transform & opacity only). */
+.plan-reticle-part {
+  @media (prefers-reduced-motion: no-preference) {
+    transition:
+      transform 220ms var(--plan-ease-out),
+      opacity 160ms ease-out;
+    will-change: transform, opacity;
+  }
+}
+
+/* Post-answer dropped-candidate 1.8s ghosted settle (opacity only). */
+@keyframes plan-drop-settle {
+  0% {
+    opacity: 0.55;
+  }
+  75% {
+    opacity: 0.3;
+  }
+  100% {
     opacity: 0;
   }
 }
 
-@keyframes plan-fade-in {
-  from {
-    opacity: 0;
+.plan-drop-settle {
+  opacity: 0.28;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: plan-drop-settle 1800ms var(--plan-ease-out) 1 forwards;
   }
 }

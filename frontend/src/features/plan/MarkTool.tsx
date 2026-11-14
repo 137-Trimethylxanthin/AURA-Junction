@@ -2,22 +2,12 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Poin
 import { rectFromPoints } from '@/lib/geometry'
 import { cn } from '@/lib/utils'
 import { actions, useAppStore } from '@/store'
-import { tu as tuNow, useUi } from '@/i18n/uiLang'
-import { overlayOpen, pctPoint, type StageRef } from './shared'
+import { useUi } from '@/i18n/uiLang'
+import { markLabel, nextLabel, overlayOpen, pctPoint, type StageRef } from './shared'
+
+export { markLabel }
 
 const MIN_PCT = 1.5
-
-/** "Area n": counts only marks drawn with the tool (spots are numbered separately). */
-export function nextLabel(kind: 'Area' | 'Spot'): string {
-  const n = actions().ui.marks.filter((m) => m.label.startsWith(`${kind} `)).length + 1
-  return `${kind} ${n}`
-}
-
-/** "Area 2" / "Spot 1" are stored in English (they are keys and go to the agent); shown in the interface language. */
-export function markLabel(label: string, tu: typeof tuNow = tuNow): string {
-  const m = /^(Area|Spot) (\d+)$/.exec(label)
-  return m ? tu(m[1] === 'Area' ? 'mark_area' : 'mark_spot', { n: m[2] }) : label
-}
 
 /** Marked areas, in the user colour. The attached one (sent with the next question) is emphasised. */
 export function MarksLayer() {

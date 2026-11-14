@@ -8,21 +8,9 @@ import { fmtArea } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { actions, useAppStore, useAppStoreShallow } from '@/store'
 import { useUi } from '@/i18n/uiLang'
-import { fmtMetres, parseMetres, roomTitle } from './shared'
+import { MIN_M, fmtMetres, limitsOf, parseMetres, roomTitle } from './shared'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
-
-/** Smallest wall we accept, in metres. */
-export const MIN_M = 0.5
-
-/** Largest width/depth that keeps the edited room inside the drawing. */
-export function limitsOf(room: RoomPoly): { maxW: number; maxH: number } {
-  const r = room.rect!
-  return {
-    maxW: Math.floor(((100 - r.x) / r.w) * r.w_m * 100) / 100,
-    maxH: Math.floor(((100 - r.y) / r.h) * r.h_m * 100) / 100,
-  }
-}
 
 const clampTo = (v: number, max: number) => Math.min(max, Math.max(MIN_M, round2(v)))
 
