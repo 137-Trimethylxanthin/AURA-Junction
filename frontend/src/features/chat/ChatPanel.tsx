@@ -1,4 +1,4 @@
-import { tu } from "@/i18n/uiLang"
+import { tu, useUi } from "@/i18n/uiLang"
 import type { UiKey } from "@/i18n/strings"
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { motion, useReducedMotion } from "motion/react"
@@ -189,6 +189,7 @@ function LiveRegion() {
 }
 
 export function ChatPanel() {
+  useUi()
   useChatSideEffects()
   const pairs = usePairs()
   const root = useRef<HTMLDivElement>(null)

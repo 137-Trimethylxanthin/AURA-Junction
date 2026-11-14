@@ -35,6 +35,15 @@ export type Subject =
   | 'shower'
   | 'room'
   | 'apartment'
+  | 'bedroom'
+  | 'kitchen'
+  | 'bathroom'
+  | 'wc_room'
+  | 'sauna'
+  | 'sink'
+  | 'shower_or_bathtub'
+  | 'storey'
+  | 'balcony'
 export const SUBJECTS: readonly Subject[] = [
   'window',
   'door',
@@ -44,6 +53,15 @@ export const SUBJECTS: readonly Subject[] = [
   'shower',
   'room',
   'apartment',
+  'bedroom',
+  'kitchen',
+  'bathroom',
+  'wc_room',
+  'sauna',
+  'sink',
+  'shower_or_bathtub',
+  'storey',
+  'balcony',
 ]
 
 export interface PctRect {
@@ -279,7 +297,7 @@ export interface TraceNode {
   tool?: ToolCall
 }
 
-export type AbstainReason = 'not_on_drawing' | 'not_supported_yet' | 'unclear_question'
+export type AbstainReason = 'not_on_drawing' | 'not_supported_yet' | 'unclear_question' | 'low_confidence'
 
 export type Answer =
   | { kind: 'count'; value: number; subject: Subject }
@@ -377,6 +395,11 @@ export interface AskResponse {
   route?: AskRoute
   /** Model prose that passed the provenance filter (no number that is not in a tool result). */
   explanation?: string
+  /**
+   * Raster drawings (a model estimate, not geometry). Confident (>= 0.6): a count with method 'vision', no boxes, and
+   * `measured` = how often such answers were right. Below 0.6: abstain 'low_confidence' with `probabilities`.
+   */
+  estimate?: { confidence: number; probabilities?: Record<string, number>; measured?: { correct: number; n: number; source: string } }
 }
 
 /** `POST /chat` body (1.1); the response is `text/event-stream`. */

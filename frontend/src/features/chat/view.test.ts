@@ -18,7 +18,7 @@ describe('check cost in the footer', () => {
   it('shows a cached check as cached at $0.00', () => {
     const r = { ...base, check: { ...check, calls: 0, cost_usd: 0, tokens: 0, cached: true } }
     expect(checkParts(r, 'en')).toEqual(['check: cached', '$0.00'])
-    expect(checkParts(r, 'fr')[0]).toBe('vérification: en cache')
+    expect(checkParts(r, 'fr')[0]).toBe('contrôle: en cache')
   })
 })
 

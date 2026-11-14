@@ -1,3 +1,4 @@
+import { useUi } from '@/i18n/uiLang'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useReducedMotion } from 'motion/react'
 import {
@@ -99,6 +100,7 @@ function ElementRow({ row }: { row: Row }) {
 }
 
 function EvidenceRow({ turnId, row, active }: { turnId: string; row: Row; active: boolean }) {
+  const { tu } = useUi()
   const selected = useAppStore((s) => active && s.ui.selectedEvidenceId === row.id)
   const hovered = useAppStore((s) => active && s.ui.hoveredEvidenceIds.includes(row.id))
   const Toggle = row.kind === 'room' ? (row.on ? MinusIcon : PlusIcon) : row.on ? XIcon : RotateCcwIcon
@@ -122,7 +124,7 @@ function EvidenceRow({ turnId, row, active }: { turnId: string; row: Row; active
       <button
         type="button"
         aria-current={selected || undefined}
-        aria-label={`Show ${row.title} on the plan`}
+        aria-label={tu('ev_show', { title: row.title })}
         title={[row.title, row.sub, row.note].filter(Boolean).join('\n')}
         onClick={() => actions().select(turnId, row.id)}
         className="flex min-h-10 min-w-0 flex-1 items-center gap-2.5 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
@@ -328,6 +330,7 @@ function Feedback({ turn, lang }: { turn: AgentTurn; lang: Lang }) {
 }
 
 function Actions({ turn, active, lang }: { turn: AgentTurn; active: boolean; lang: Lang }) {
+  const { tu } = useUi()
   // French, Finnish and German labels are longer: they need more card width before the text shows.
   const wide = lang === 'en' ? 'hidden truncate @[21rem]:inline' : 'hidden truncate @[27rem]:inline'
   const treeText = active ? (lang === 'en' ? 'hidden truncate @[13rem]:inline' : 'hidden truncate @[18rem]:inline') : wide
@@ -367,8 +370,8 @@ function Actions({ turn, active, lang }: { turn: AgentTurn; active: boolean; lan
           <Button
             variant="ghost"
             size="icon"
-            aria-label="This answer is right"
-            title="This answer is right"
+            aria-label={tu('fb_up')}
+            title={tu('fb_up')}
             onClick={() => actions().setFeedback(turn.id, 'up')}
           >
             <CheckIcon />
@@ -376,8 +379,8 @@ function Actions({ turn, active, lang }: { turn: AgentTurn; active: boolean; lan
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Something is wrong"
-            title="Something is wrong"
+            aria-label={tu('fb_down')}
+            title={tu('fb_down')}
             onClick={() => actions().setFeedback(turn.id, 'down')}
           >
             <CircleAlertIcon />

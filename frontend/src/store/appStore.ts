@@ -1,3 +1,4 @@
+import { tu } from '@/i18n/uiLang'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { AskResponse, AskRoute, Box, ChatEvent, Check, Drawing, EvidenceRoom, Lang, Override, PctRect, RankedCheck, Scope, TraceNode } from '@/api/contract'
 import { ApiError, TransportError, spentOf } from '@/api/client'
@@ -284,9 +285,9 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       if (e instanceof ApiError && e.status === 404) return { id, state: 'not_found' }
       // A 5xx means the server is there but failed: say so, not "not connected".
       if (e instanceof TransportError && e.kind === 'server')
-        return { id, state: 'error', message: 'The server had a problem opening this drawing. Try again in a moment.' }
+        return { id, state: 'error', message: tu('open_server_error') }
       if (e instanceof TransportError) return { id, state: 'unavailable', message: e.message }
-      return { id, state: 'error', message: e instanceof Error ? e.message : 'The drawing could not be loaded' }
+      return { id, state: 'error', message: e instanceof Error ? e.message : tu('load_error') }
     }
 
     return {
@@ -439,7 +440,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
                           ? 'The server had a problem with this question. Try again in a moment.'
                           : 'The server could not be reached. Try again in a moment.',
                   }
-                : { message: e instanceof Error ? e.message : 'Something went wrong' }
+                : { message: e instanceof Error ? e.message : tu('err_title') }
           patchAgent(pending.id, () => ({ status: 'error', error }))
         }
         if (inflight === ctrl) inflight = null

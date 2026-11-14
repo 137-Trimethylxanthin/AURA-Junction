@@ -29,6 +29,7 @@ export function DrawingTitle() {
 }
 
 function SessionButton() {
+  const { lang, tu } = useUi()
   const turns = useAppStore((s) => s.turns)
   const spend = useAppStore((s) => s.session.spend)
   const active = useAppStore(selectActiveTurn)
@@ -59,10 +60,10 @@ function SessionButton() {
           ? "Open the reasoning tree for the answer on the plan"
           : "Ask a question to see its reasoning"
       }
-      aria-label={`Session: ${callsText(calls, "en")}, ${fmtUsd(cost)}. Open reasoning tree`}
+      aria-label={tu("session_aria", { calls: callsText(calls, lang), cost: fmtUsd(cost) })}
     >
       <span className="num text-xs">
-        {callsText(calls, "en")} · {fmtUsd(cost)}
+        {callsText(calls, lang)} · {fmtUsd(cost)}
       </span>
     </Button>
   )

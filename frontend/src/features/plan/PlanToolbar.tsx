@@ -58,7 +58,7 @@ export function PlanToolbar() {
             )}
           >
             <Icon data-icon="inline-start" />
-            <span className="@max-[520px]:sr-only">{tu(label)}</span>
+            <span className={compare.on ? '@max-[1040px]:sr-only' : '@max-[520px]:sr-only'}>{tu(label)}</span>
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
@@ -180,7 +180,7 @@ export function SourceBadge() {
       {failed ? (
         <Button variant="ghost" size="sm" className="h-10" onClick={() => void actions().retrySource()}>
           <RefreshCwIcon data-icon="inline-start" />
-          {tu('src_retry')}
+          <span className="@max-[1040px]:sr-only">{tu('src_retry')}</span>
         </Button>
       ) : null}
     </div>

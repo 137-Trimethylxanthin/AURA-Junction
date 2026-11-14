@@ -178,6 +178,11 @@ export const chromeEn = {
   ue_srv_500: 'The server had a problem with this file. Try again in a moment.',
   ue_net: 'The server could not be reached. Try again in a moment.',
   ue_failed: 'The upload failed.',
+  ev_show: 'Show {title} on the plan',
+  fb_up: 'This answer is right',
+  fb_down: 'Something is wrong',
+  session_aria: 'Session: {calls}, {cost}. Open reasoning tree',
+  open_server_error: 'The server had a problem opening this drawing. Try again in a moment.',
 }
 
 export type ChromeKey = keyof typeof chromeEn
@@ -345,6 +350,11 @@ export const chromeFr: ChromeDict = {
   ue_srv_500: 'Le serveur a rencontré un problème avec ce fichier. Réessayez dans un instant.',
   ue_net: 'Le serveur est injoignable. Réessayez dans un instant.',
   ue_failed: 'Le téléversement a échoué.',
+  ev_show: 'Afficher {title} sur le plan',
+  fb_up: 'Cette réponse est juste',
+  fb_down: 'Il y a une erreur',
+  session_aria: 'Session : {calls}, {cost}. Ouvrir l’arbre de raisonnement',
+  open_server_error: 'Le serveur a rencontré un problème à l’ouverture de ce plan. Réessayez dans un instant.',
 }
 
 export const chromeFi: ChromeDict = {
@@ -509,6 +519,11 @@ export const chromeFi: ChromeDict = {
   ue_srv_500: 'Palvelimella oli ongelma tämän tiedoston kanssa. Yritä hetken kuluttua uudelleen.',
   ue_net: 'Palvelimeen ei saatu yhteyttä. Yritä hetken kuluttua uudelleen.',
   ue_failed: 'Lataus epäonnistui.',
+  ev_show: 'Näytä {title} pohjassa',
+  fb_up: 'Vastaus on oikein',
+  fb_down: 'Jokin on pielessä',
+  session_aria: 'Istunto: {calls}, {cost}. Avaa päättelypuu',
+  open_server_error: 'Palvelimella oli ongelma piirustuksen avaamisessa. Yritä hetken kuluttua uudelleen.',
 }
 
 export const chromeDe: ChromeDict = {
@@ -673,4 +688,9 @@ export const chromeDe: ChromeDict = {
   ue_srv_500: 'Der Server hatte ein Problem mit dieser Datei. Versuchen Sie es gleich noch einmal.',
   ue_net: 'Der Server ist nicht erreichbar. Versuchen Sie es gleich noch einmal.',
   ue_failed: 'Der Upload ist fehlgeschlagen.',
+  ev_show: '{title} im Plan zeigen',
+  fb_up: 'Diese Antwort stimmt',
+  fb_down: 'Etwas stimmt nicht',
+  session_aria: 'Sitzung: {calls}, {cost}. Denkbaum öffnen',
+  open_server_error: 'Der Server hatte ein Problem beim Öffnen dieses Plans. Versuchen Sie es gleich noch einmal.',
 }
