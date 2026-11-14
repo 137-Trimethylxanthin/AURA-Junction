@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Drawing, Subject } from '@/api/contract'
+import type { Drawing, ProjectBundle, Subject } from '@/api/contract'
 
 /**
  * The composer's text, shared so prompt blocks (plugins sheet), voice and suggestions can fill it.
@@ -55,14 +55,28 @@ export const SUGGESTIONS: Suggestion[] = [
   { lang: 'FI', text: 'Montako ovea tässä pohjapiirroksessa on?', short: 'Montako ovea?' },
   { lang: 'DE', text: 'Wie viele Fenster?', short: 'Wie viele Fenster?' },
   { lang: 'EN', text: 'What is the fire rating of the entrance door?', short: 'Fire rating of the door?' },
+  { lang: 'EN', text: 'How many apartments are there?', short: 'How many apartments?' },
+  { lang: 'EN', text: 'Show all stairs and where they lead to', short: 'Stairs & where they lead' },
 ]
+
+export const STAIRS_SUGGESTION: Suggestion = {
+  lang: 'EN',
+  text: 'Show all stairs and where they lead to',
+  short: 'Stairs & where they lead',
+}
+
+export const MATCH_FLOORS_SUGGESTION: Suggestion = {
+  lang: 'EN',
+  text: 'Match stairs and shafts across all floors',
+  short: 'Match stairs across floors',
+}
 
 const IFC_SUGGESTIONS: Suggestion[] = [
   { lang: 'EN', text: 'How many windows are on this storey?', short: 'How many windows?' },
   { lang: 'FR', text: 'Quelle est la surface nette totale de cet étage en m² ?', short: 'Surface nette de l’étage' },
   { lang: 'FI', text: 'Montako ovea tässä kerroksessa on?', short: 'Montako ovea?' },
   { lang: 'DE', text: 'Wie viele Räume gibt es auf diesem Geschoss?', short: 'Wie viele Räume?' },
-  { lang: 'EN', text: 'List every room with its area on this storey', short: 'List rooms & areas' },
+  STAIRS_SUGGESTION,
 ]
 
 const RASTER_SUGGESTIONS: Suggestion[] = [
@@ -70,11 +84,32 @@ const RASTER_SUGGESTIONS: Suggestion[] = [
   { lang: 'FR', text: 'Combien de fenêtres figurent sur ce plan ?', short: 'Combien de fenêtres ?' },
   { lang: 'FI', text: 'Montako huonetta tässä pohjapiirroksessa näkyy?', short: 'Montako huonetta?' },
   { lang: 'DE', text: 'Welche Räume und Flächen sind im Plan beschriftet?', short: 'Räume & Flächen?' },
-  { lang: 'EN', text: 'Summarize the rooms and printed dimensions on this sheet', short: 'Summarize rooms & dimensions' },
+  STAIRS_SUGGESTION,
 ]
 
-/** Capability-aware starter questions for the active drawing (preserves exact SUGGESTIONS on bundled/Swiss CAD). */
-export function suggestionsFor(drawing?: Drawing): Suggestion[] {
+function inActiveProject(drawing: Drawing | undefined, activeProject?: ProjectBundle | null): boolean {
+  if (!activeProject || activeProject.floors.length < 2) return false
+  return !drawing || activeProject.floors.some((f) => f.drawing_id === drawing.id)
+}
+
+/** Capability-aware starter questions for the active drawing (preserves exact SUGGESTIONS on single bundled/Swiss CAD). */
+export function suggestionsFor(drawing?: Drawing, activeProject?: ProjectBundle | null): Suggestion[] {
+  const base = singleDrawingSuggestions(drawing)
+  if (!inActiveProject(drawing, activeProject)) return base
+
+  const caps = new Set<Subject>(drawing?.capabilities ?? [])
+  const hasApartments = Boolean(drawing && (caps.has('apartment') || drawing.units.length > 0))
+  const crossCount: Suggestion = hasApartments
+    ? { lang: 'EN', text: 'How many apartments are there across all floors?', short: 'Apartments across floors' }
+    : { lang: 'EN', text: 'How many doors are there across all floors?', short: 'Doors across floors' }
+
+  const dedupedRest = base.filter(
+    (s) => s.text !== MATCH_FLOORS_SUGGESTION.text && s.text !== STAIRS_SUGGESTION.text && s.text !== crossCount.text,
+  )
+  return [MATCH_FLOORS_SUGGESTION, STAIRS_SUGGESTION, crossCount, ...dedupedRest.slice(0, 3)]
+}
+
+function singleDrawingSuggestions(drawing?: Drawing): Suggestion[] {
   if (!drawing || drawing.id === 'swiss-46639') return SUGGESTIONS
   if (drawing.kind === 'raster') return RASTER_SUGGESTIONS
   const caps = new Set<Subject>(drawing.capabilities ?? [])
@@ -94,15 +129,26 @@ export function suggestionsFor(drawing?: Drawing): Suggestion[] {
           text: 'Quelle est la surface nette totale de cet étage en m² ?',
           short: 'Surface nette de l’étage',
         }
-  const tailSuggestion: Suggestion =
-    drawing.id.startsWith('swiss-')
-      ? SUGGESTIONS[4]
+  const apartmentsSuggestion: Suggestion =
+    caps.has('apartment') && drawing.units.length > 0
+      ? SUGGESTIONS[5]
       : { lang: 'EN', text: 'List every room with its area on this floor plan', short: 'List rooms & areas' }
-  return [SUGGESTIONS[0], areaSuggestion, SUGGESTIONS[2], SUGGESTIONS[3], tailSuggestion]
+  return [SUGGESTIONS[0], areaSuggestion, apartmentsSuggestion, STAIRS_SUGGESTION, SUGGESTIONS[3]]
 }
 
 /** Capability-aware prompt templates using valid `PB_LABEL` keys (`Count`, `Area`, `Where is`, `Check`, `List`). */
-export function promptBlocksFor(drawing?: Drawing): PromptBlock[] {
+export function promptBlocksFor(drawing?: Drawing, activeProject?: ProjectBundle | null): PromptBlock[] {
+  if (inActiveProject(drawing, activeProject)) {
+    const caps = new Set<Subject>(drawing?.capabilities ?? [])
+    const countSubject = caps.has('apartment') || (drawing?.units.length ?? 0) > 0 ? 'apartments' : 'doors'
+    return [
+      { label: 'Count', text: `How many ${countSubject} are there across all floors?`, select: countSubject },
+      { label: 'Area', text: 'What is the total floor area across all floors?', select: 'all floors' },
+      { label: 'Where is', text: 'Show all stairs and where they lead to', select: 'stairs' },
+      { label: 'Check', text: 'Match stairs and shafts across all floors', select: 'stairs and shafts' },
+      { label: 'List', text: 'List every floor and its rooms in this project', select: 'rooms' },
+    ]
+  }
   if (!drawing || drawing.id === 'swiss-46639') return PROMPT_BLOCKS
   if (drawing.kind === 'raster') {
     return [

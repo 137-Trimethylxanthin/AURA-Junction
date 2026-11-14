@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Drawing } from '@/api/contract'
+import type { Drawing, ProjectBundle } from '@/api/contract'
 import { bundledDrawing } from '@/data/drawing'
 import { PROMPT_BLOCKS, SUGGESTIONS, fillBlock, promptBlocksFor, suggestionsFor, useDraft } from './draft'
 
@@ -63,5 +63,30 @@ describe('draft capability helpers', () => {
     expect(st.text).toBe('How many doors are on this storey?')
     expect(st.select).not.toBeNull()
     expect(st.text.slice(st.select![0], st.select![1])).toBe('doors')
+  })
+
+  it('includes color-coded apartment & stair flow suggestions and adapts multi-floor project bundles', () => {
+    expect(SUGGESTIONS.some((s) => s.text === 'How many apartments are there?')).toBe(true)
+    expect(SUGGESTIONS.some((s) => s.text === 'Show all stairs and where they lead to')).toBe(true)
+
+    const bundle: ProjectBundle = {
+      id: 'proj-1',
+      title: 'Duplex House',
+      floors: [
+        { drawing_id: 'swiss-46639', label: '3e', order: 3 },
+        { drawing_id: 'ifc-kit-fzk-haus', label: 'EG', order: 0 },
+      ],
+    }
+    const projSugg = suggestionsFor(bundledDrawing, bundle)
+    expect(projSugg[0].text).toBe('Match stairs and shafts across all floors')
+    expect(projSugg[1].text).toBe('Show all stairs and where they lead to')
+    expect(projSugg.some((s) => /apartments.*across all floors/i.test(s.text))).toBe(true)
+
+    const ifcProjSugg = suggestionsFor(ifcDrawing, bundle)
+    expect(ifcProjSugg.some((s) => /apartment/i.test(s.text))).toBe(false)
+
+    const projBlocks = promptBlocksFor(bundledDrawing, bundle)
+    expect(projBlocks.map((b) => b.label)).toEqual(['Count', 'Area', 'Where is', 'Check', 'List'])
+    for (const b of projBlocks) expect(VALID_PB_LABELS.has(b.label)).toBe(true)
   })
 })

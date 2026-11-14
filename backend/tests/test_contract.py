@@ -134,10 +134,140 @@ def test_contract_v1_2_additive_models():
         "thumbnail": "/drawings/up-pdf1/plan.png",
         "credit": {"text": "Uploaded by user", "license": "user-supplied"},
         "source_ext": ".pdf",
+        "project_id": "proj-house1",
+        "floor_label": "EG",
+        "floor_order": 0,
     })
-    assert ds.source_ext == ".pdf"
+    assert ds.source_ext == ".pdf" and ds.project_id == "proj-house1" and ds.floor_order == 0
     h = Health.model_validate({"ok": True, "answerer": "hybrid", "agent_ok": True})
     assert h.contract_version == "1.2" and h.answerer == "hybrid" and h.agent_ok is True
+
+
+def test_contract_v1_2_groups_links_and_projects():
+    """1.2 Wave 0.5: categorical EvidenceGroup, directional EvidenceLink, ScopeProject & ProjectBundle."""
+    from pydantic import ValidationError
+
+    from aura.contract import (
+        AskRequest,
+        Drawing,
+        Evidence,
+        EvidenceGroup,
+        EvidenceLink,
+        ProjectBundle,
+        ProjectList,
+        ToolResult,
+    )
+
+    resp = AskResponse.model_validate({
+        "contract_version": "1.2",
+        "source": "api",
+        "detected_lang": "en",
+        "canonical_en": "Show all stairs and where they lead to across all floors",
+        "scope": {"kind": "project", "project_id": "proj-villa", "drawing_ids": ["d-eg", "d-1og"]},
+        "route": "agent",
+        "answer": {"kind": "count", "value": 2, "subject": "room"},
+        "method": "agent_estimate",
+        "evidence": {
+            "boxes": [{
+                "id": "stair-01",
+                "x": 40.0,
+                "y": 50.0,
+                "w": 8.0,
+                "h": 6.0,
+                "subject": "label",
+                "note": "Main Stair S1",
+                "group_id": "g-s1",
+                "drawing_id": "d-eg",
+            }],
+            "rooms": [{
+                "room_id": "3.01",
+                "included": True,
+                "area_m2": 18.4,
+                "group_id": "g-s1",
+                "drawing_id": "d-eg",
+            }],
+            "groups": [
+                {"id": "g-s1", "label": "Main Stair S1 → 1. OG", "color": "c1", "target_drawing_id": "d-1og"},
+                {"id": "g-s2", "label": "Service Stair S2 → KG", "color": "c6", "target_drawing_id": "d-kg"},
+            ],
+            "links": [{
+                "id": "lnk-1",
+                "from_pos": [44.0, 53.0],
+                "to_pos": [44.0, 38.0],
+                "waypoints": [[44.0, 46.0]],
+                "group_id": "g-s1",
+                "label": "→ 1. OG",
+                "drawing_id": "d-eg",
+                "target_drawing_id": "d-1og",
+            }],
+        },
+        "trace": [],
+        "calls": 2,
+        "cost_usd": 0.02,
+        "latency_ms": 1200,
+    })
+    assert resp.scope.kind == "project" and resp.scope.drawing_ids == ["d-eg", "d-1og"]
+    assert len(resp.evidence.groups or []) == 2
+    assert resp.evidence.links and resp.evidence.links[0].waypoints == [(44.0, 46.0)]
+    dumped = resp.model_dump(exclude_none=True)
+    no_nulls(dumped)
+
+    # Empty Evidence still omits optional groups/links when dumped with exclude_none=True
+    assert Evidence().model_dump(exclude_none=True) == {"boxes": [], "rooms": []}
+
+    # Reject out-of-palette group color and empty ScopeProject drawing_ids
+    with pytest.raises(ValidationError):
+        EvidenceGroup.model_validate({"id": "g-bad", "label": "Bad", "color": "c7"})
+    with pytest.raises(ValidationError):
+        EvidenceLink.model_validate({"id": "l-bad", "from_pos": [1.0], "to_pos": [2.0, 3.0]})
+    with pytest.raises(ValidationError):
+        AskRequest.model_validate({
+            "drawing_id": "d-eg",
+            "question": "Stairs?",
+            "scope": {"kind": "project", "project_id": "p", "drawing_ids": []},
+        })
+
+    # ToolResult accepts groups/links or None cleanly
+    tr = ToolResult.model_validate({
+        "result_id": "r-apt",
+        "tool": "count_objects",
+        "kind": "count",
+        "subject": "apartment",
+        "value": 2,
+        "groups": [{"id": "unit-A", "label": "Apartment A", "color": "c1"}],
+        "links": None,
+    })
+    assert len(tr.groups) == 1 and tr.links == []
+
+    bundle = ProjectBundle.model_validate({
+        "id": "proj-villa",
+        "title": "Villa Nord",
+        "floors": [
+            {"drawing_id": "d-kg", "label": "KG", "order": -1},
+            {"drawing_id": "d-eg", "label": "EG", "order": 0},
+            {"drawing_id": "d-1og", "label": "1. OG", "order": 1},
+        ],
+        "auto_matched": True,
+    })
+    plist = ProjectList(projects=[bundle])
+    assert plist.contract_version == "1.2" and len(plist.projects[0].floors) == 3
+
+    d_full = Drawing.model_validate({
+        "contract_version": "1.2",
+        "id": "d-eg",
+        "title": "Villa Nord · EG",
+        "frame": {"dxf_min": [0, 0], "dxf_max": [10, 10], "margin_m": 0.6, "m_per_unit": 1.0, "y_flip": True, "px": [800, 600]},
+        "m_per_pct_x": 0.1,
+        "m_per_pct_y": 0.1,
+        "images": {"rebuilt": "/drawings/d-eg/plan.svg"},
+        "rooms": [],
+        "units": [],
+        "credit": {"text": "User", "license": "user"},
+        "project_id": "proj-villa",
+        "floor_label": "EG",
+        "floor_order": 0,
+    })
+    assert d_full.project_id == "proj-villa" and d_full.floor_label == "EG" and d_full.floor_order == 0
 
 
 def test_modal_image_is_pinned_to_the_lockfile():
