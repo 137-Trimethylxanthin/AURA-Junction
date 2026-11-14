@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 from aura.config import Settings
 from aura.main import create_app
 
-BUILD = Path(os.environ.get("AURA_TEST_BUILD_DIR", "/root/aura-deploy/build-drawings/drawings"))
+# The built IFC bundles: the backend's default build directory, or AURA_TEST_BUILD_DIR.
+BUILD = Path(os.environ.get("AURA_TEST_BUILD_DIR") or Path(__file__).resolve().parents[1] / "build" / "drawings")
 MODELS = {"ifc-hitos_arc": "ifc-hitos_arc--2-etg",
           "ifc-bsc-esplanades_1807-ep-ar-v18": "ifc-bsc-esplanades_1807-ep-ar-v18--2-korrus"}
 

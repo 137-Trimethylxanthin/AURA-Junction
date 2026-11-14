@@ -790,7 +790,11 @@ def create_app(
         """The drawing asked about and every sheet a project scope names."""
         await warm(request, body.drawing_id)
         if getattr(body.scope, "kind", None) == "project":
-            for did in list(dict.fromkeys(body.scope.drawing_ids))[:50]:
+            from aura import building
+
+            # more sheets than one question may span are refused right after, so they are not built
+            cap = building.MAX_SHEETS if building.MAX_SHEETS > 0 else 50
+            for did in list(dict.fromkeys(body.scope.drawing_ids))[:cap]:
                 if did != body.drawing_id:
                     await warm(request, did)
 
