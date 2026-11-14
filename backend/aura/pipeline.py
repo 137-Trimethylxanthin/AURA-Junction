@@ -1202,8 +1202,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                                      "canonical_en": tools_built.body["canonical_en"], "route": stats["route"]}
                 for ev in _tool_events(tools_built):
                     yield ev
+                # An answer shaped by earlier turns must not be cached under a key that ignores them.
                 async for ev in _finalize_and_emit(svc, d, req, tools_built, caller, stats, meters, t0, key,
-                                                   allow_cache=True):
+                                                   allow_cache=not history):
                     yield ev
                 return
 
