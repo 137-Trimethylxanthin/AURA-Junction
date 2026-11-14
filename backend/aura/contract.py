@@ -359,6 +359,26 @@ class BreakdownItem(_M):
     unit: str | None = None
 
 
+class Display(_M):
+    """1.2 additive: the answer shown in a unit the question asked for ("in square feet").
+
+    `answer` stays metric; `factors` (display units per m / m2 / m3) and `labels` let a client
+    show any metric number of the response in the requested unit family.
+    """
+
+    unit: str
+    label: str
+    style: Literal["decimal", "ft_in"] = "decimal"
+    factors: dict[str, FiniteFloat]
+    labels: dict[str, str]
+    value: FiniteFloat | None = None
+    text: str | None = None         # "3,675 sq ft"
+    metric_text: str | None = None  # "341.42 m²"
+    # the metric prose as answered, so a follow-up ("and in inches?") can show it in another unit
+    metric_explanation: str | None = None
+    metric_note: str | None = None
+
+
 class AskResponse(_M):
     contract_version: str = CONTRACT_VERSION
     # 1.2 additive: set only when the deep agent failed (the answer is then an abstain); the
@@ -387,6 +407,7 @@ class AskResponse(_M):
     # 1.2 additive: per-sheet shares of a whole-building answer; evidence items carry their sheet's
     # `drawing_id`, `scope` is the project scope of the sheets that were asked.
     breakdown: list[BreakdownItem] | None = None
+    display: Display | None = None  # 1.2 additive: only when the question asked for a non-default unit
 
 
 class ErrorBody(_M):
