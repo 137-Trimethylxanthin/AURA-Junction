@@ -15,18 +15,18 @@ const NAV: { to: string; key: UiKey }[] = [
 export function SiteHeader() {
   const { tu } = useUi()
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4 pt-[env(safe-area-inset-top)]">
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3 pt-[env(safe-area-inset-top)] sm:gap-3 sm:px-4">
       <NavLink to="/" aria-label={tu('site_home')} className="-mx-1 flex h-10 items-center rounded-md px-1">
         <Wordmark />
       </NavLink>
-      <nav aria-label={tu('site_nav')} className="ml-auto flex items-center gap-1">
+      <nav aria-label={tu('site_nav')} className="ml-auto flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1">
         {NAV.map((n) => (
           <NavLink
             key={n.to}
             to={n.to}
             className={({ isActive }) =>
               cn(
-                'flex h-10 items-center rounded-md px-3 text-sm text-muted-foreground transition-colors [@media(hover:hover)]:hover:bg-muted [@media(hover:hover)]:hover:text-foreground',
+                'flex h-10 items-center rounded-md px-2 text-sm sm:px-3 text-muted-foreground transition-colors [@media(hover:hover)]:hover:bg-muted [@media(hover:hover)]:hover:text-foreground',
                 isActive && 'font-medium text-foreground',
               )
             }

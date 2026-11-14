@@ -846,3 +846,24 @@ describe('note answers are labelled by their method, not by their kind', () => {
     expect(sentence(r, d, bundledDrawing, 'en')).toBe('Estimated from the drawing by the blueprint agent.')
   })
 })
+
+describe('pdf_vector and store_sql methods', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+  for (const [method, label] of [
+    ['pdf_vector', 'Read from the PDF'],
+    ['store_sql', 'Computed by SQL'],
+  ] as const) {
+    it(`${method} is accepted and rendered as an exact-style chip`, () => {
+      const r = { ...base, method } as AskResponse
+      expect(isAskResponse(r)).toBe(true)
+      const d = deriveAnswer(r, emptyToggles())
+      expect(chips(r, d, 'en')[0]).toMatchObject({ key: 'method', text: label, tone: 'success' })
+      expect(footerParts(r, 'en')[0]).toBe(`answer: ${label}`)
+    })
+    it(`${method} with an estimate keeps the estimate styling`, () => {
+      const r = { ...base, method, estimate: { confidence: 0.7 } } as AskResponse
+      const d = deriveAnswer(r, emptyToggles())
+      expect(chips(r, d, 'en')[0]).toMatchObject({ key: 'method', tone: 'neutral' })
+    })
+  }
+})

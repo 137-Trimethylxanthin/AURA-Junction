@@ -1,0 +1,43 @@
+{
+  "_about": "GET /drawings/{id}/status, contract 1.2 + optional store fields (WP2). Existing fields are unchanged: contract_version, id, status (queued | processing | ready | failed), progress (0..1, only while processing), error. Every field below is OPTIONAL; a client that ignores them keeps working. Poll every 1-2 s while `status` is queued/processing OR `stage` is one of reading/interpreting/materialising; stop on any other stage.",
+  "fields": {
+    "stage": "queued | parsing | reading | interpreting | materialising | indexed_store | indexed_ours | ready_unindexed | partial | store_failed | failed. The upload is usable (status ready) from `reading` on: our own fast parse answers already; the store stages then enrich it.",
+    "mode": "full | quick. quick = no drawing store (AURA_STORE_DSN unset or Postgres down): uploads end at ready_unindexed (PDF/PNG) or indexed_ours (DXF/IFC).",
+    "pages": "[{drawing_id, page (1-based), label?, stage, file_id?, counts?, error?}] one entry per bundle page (a multi-page PDF yields one drawing per page: up-<tok>, up-<tok>-p2, ...). Single-page uploads have one entry. The top-level stage is the least advanced page stage (failures rank last).",
+    "counts": "{rooms?, apartments?, doors?, windows?, fixtures?, texts?, pages?} items found so far, summed over pages. Interpretation counts appear at materialising/indexed_store; earlier only texts/pages (raw layer-1 reads).",
+    "note": "short human sentence for the current stage or the reason of a failure/partial; never a stack trace, URL or secret.",
+    "ingest_calls": "int, model requests the store spent on this upload (symbol detection). 0 when nothing was detected by a model.",
+    "ingest_cost_usd": "float, USD of those requests where token usage is known; absent when unknown.",
+    "elapsed_s": "int, seconds since the upload was accepted.",
+    "stage_s": "int, seconds spent in the current stage (the upload page shows it next to an indeterminate bar)."
+  },
+  "stage_rules": {
+    "queued": "status queued; waiting for a parse slot",
+    "parsing": "status processing; our parse/render (progress is real here: 0..1)",
+    "reading": "status ready; the store reads the file (layer 1: vectors, text, OCR). store row status registered",
+    "interpreting": "status ready; the store derives rooms, doors, windows, fixtures (layer 2; may call Gemini for symbols). store row parsed + a worker is on it",
+    "materialising": "status ready; writing the store's result into the drawing (seconds)",
+    "indexed_store": "final, full mode, PDF/PNG: rooms/doors/windows from the store; model-detected items are labelled estimates",
+    "indexed_ours": "final, DXF/IFC uploads: our CAD/IFC solvers own rooms and openings (the store is still filled for the sql tool when mode=full)",
+    "ready_unindexed": "final, quick mode PDF/PNG: viewable and askable, no rooms index; answers that need rooms abstain or estimate",
+    "partial": "final, full mode: layer 1 is in the store but interpretation stopped (no worker on it any more); answers use what was read",
+    "store_failed": "final, full mode: the store could not read the file; the drawing stays usable from our parse (as ready_unindexed)",
+    "failed": "final, status failed: our own parse failed; nothing usable"
+  },
+  "sequence_pdf_full_mode_recorded_shape": [
+    {"t_s": 0, "body": {"contract_version": "1.2", "id": "up-Qx3v9", "status": "queued", "stage": "queued", "mode": "full", "elapsed_s": 0, "stage_s": 0}},
+    {"t_s": 1, "body": {"contract_version": "1.2", "id": "up-Qx3v9", "status": "processing", "progress": 0.4, "stage": "parsing", "mode": "full", "elapsed_s": 1, "stage_s": 1}},
+    {"t_s": 3, "body": {"contract_version": "1.2", "id": "up-Qx3v9", "status": "ready", "stage": "reading", "mode": "full", "note": "Reading the file into the drawing store", "pages": [{"drawing_id": "up-Qx3v9", "page": 1, "label": "3. OG", "stage": "reading", "file_id": "9f2c41d07a6b3e18"}], "counts": {"pages": 1}, "ingest_calls": 0, "elapsed_s": 3, "stage_s": 0}},
+    {"t_s": 9, "body": {"contract_version": "1.2", "id": "up-Qx3v9", "status": "ready", "stage": "interpreting", "mode": "full", "note": "Finding rooms, doors and windows", "pages": [{"drawing_id": "up-Qx3v9", "page": 1, "label": "3. OG", "stage": "interpreting", "file_id": "9f2c41d07a6b3e18", "counts": {"texts": 212}}], "counts": {"pages": 1, "texts": 212}, "ingest_calls": 0, "elapsed_s": 9, "stage_s": 6}},
+    {"t_s": 58, "body": {"contract_version": "1.2", "id": "up-Qx3v9", "status": "ready", "stage": "materialising", "mode": "full", "note": "Writing the result into the drawing", "pages": [{"drawing_id": "up-Qx3v9", "page": 1, "label": "3. OG", "stage": "materialising", "file_id": "9f2c41d07a6b3e18", "counts": {"rooms": 24, "apartments": 2, "doors": 22, "windows": 12, "fixtures": 11, "texts": 212}}], "counts": {"pages": 1, "rooms": 24, "apartments": 2, "doors": 22, "windows": 12, "fixtures": 11, "texts": 212}, "ingest_calls": 9, "ingest_cost_usd": 0.0412, "elapsed_s": 58, "stage_s": 0}},
+    {"t_s": 59, "body": {"contract_version": "1.2", "id": "up-Qx3v9", "status": "ready", "stage": "indexed_store", "mode": "full", "note": "Indexed: rooms from the PDF vectors; doors, windows and fixtures are model estimates", "pages": [{"drawing_id": "up-Qx3v9", "page": 1, "label": "3. OG", "stage": "indexed_store", "file_id": "9f2c41d07a6b3e18", "counts": {"rooms": 24, "apartments": 2, "doors": 22, "windows": 12, "fixtures": 11, "texts": 212}}], "counts": {"pages": 1, "rooms": 24, "apartments": 2, "doors": 22, "windows": 12, "fixtures": 11, "texts": 212}, "ingest_calls": 9, "ingest_cost_usd": 0.0412, "elapsed_s": 59, "stage_s": 0}}
+  ],
+  "sequence_multipage_pdf_mid_way": {"contract_version": "1.2", "id": "up-H7a", "status": "ready", "stage": "reading", "mode": "full", "note": "2 of 3 pages indexed", "pages": [{"drawing_id": "up-H7a", "page": 1, "label": "EG", "stage": "indexed_store", "file_id": "1a2b3c4d5e6f7081", "counts": {"rooms": 9, "doors": 10, "windows": 7}}, {"drawing_id": "up-H7a-p2", "page": 2, "label": "1. OG", "stage": "indexed_store", "file_id": "2b3c4d5e6f708192", "counts": {"rooms": 8, "doors": 9, "windows": 8}}, {"drawing_id": "up-H7a-p3", "page": 3, "label": "UG", "stage": "reading", "file_id": "3c4d5e6f708192a3"}], "counts": {"pages": 3, "rooms": 17, "doors": 19, "windows": 15}, "ingest_calls": 14, "ingest_cost_usd": 0.061, "elapsed_s": 75, "stage_s": 4},
+  "variants": {
+    "dxf_upload_full_mode": {"contract_version": "1.2", "id": "up-D1", "status": "ready", "stage": "indexed_ours", "mode": "full", "note": "Rooms and openings from the CAD geometry (exact)", "pages": [{"drawing_id": "up-D1", "page": 1, "stage": "indexed_ours", "file_id": "4d5e6f708192a3b4"}], "counts": {"pages": 1, "rooms": 24, "doors": 22, "windows": 12}, "ingest_calls": 0, "elapsed_s": 6, "stage_s": 0},
+    "quick_mode_pdf": {"contract_version": "1.2", "id": "up-Q2", "status": "ready", "stage": "ready_unindexed", "mode": "quick", "note": "Quick mode: no drawing store, so rooms are not indexed for this PDF", "pages": [{"drawing_id": "up-Q2", "page": 1, "stage": "ready_unindexed"}], "elapsed_s": 2, "stage_s": 0},
+    "store_failed": {"contract_version": "1.2", "id": "up-F1", "status": "ready", "stage": "store_failed", "mode": "full", "note": "The drawing store could not read this file; it stays viewable, without a rooms index", "pages": [{"drawing_id": "up-F1", "page": 1, "stage": "store_failed", "file_id": "5e6f708192a3b4c5", "error": "The file could not be read"}], "ingest_calls": 0, "elapsed_s": 14, "stage_s": 0},
+    "partial": {"contract_version": "1.2", "id": "up-P1", "status": "ready", "stage": "partial", "mode": "full", "note": "Text and lines were read; finding rooms stopped before it finished", "pages": [{"drawing_id": "up-P1", "page": 1, "stage": "partial", "file_id": "6f708192a3b4c5d6", "counts": {"texts": 140}}], "counts": {"pages": 1, "texts": 140}, "ingest_calls": 4, "elapsed_s": 230, "stage_s": 0},
+    "failed": {"contract_version": "1.2", "id": "up-X1", "status": "failed", "stage": "failed", "mode": "full", "error": "The PDF could not be opened.", "note": "The file could not be read", "elapsed_s": 1, "stage_s": 0}
+  }
+}

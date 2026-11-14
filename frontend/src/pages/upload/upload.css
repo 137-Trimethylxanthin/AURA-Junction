@@ -1,0 +1,82 @@
+/* Upload page motion. Transform/opacity only; every loop stops under reduced motion (the global rule in index.css
+   also caps iterations) and leaves a still, readable state behind. */
+
+/* Indeterminate sweep for a stage without a real fraction: a soft band crossing the segment. */
+.ul-sweep {
+  background: color-mix(in oklch, var(--foreground) 22%, transparent);
+}
+.ul-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  border-radius: inherit;
+  background: var(--foreground);
+  transform: translateX(-110%);
+  animation: ul-sweep 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+@keyframes ul-sweep {
+  to { transform: translateX(260%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ul-sweep::after { animation: none; transform: none; width: 100%; opacity: 0.35; }
+}
+
+/* The sheet glyph: a drawing being read. A scan line travels down the sheet while it works. */
+.ul-sheet-scan {
+  transform-box: fill-box;
+  transform-origin: top;
+  animation: ul-scan 2.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes ul-scan {
+  0% { transform: translateY(0); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translateY(26px); opacity: 0; }
+}
+/* Bytes going up: the arrow lifts and resets. */
+.ul-sheet-lift {
+  animation: ul-lift 1.1s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+@keyframes ul-lift {
+  0% { transform: translateY(5px); opacity: 0; }
+  35% { opacity: 1; }
+  100% { transform: translateY(-3px); opacity: 0; }
+}
+/* Done: the tick draws once. */
+.ul-sheet-tick {
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+  animation: ul-draw 360ms cubic-bezier(0.23, 1, 0.32, 1) 80ms forwards;
+}
+@keyframes ul-draw {
+  to { stroke-dashoffset: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ul-sheet-scan { animation: none; transform: translateY(13px); opacity: 1; }
+  .ul-sheet-lift { animation: none; transform: none; opacity: 1; }
+  .ul-sheet-tick { animation: none; stroke-dashoffset: 0; }
+}
+
+/* Drop zone: the border answers a drag; the glyph lifts a little (hover-capable pointers only). */
+.ul-drop {
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+.ul-drop[data-over] .ul-drop-glyph {
+  transform: translateY(-3px);
+}
+.ul-drop-glyph {
+  transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ul-drop[data-over] .ul-drop-glyph { transform: none; }
+}
+
+/* A card reached by /upload/:id gets a brief ring that fades. */
+.ul-focus {
+  animation: ul-ring 1.6s ease-out 1;
+}
+@keyframes ul-ring {
+  0%, 40% { box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 55%, transparent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}

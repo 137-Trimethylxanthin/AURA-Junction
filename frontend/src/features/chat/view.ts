@@ -146,12 +146,17 @@ const METHOD_KEY: Record<Exclude<Method, 'cad_geometry'>, StringKey> = {
   detector: 'method_detector',
   vision: 'method_vision',
   agent_estimate: 'method_agent',
+  pdf_vector: 'method_pdf_vector',
+  store_sql: 'method_store_sql',
   none: 'method_none',
 }
 
 export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
   const out: Chip[] = []
   if (resp.method === 'cad_geometry') out.push({ key: 'method', text: t(lang, 'chip_exact'), tone: 'success' })
+  // No model involved: exact-style chip, unless the answer carries an estimate (then it keeps the estimate styling).
+  else if ((resp.method === 'pdf_vector' || resp.method === 'store_sql') && !resp.estimate)
+    out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'success' })
   else if (resp.method === 'agent_estimate') {
     out.push({ key: 'method', text: t(lang, 'chip_agent_estimate'), tone: 'info' })
     if (resp.cost_usd > 0 || resp.calls > 0) {
@@ -361,6 +366,8 @@ const METHOD_FOOTER: Record<Method, StringKey> = {
   detector: 'method_detector',
   vision: 'method_vision',
   agent_estimate: 'method_agent',
+  pdf_vector: 'method_pdf_vector',
+  store_sql: 'method_store_sql',
   none: 'method_none',
 }
 

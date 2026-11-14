@@ -13,6 +13,8 @@ const METHOD_TEXT: Record<AskResponse['method'], string> = {
   detector: 'detected on the drawing image',
   vision: 'a visual reading of the drawing',
   agent_estimate: 'an agent visual estimate, not an exact measurement',
+  pdf_vector: "read from the PDF's own vector lines and printed labels, no model",
+  store_sql: 'computed by a SQL query over the stored drawing data',
   none: 'no method (no answer)',
 }
 

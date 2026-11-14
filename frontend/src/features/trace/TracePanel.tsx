@@ -315,7 +315,7 @@ export function TracePanel() {
                 ) : null}
                 {node.tool ? (
                   <p className="num text-xs text-muted-foreground" data-tool={node.tool.name}>
-                    {node.tool.name}
+                    {node.tool.name === 'sql' ? tu('tr_sql') : node.tool.name}
                     {streaming && !resolved.has(node.id) ? (
                       <span className="shimmer ml-1.5" data-running>
                         running…

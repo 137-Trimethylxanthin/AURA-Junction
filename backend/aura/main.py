@@ -46,6 +46,8 @@ from aura.contract import (
     RewriteRequest,
 )
 from aura.csvout import evidence_csv
+from aura.drawing_store import NOTES as DS_NOTES
+from aura.drawing_store import DrawingStore
 from aura.gemini.client import GeminiClient, Meter, Transport
 from aura.jobs import Jobs
 from aura.logging import AccessLogMiddleware, RequestLogFile, setup_logging
@@ -355,8 +357,13 @@ def create_app(
             if (settings.sidecar_url or sidecar_transport is not None)
             else None
         )
+        drawing_store = DrawingStore(settings, writer, store)
+        if settings.store_dsn is not None:  # unset = quick mode; jstore is never imported
+            await drawing_store.start()
+        app.state.drawing_store = drawing_store
         jobs = Jobs(writer, **(job_options or {}))
         jobs.on_done = registry.evict
+        jobs.on_ready = drawing_store.on_parsed
         jobs.after_raster = _raster_hook(client)
         app.state.jobs = jobs
         app.state.svc = Services(
@@ -371,7 +378,18 @@ def create_app(
             agent=agent,
         )
         holder["svc"] = app.state.svc
-        cleanup = asyncio.create_task(_cleanup_loop(app.state.svc), name="aura-cleanup")
+
+        def materialised(did: str) -> None:  # the drawing file changed: nothing cached may outlive it
+            registry.evict(did)
+            app.state.svc.answers.drop_drawing(did)
+            app.state.svc.checks.forget_drawing(did)
+
+        drawing_store.on_materialised = materialised
+        # Before the first request: the pool's pending set is in memory, so unsettled pages are
+        # re-followed now, never read as "not pending" by a status poll.
+        if drawing_store.available():
+            await drawing_store.resume_all(store.upload_rows())
+        cleanup = asyncio.create_task(_cleanup_loop(app.state.svc, drawing_store), name="aura-cleanup")
         try:
             async with mcp_app.router.lifespan_context(mcp_app):
                 yield
@@ -380,6 +398,7 @@ def create_app(
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup
             await jobs.cancel_all()
+            await drawing_store.close()
             await writer.stop()
             if budget.ledger is not None:
                 budget.ledger.close()
@@ -450,6 +469,7 @@ def create_app(
                 **(s.store.spend_totals() if s.store else {}),
             },
         }
+        body["store"] = "on" if request.app.state.drawing_store.available() else "off"
         if s.agent is not None:
             body["agent_ok"] = await s.agent.health_ok()
         return JSONResponse(body, status_code=200 if ok else 503)
@@ -617,7 +637,7 @@ def create_app(
                 body["progress"] = row["progress"]
             if row["error"]:
                 body["error"] = row["error"]
-            return body
+            return body | await _store_status(svc(request), request.app.state.drawing_store, row)
         d = svc(request).registry.get(drawing_id)
         if d is None:
             return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
@@ -652,7 +672,7 @@ def create_app(
             return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
         if not uploads.token_ok(request.headers.get("x-delete-token"), row["delete_token_hash"]):
             return _err("bad_request", "Wrong delete token.", 403)
-        await _remove_upload(svc(request), drawing_id)
+        await _remove_upload(svc(request), drawing_id, request.app.state.drawing_store)
         return Response(status_code=204)
 
     upload_times: dict[str, deque[float]] = defaultdict(deque)  # ip_hash → recent uploads
@@ -1013,7 +1033,90 @@ async def _remove_single_upload(s: Services, drawing_id: str) -> None:
     s.checks.forget_drawing(drawing_id)
 
 
-async def _remove_upload(s: Services, drawing_id: str) -> None:
+_STAGE_RANK = {"queued": 0, "parsing": 1, "reading": 2, "interpreting": 3, "materialising": 4}
+_STAGE_FAIL = ("failed", "store_failed", "partial")
+
+
+async def _store_status(s: Services, ds: DrawingStore, row: dict) -> dict:
+    """The optional store fields of GET /drawings/{id}/status: stage, mode, pages[], counts, note,
+    ingest_calls, elapsed_s, stage_s (see the upload page's status contract)."""
+    did = row["id"]
+    rows = [row]
+    if s.store is not None and not re.search(r"-p\d+$", did):
+        sibs = [r for r in s.store.upload_rows() if r["id"].startswith(f"{did}-p")]
+        rows += sorted(sibs, key=lambda r: int(r["id"].rsplit("-p", 1)[1] or 0))
+    now = time.time()
+    pages, counts, calls, stages = [], {}, 0, []
+    for i, r in enumerate(rows, 1):
+        try:
+            meta = json.loads(r.get("meta") or "{}")
+        except ValueError:
+            meta = {}
+        if await ds.refresh_db_stage(r["id"], meta) is not None and s.store is not None:
+            meta = json.loads((s.store.drawing_row(r["id"]) or {}).get("meta") or "{}")
+        stage, st = ds.page_stage(r, meta)
+        stages.append((stage, st))
+        page: dict[str, Any] = {"drawing_id": r["id"], "page": i, "stage": stage}
+        if meta.get("floor_label"):
+            page["label"] = meta["floor_label"]
+        for k in ("file_id", "counts", "methods"):
+            if st.get(k):
+                page[k] = st[k]
+        if stage == "store_failed":
+            page["error"] = "The file could not be read"
+        for k, v in (st.get("counts") or {}).items():
+            counts[k] = counts.get(k, 0) + v
+        calls += int(st.get("calls") or 0)
+        pages.append(page)
+    live = [x for x in stages if x[0] in _STAGE_RANK]
+    if live:
+        top, top_st = min(live, key=lambda x: _STAGE_RANK[x[0]])
+    else:
+        top, top_st = next((x for x in stages if x[0] in _STAGE_FAIL), stages[0])
+    done = sum(1 for x, _ in stages if x in ("indexed_store", "indexed_ours"))
+    note = (f"{done} of {len(stages)} pages indexed" if len(stages) > 1 and live else
+            DS_NOTES.get(top))
+    if top == "indexed_store" and any(v == "vision" for v in (top_st.get("methods") or {}).values()):
+        note = "Indexed by the drawing store; items found by a model are labelled estimates"
+    out: dict[str, Any] = {"stage": top, "mode": ds.mode, "pages": pages,
+                           "elapsed_s": max(0, int(now - float(row["t"]))),
+                           "stage_s": max(0, int(now - float(top_st.get("t_stage") or row["t"])))}
+    if counts:
+        out["counts"] = {"pages": len(pages)} | counts
+    if note:
+        out["note"] = note
+    if ds.available() or calls:
+        out["ingest_calls"] = calls
+    return out
+
+
+def _store_file_ids(s: Services, ids: set[str] | None = None) -> dict[str, set[str]]:
+    """file_id in the drawing store -> our upload rows that reference it (two uploads with identical
+    bytes share one store project)."""
+    refs: dict[str, set[str]] = {}
+    for r in s.store.upload_rows() if s.store else []:
+        if ids is not None and r["id"] not in ids:
+            continue
+        try:
+            fid = (json.loads(r.get("meta") or "{}").get("store") or {}).get("file_id")
+        except ValueError:
+            fid = None
+        if fid:
+            refs.setdefault(fid, set()).add(r["id"])
+    return refs
+
+
+async def _remove_upload(s: Services, drawing_id: str, ds: DrawingStore | None = None) -> None:
+    before = _store_file_ids(s) if ds is not None and ds.available() else {}
+    await _remove_upload_rows(s, drawing_id)
+    if before:
+        # Delete a store project only when no remaining upload of ours still uses those bytes.
+        remaining = {r["id"] for r in s.store.upload_rows()} if s.store else set()
+        gone = [fid for fid, rows in before.items() if rows and not (rows & remaining)]
+        await ds.delete(gone)
+
+
+async def _remove_upload_rows(s: Services, drawing_id: str) -> None:
     await _remove_single_upload(s, drawing_id)
     # If this is the primary page of a multi-page PDF (`up-<tok>`), also remove sibling pages & auto-bundle
     if not re.search(r"-p\d+$", drawing_id) and s.store is not None:
@@ -1026,12 +1129,12 @@ async def _remove_upload(s: Services, drawing_id: str) -> None:
             await s.writer.execute("DELETE FROM projects WHERE id=?", (proj_id,))
 
 
-async def cleanup_once(s: Services, now: float | None = None) -> int:
+async def cleanup_once(s: Services, now: float | None = None, ds: DrawingStore | None = None) -> int:
     """Delete expired uploads (files, rows) and answers/conversations past the TTL."""
     now = time.time() if now is None else now
     expired = [r["id"] for r in s.store.upload_rows() if r["expires_at"] and r["expires_at"] < now]
     for did in expired:
-        await _remove_upload(s, did)
+        await _remove_upload(s, did, ds)
     cutoff = now - s.settings.upload_ttl_s
     for table in ("answers", "turns", "conversations", "answer_cache"):
         await s.writer.execute(f"DELETE FROM {table} WHERE t < ?", (cutoff,))  # type: ignore[union-attr]
@@ -1053,11 +1156,11 @@ async def cleanup_once(s: Services, now: float | None = None) -> int:
     return len(expired)
 
 
-async def _cleanup_loop(s: Services) -> None:
+async def _cleanup_loop(s: Services, ds: DrawingStore | None = None) -> None:
     while True:
         await asyncio.sleep(s.settings.cleanup_every_s)
         try:
-            await cleanup_once(s)
+            await cleanup_once(s, ds=ds)
         except Exception:
             log.exception("cleanup failed")
 

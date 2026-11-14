@@ -32,6 +32,9 @@ class Jobs:
         # async (drawing_id, out_dir, ctx) -> error str | None; runs after a raster parse
         # (vision detection). Never inside a web request.
         self.after_raster = None
+        # (drawing_id, page_ids) after a successful parse: hands the pages to the drawing store.
+        # Must return at once (it only schedules work); the parse slot is not held for it.
+        self.on_ready = None
 
     def submit(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict,
                ctx: dict | None = None) -> None:
@@ -153,6 +156,11 @@ class Jobs:
                 if res.get("ok"):
                     await self._register_pdf_bundle(drawing_id, meta, ctx, res)
                     await self._set(drawing_id, "ready", 1.0, note)
+                    if self.on_ready is not None:
+                        try:
+                            self.on_ready(drawing_id, [drawing_id, *(s["id"] for s in res.get("siblings") or [])])
+                        except Exception:
+                            log.exception("on_ready hook failed")  # the parse result stands
                 else:
                     await self._set(drawing_id, "failed", None, str(res.get("error"))[:300])
             finally:

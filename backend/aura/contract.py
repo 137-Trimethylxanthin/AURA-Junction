@@ -23,7 +23,8 @@ Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "roo
 TextSubject = Literal["label", "fire_rating"]
 BoxSubject = Subject | TextSubject
 BOX_SUBJECTS: tuple[str, ...] = ("window", "door", "washbasin", "wc", "bathtub", "shower")
-Method = Literal["cad_geometry", "ocr", "detector", "vision", "agent_estimate", "none"]
+# pdf_vector (1.2 additive): read from a PDF's vector paths and text by the drawing store (no model).
+Method = Literal["cad_geometry", "ocr", "detector", "vision", "agent_estimate", "pdf_vector", "none"]
 TraceKind = Literal["exact", "model", "warn", "info"]
 AbstainReason = Literal["not_on_drawing", "not_supported_yet", "unclear_question",
                         "low_confidence"]  # 1.1: a model estimate below its confidence gate

@@ -28,6 +28,8 @@ export const routes: RouteObject[] = [
         lazy: page(() => import("@/pages/privacy/PrivacyPage")),
       },
       { path: "app", lazy: page(() => import("@/pages/library/LibraryPage")) },
+      { path: "upload", lazy: page(() => import("@/pages/upload/UploadPage")) },
+      { path: "upload/:drawingId", lazy: page(() => import("@/pages/upload/UploadPage")) },
       { path: "d/:drawingId", lazy: page(() => import("./Workspace")) },
       // Old and short links keep working.
       { path: "d", loader: () => redirect("/app") },

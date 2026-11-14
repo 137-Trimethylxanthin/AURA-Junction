@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     answerer: Literal["hybrid", "agent", "exact"] = Field(
         default="hybrid", alias="AURA_ANSWERER"
     )
+    # Felix's lossless drawing store (jstore, in-process) on Postgres. Unset = quick mode: jstore is
+    # never imported, uploads stop at our own parse (stage ready_unindexed). The DSN holds a password.
+    store_dsn: SecretStr | None = Field(default=None, alias="AURA_STORE_DSN")
+    store_reader_password: SecretStr | None = Field(default=None, alias="AURA_STORE_READER_PASSWORD")
+    store_data_dir: Path = Field(default=BACKEND_DIR / ".data" / "store", alias="AURA_STORE_DATA_DIR")
+    store_workers: int = Field(default=2, alias="AURA_STORE_WORKERS")
     sidecar_url: str | None = Field(default=None, alias="AURA_SIDECAR_URL")
     sidecar_token_file: Path | None = Field(default=None, alias="AURA_SIDECAR_TOKEN_FILE")
     sidecar_model: str = Field(default="gemini-3.8-flash", alias="AURA_SIDECAR_MODEL")

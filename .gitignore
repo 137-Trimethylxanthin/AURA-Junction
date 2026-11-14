@@ -34,3 +34,7 @@ backend/.data/
 agent-service/.venv/
 agent-service/.data/
 agent-service/runs/
+
+# build metadata and local browser captures
+*.egg-info/
+.playwright-mcp/

@@ -96,6 +96,10 @@ Generated from `backend/aura/config.py` by `backend/scripts/env_table.py --write
 | `AURA_DECISION_MODEL` | backend env | `gemini-decision-1` | Model for the Decisions API (checks, question choice) |
 | `AURA_AGENT_MODEL` | backend env | `gemini-3.1-flash-lite` | Model for the function-calling agent and /rewrite |
 | `AURA_ANSWERER` | backend env | `hybrid` | Answer routing mode (`hybrid`, `agent`, or `exact`) |
+| `AURA_STORE_DSN` | backend env (`scripts/dev.sh` sets it) | `None` | Postgres DSN of the drawing store (jstore); unset = quick mode |
+| `AURA_STORE_READER_PASSWORD` | backend env (`scripts/dev.sh` sets it) | `None` | Password of the read-only `jreader` role used by the sql tool |
+| `AURA_STORE_DATA_DIR` | backend env | `/home/maki/Projects/junction-project/backend/.data/store` | Where the drawing store keeps upload copies and page renders |
+| `AURA_STORE_WORKERS` | backend env | `2` | Worker processes that ingest uploads into the drawing store |
 | `AURA_SIDECAR_URL` | backend env |  | Base URL of the isolated deep-agent sidecar (`agent-service`) |
 | `AURA_SIDECAR_TOKEN_FILE` | backend env |  | Path to the shared bearer token file for `agent-service` |
 | `AURA_SIDECAR_MODEL` | backend env | `gemini-3.8-flash` | Sidecar model used for cost booking until the run reports its own (match JUNCTION_MODEL) |

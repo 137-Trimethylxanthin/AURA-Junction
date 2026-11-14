@@ -23,7 +23,8 @@ volume = modal.Volume.from_name("aura-data", create_if_missing=True, version=2)
 image = (
     modal.Image.debian_slim(python_version="3.12")
     # L5: exactly the versions in uv.lock (regenerate after `uv add`/`uv lock`):
-    #   uv export --frozen --no-dev --no-hashes --no-emit-project --no-header -o requirements-modal.txt
+    #   uv export --frozen --no-dev --no-hashes --no-emit-project --no-header \
+    #     --no-emit-package jstore -o requirements-modal.txt   (Modal = quick mode: no drawing store)
     .pip_install_from_requirements(str(HERE / "requirements-modal.txt"))
     # The deployer states the requests already used on this key; the app refuses to start without
     # it (README, "Gemini budget rules"). e.g. AURA_BUDGET_SEED=230 modal deploy modal_app.py

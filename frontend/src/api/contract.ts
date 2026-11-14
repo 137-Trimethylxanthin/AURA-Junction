@@ -266,13 +266,79 @@ export interface DrawingList {
   dropped?: number
 }
 
-/** `GET /drawings/:id/status` body (1.1). */
+/**
+ * Fine-grained upload stage (store ingest). `status` keeps its four values; `stage` says where inside them a file is.
+ * Unknown future stages are tolerated (the upload page shows them as "working").
+ */
+export type UploadStage =
+  | 'queued'
+  | 'parsing'
+  | 'reading'
+  | 'interpreting'
+  | 'materialising'
+  | 'indexed'
+  | 'indexed_ours'
+  | 'indexed_store'
+  | 'ready_unindexed'
+  | 'partial'
+  | 'store_failed'
+  | 'failed'
+
+/** Counts the store or our parse found so far; each absent until reported. */
+export interface UploadCounts {
+  pages?: number
+  rooms?: number
+  apartments?: number
+  doors?: number
+  windows?: number
+  fixtures?: number
+  texts?: number
+}
+
+/** How each subject was found: "vision" is a model estimate; the others are read from the file. */
+export type UploadMethods = Partial<Record<'rooms' | 'doors' | 'windows' | 'fixtures', 'cad_geometry' | 'pdf_vector' | 'ocr' | 'vision' | string>>
+
+/** One page of a multi-page upload (a PDF page is read separately). */
+export interface UploadPage {
+  /** 1-based page number. */
+  page?: number
+  /** Floor label when one was found (e.g. "EG"). */
+  label?: string
+  file_id?: string
+  stage?: string
+  /** 0-1, only when the backend measures it. */
+  progress?: number
+  counts?: UploadCounts
+  methods?: UploadMethods
+  error?: string
+  /** The drawing made from this page, once there is one. */
+  drawing_id?: string
+}
+
+/** `GET /drawings/:id/status` body (1.1; the store fields are optional extras the page tolerates missing). */
 export interface DrawingStatusBody {
   contract_version: string
   id: string
   status: DrawingStatus
   progress?: number
   error?: string
+  stage?: string
+  pages?: UploadPage[]
+  counts?: UploadCounts
+  /** How each subject was found (per page in pages[].methods). */
+  methods?: UploadMethods
+  /** Subjects whose count is a model estimate (e.g. ["doors", "windows"]). */
+  estimates?: string[]
+  mode?: 'full' | 'quick'
+  /** A short reason or remark from the server (e.g. why the store failed). */
+  note?: string
+  ingest_calls?: number
+  /** Absent when the token usage is unknown. */
+  ingest_cost_usd?: number
+  /** Seconds since the upload was accepted. */
+  elapsed_s?: number
+  /** Seconds in the current stage. */
+  stage_s?: number
 }
 
 /** `POST /uploads` (multipart, field `file`) response (1.1). */
@@ -328,6 +394,7 @@ export type ToolName =
   | 'what_if'
   | 'find_text'
   | 'deep_agent'
+  | 'sql'
 export const TOOL_NAMES: readonly ToolName[] = [
   'count_objects',
   'room_areas',
@@ -339,6 +406,7 @@ export const TOOL_NAMES: readonly ToolName[] = [
   'what_if',
   'find_text',
   'deep_agent',
+  'sql',
 ]
 
 /** A tool call made while answering (1.1). */
@@ -479,8 +547,25 @@ export interface Gold {
   match: boolean
 }
 
-export type Method = 'cad_geometry' | 'ocr' | 'detector' | 'vision' | 'agent_estimate' | 'none'
-export const METHODS: readonly Method[] = ['cad_geometry', 'ocr', 'detector', 'vision', 'agent_estimate', 'none']
+export type Method =
+  | 'cad_geometry'
+  | 'ocr'
+  | 'detector'
+  | 'vision'
+  | 'agent_estimate'
+  | 'pdf_vector'
+  | 'store_sql'
+  | 'none'
+export const METHODS: readonly Method[] = [
+  'cad_geometry',
+  'ocr',
+  'detector',
+  'vision',
+  'agent_estimate',
+  'pdf_vector',
+  'store_sql',
+  'none',
+]
 
 export interface AskResponse {
   contract_version: string
@@ -672,6 +757,8 @@ export interface Health {
   answerer?: AnswererMode
   /** 1.2: whether the deep-agent sidecar responded healthy on its last probe. */
   agent_ok?: boolean
+  /** Drawing store (Postgres) availability: "on" = full mode, "off" = quick mode. */
+  store?: 'on' | 'off' | boolean
 }
 
 /** Evidence subjects that have boxes in the bundled drawing file (wc/bathtub/shower since the regenerated file). */
