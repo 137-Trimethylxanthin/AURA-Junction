@@ -45,3 +45,30 @@ def test_single_drawings_and_answers_with_boxes_are_left_alone():
     assert _box_on_sibling_floors(d, 'window', raw) is raw
     raw2 = {'evidence': {'boxes': [], 'rows': [{'id': 'g1'}]}}
     assert _box_on_sibling_floors(SimpleNamespace(id='swiss-1', registry=None), 'window', raw2) is raw2
+
+
+def test_project_scope_counts_each_floor_and_tags_its_boxes(monkeypatch):
+    import aura.tools as T
+    from aura.contract import Box, ToolResult
+
+    real = T.count_objects
+
+    def fake(d, subject, scope=None):
+        if (scope or {}).get('kind') != 'floor':
+            return real(d, subject, scope)
+        n = {'b--eg': 2, 'b--og': 1}.get(d.id)
+        if n is None:
+            return ToolResult(result_id='x', tool='count_objects', kind='none', supported=False, subject=subject)
+        boxes = [Box(id=f'win-{k + 1:02d}', x=k, y=0, w=1, h=1, subject='window') for k in range(n)]
+        return ToolResult(result_id='x', tool='count_objects', kind='count', subject=subject, value=n, boxes=boxes)
+
+    monkeypatch.setattr(T, 'count_objects', fake)
+    floors = {i: SimpleNamespace(id=i, drawing={'floor_label': i.split('--')[1].upper()}) for i in ('b--eg', 'b--og', 'b--dg')}
+    reg = FakeRegistry(floors)
+    for f in floors.values():
+        f.registry = reg
+    scope = {'kind': 'project', 'project_id': 'p', 'drawing_ids': ['b--eg', 'b--og', 'b--dg', 'b--gone']}
+    tr = T._count_across_floors(floors['b--eg'], 'window', scope, {'scope': scope})
+    assert tr.value == 3
+    assert [(b.id, b.drawing_id) for b in tr.boxes] == [('win-01@eg', 'b--eg'), ('win-02@eg', 'b--eg'), ('win-01@og', 'b--og')]
+    assert 'across 2 floors (EG: 2; OG: 1)' in tr.summary and 'Not counted: DG, b--gone' in tr.summary

@@ -648,6 +648,8 @@ def measure(d: LoadedDrawing, family: str, scope: dict | None = None) -> ToolRes
 def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> ToolResult:
     scope = scope or {"kind": "floor"}
     args = {"subject": subject, "scope": scope}
+    if scope.get("kind") == "project":
+        return _count_across_floors(d, subject, scope, args)
     if (bad := _model_scope_unsupported(d, "count_objects", args)) is not None:
         return bad
     t0 = time.perf_counter()
@@ -660,6 +662,47 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
     if scope.get("kind") == "model":
         raw = _box_on_sibling_floors(d, subject, raw)
     return _to_result(d, "count_objects", args, raw, _ms(t0), "count", subject)
+
+
+def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict) -> ToolResult:
+    """An exact count over the floors of a building ("All N floors"): each floor drawing in the scope is counted
+    on its own, the counts are summed, and every box and room is tagged with its floor. A floor that cannot be
+    loaded or does not extract this subject is named in the summary and left out of the sum."""
+    t0 = time.perf_counter()
+    ids = [i for i in scope.get("drawing_ids") or [] if isinstance(i, str)] or [d.id]
+    total = 0
+    boxes: list[Box] = []
+    rooms: list[EvidenceRoom] = []
+    parts: list[str] = []
+    missing: list[str] = []
+    counted = 0
+    for fid in ids:
+        fd = d if fid == d.id else (d.registry.get(fid) if d.registry is not None else None)
+        if fd is None:
+            missing.append(fid)
+            continue
+        tr = count_objects(fd, subject, {"kind": "floor"})
+        if not tr.supported or tr.kind == "none" or tr.value is None:
+            missing.append(fd.drawing.get("floor_label") or fd.drawing.get("title") or fid)
+            continue
+        counted += 1
+        n = int(tr.value)
+        total += n
+        tag = fid.split("--", 1)[-1] if "--" in fid else fid
+        boxes += [b.model_copy(update={"id": f"{b.id}@{tag}", "drawing_id": fid}) for b in tr.boxes]
+        rooms += [r.model_copy(update={"drawing_id": fid}) for r in tr.rooms]
+        parts.append(f"{fd.drawing.get('floor_label') or fd.drawing.get('title') or fid}: {n}")
+    if counted == 0:
+        return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                          kind="none", subject=subject, supported=False, meta={"abstain": "not_supported_yet"},
+                          summary=f"No floor of this building extracts {noun(subject, 2)}.", ms=_ms(t0))
+    summary = f"{total} {noun(subject, total)} across {counted} floors ({'; '.join(parts)})."
+    if missing:
+        summary += f" Not counted: {', '.join(missing)}."
+    return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                      kind="count", subject=subject, value=float(total), numbers=[float(total)],
+                      boxes=boxes, rooms=rooms, summary=summary, ms=_ms(t0),
+                      meta={"floors_counted": counted, "floors_missing": missing})
 
 
 def _box_on_sibling_floors(d: LoadedDrawing, subject: str, raw: dict) -> dict:
