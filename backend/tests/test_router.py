@@ -211,3 +211,12 @@ def test_templates_refuse_questions_they_do_not_account_for():
     assert route("How many apartments are on this floor?", ctx).subject == "apartment"
     assert route("Wie viele Wohnungen gibt es?", ctx).subject == "apartment"
     assert route("How many doors are in this flat?", ctx).subject == "door"
+
+
+def test_length_question_reaches_the_tools_only_with_printed_dimensions() -> None:
+    from aura.router import DrawingCtx, route
+    q = "What is the length of the corridor?"
+    assert route(q, DrawingCtx()).intent == "abstain"
+    r = route(q, DrawingCtx(printed_dimensions=12))
+    assert r.intent == "unknown" and r.matched == ["length_printed"]
+

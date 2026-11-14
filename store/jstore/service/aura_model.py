@@ -206,6 +206,7 @@ class Model:
     storey: "Storey | None" = None                        # the storey shown (a drawing with an IFC model)
     storeys: list = field(default_factory=list)           # every storey view of the drawing, in library order
     elsewhere: dict[int, dict] = field(default_factory=dict)   # entities of the other storeys: {kind, storey}
+    n_dimensions: int = 0                                      # printed dimensions an answer may cite
     shapes: list = field(default_factory=list)            # (style, geometry in percent): footprints of the storey's elements
     pages: set | None = None                              # a storey view: the (file_id, page_no) of the model that show it,
     page_files: set = field(default_factory=set)          # and the files that show it on every page; None: any page
@@ -545,6 +546,9 @@ def load(db: DB, key: str) -> dict | None:
                                   n_sources, agreement, is_duplicate, geom from q.rooms order by number nulls last, entity_id""")
     d["items"] = db.run("""select entity_id, storey, kind, ifc_class, tag, label, room, apartment, width_m, height_m, n_sources,
                                   is_duplicate, duplicate_of, geom from q.items order by kind, entity_id""")
+    # printed dimensions: not drawn or counted with the items, but an answer may cite them (boxes of its evidence)
+    d["dimensions"] = db.run("""select entity_id, kind as dim_kind, text, value_m, room, page_no, geom from q.dimensions
+                                order by entity_id""")
     d["apartments"] = db.run("""select entity_id, storey, apartment, label, rooms, net_area_m2::float8 as net_area_m2
                                 from q.apartments order by apartment nulls last, entity_id""")
     d["issues"] = db.run("select issue_id, entity_id, property, kind, detail, status from q.issues order by issue_id limit 1000")
@@ -744,6 +748,15 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
                     n_sources=it["n_sources"], ifc_class=it["ifc_class"], storey=it["storey"], evidence_id=it["evidence_id"])
         m.items.append(item)
         m.by_entity[it["entity_id"]] = item
+    dims = [dict(x) for x in data.get("dimensions") or []]
+    m.n_dimensions = len(dims)
+    for n, x in enumerate(dims, 1):
+        g = place(x)
+        item = dict(id=f"dim-{n:0{max(2, len(str(len(dims))))}d}", subject="label", kind="dimension",
+                    entity_id=x["entity_id"], box=_rect(g, 0.3) if g is not None else None, shape=g,
+                    room_id=room_ids.get((x["room"] or "").strip()), unit=None, duplicate_of=None,
+                    note=f"{x['dim_kind'] or 'dimension'} {x['text']}"[:120], tag=x["text"], label=x["text"])
+        m.by_entity[x["entity_id"]] = item
     for a in m.apartments:
         m.by_entity[a["entity_id"]] = dict(kind="apartment", entity_id=a["entity_id"], unit=a["apartment"], label=a["label"])
     m.linework = None if m.synthetic else _linework(db, m)
@@ -934,6 +947,7 @@ def drawing_doc(m: Model, project_meta: dict | None = None) -> dict:
     if m.upload:                                        # an upload is named after its file, not after its key
         credit = dict(text="Uploaded file", license="LicenseRef-upload", license_name="Uploaded by you")
     return _clean(dict(
+        printed_dimensions=m.n_dimensions or None,     # additive: lengths can be answered from the sheet
         contract_version=CONTRACT_VERSION, id=did, title=m.title,
         subtitle=" · ".join(x for x in (project.split("/", 1)[0], " + ".join(f.upper() for f in formats), scale,
                                         storey_note(m.storey)) if x),

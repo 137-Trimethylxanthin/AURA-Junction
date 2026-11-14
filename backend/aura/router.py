@@ -328,6 +328,8 @@ class DrawingCtx:
     room_ids: list[str] = field(default_factory=list)
     units: list[str] = field(default_factory=list)
     kind: str = "cad_dxf"
+    #: the store read dimensions printed on this sheet: a length question has something to answer from
+    printed_dimensions: int = 0
 
 
 WHOLE_MODEL = S(r"whole building|entire building|in the (?:ifc )?model|whole model|all storeys|"
@@ -578,6 +580,8 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
         # tool steps; only a plain length question ("how long is the corridor") is not supported.
         if SELECTOR.search(s) or QUALIFIER_GUARD.search(s) or ROOMS_WITH.search(s):
             return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["length_filter"])
+        if ctx is not None and ctx.printed_dimensions:      # printed on the sheet: the SQL tool step reads them
+            return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["length_printed"])
         return Routed("abstain", lang, signal, reason="not_supported_yet", topic="length",
                       matched=["length"])
 

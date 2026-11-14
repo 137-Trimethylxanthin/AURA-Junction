@@ -59,6 +59,7 @@ import concurrent.futures as cf
 import hashlib
 import io
 import json
+import importlib
 import math
 import os
 import re
@@ -814,6 +815,8 @@ def find_scale(db: DB, f: dict, page: dict, toks: list[dict], g: dict | None, gr
     if mpp_box:
         return dict(mpp=mpp_box, confidence=0.4, detail=detail,
                     source="scale bar as Gemini boxed it (its ends were not found in the pixels)")
+    if (by_dims := importlib.import_module("jstore.interpret.dimensions").scale_rung(db, f, page, detail)):
+        return by_dims                                    # printed dimension lines that agree on a scale
     why = "no scale statement" if not ratio else "a printed scale but neither DPI, paper size nor scale bar to size a pixel"
     if len(meta.get("scales") or []) > 1 and sc is None:
         why = "several different scales on the sheet"
