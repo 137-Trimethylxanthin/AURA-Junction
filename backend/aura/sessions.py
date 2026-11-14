@@ -113,6 +113,8 @@ async def _ensure(request: Request) -> Path:
         cols = {r["name"] for r in _read(path, "PRAGMA table_info(chat_sessions)")}
         if "seen_at" not in cols:  # table created by an earlier version of this module
             await _write(request, "ALTER TABLE chat_sessions ADD COLUMN seen_at REAL NOT NULL DEFAULT 0")
+            # Backfill: rows that predate the column count as seen now, so the TTL sweep cannot delete them at once.
+            await _write(request, "UPDATE chat_sessions SET seen_at = ? WHERE seen_at = 0", (time.time(),))
         await _write(request, _SEEN_INDEX)
         _ready.add(path)
     return path
@@ -157,7 +159,7 @@ async def _sweep(request: Request, path: Path) -> None:
     st, now = _state(request), time.time()
     if now - st["swept"] >= TTL_SWEEP_S:
         st["swept"] = now
-        await _write(request, "DELETE FROM chat_sessions WHERE seen_at < ?", (now - TTL_S,))
+        await _write(request, "DELETE FROM chat_sessions WHERE seen_at > 0 AND seen_at < ?", (now - TTL_S,))
     total = _read(path, "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS b FROM chat_sessions")[0]
     rows_over, bytes_over = total["n"] - MAX_TOTAL_ROWS, total["b"] - MAX_TOTAL_BYTES
     if rows_over <= 0 and bytes_over <= 0:
