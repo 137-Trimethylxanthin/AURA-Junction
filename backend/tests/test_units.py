@@ -259,3 +259,23 @@ def test_building_total_is_shown_in_the_requested_unit(tmp_path):
         if m["answer"]["kind"] in ("area", "quantity"):
             assert f["display"]["unit"] == "sqft" and f["display"]["value"] == pytest.approx(
                 m["answer"]["value"] * 10.7639104, rel=1e-6)
+
+
+@pytest.mark.parametrize("q", [
+    'What is the area of "Room 12"?',
+    'Is there a room labelled "WC 1"?',
+    "area of the room named 'Bad 2'",
+    "What's in room 3?",
+])
+def test_quoted_names_are_not_quantities(q):
+    p = U.plan(q)
+    assert p.question == q and p.unit is None and not p.changed
+
+
+def test_prime_quantities_still_convert():
+    assert U.plan("doors wider than 3'").question == "doors wider than 0.9144 m"
+    assert U.plan('shelves deeper than 12"').question == "shelves deeper than 0.3048 m"
+
+
+def test_metric_and_imperial_both_asked_shows_imperial():
+    assert U.plan("how long is the corridor in m and in ft").unit.key == "ft"

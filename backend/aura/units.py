@@ -229,6 +229,12 @@ def _rewrite_quantities(q: str) -> tuple[str, Unit | None]:
         return _metric_qty(float(m["ft"]) * _FT + float(m["inch"]) * _IN, 1)
 
     def prime(m: re.Match) -> str:
+        before = m.string[:m.start()]
+        # a closing quotation mark, not a unit: "Room 12", 'WC 1'
+        if m["mark"] == '"' and before.count('"') % 2:
+            return m[0]
+        if m["mark"] == "'" and len(re.findall(r"(?<!\w)'", before)) % 2:
+            return m[0]
         u = BY_KEY["ft" if m["mark"] in "'′" else "in"]
         first.append(u)
         return _metric_qty(float(m["v"]) * u.si, 1)
@@ -278,7 +284,8 @@ def plan(question: str) -> UnitPlan:
         return {1: "metreinä", 2: "neliömetreinä", 3: "kuutiometreinä"}[u.dim]
 
     q = _FI_ESSIVE.sub(essive, _HOW_MANY.sub(how_many, (_REQ_TO if is_convert else _REQ).sub(req, q)))
-    unit = asked[0] if asked else None
+    # "in m and in ft": the unit that is not already the default is the one asked for
+    unit = next((u for u in asked if u.key not in _METRIC_LABEL), asked[0]) if asked else None
     if unit is None and qty_unit is not None:
         unit = qty_unit
     if unit is not None and unit.key in _METRIC_LABEL and not asked[1:]:
