@@ -233,13 +233,14 @@ export function useUploads(base: string, opts: { onProjectsDiscovered?: () => vo
   useEffect(() => {
     alive.current = true
     const map = timers.current
-    for (const u of myUploads.list()) poll(u.id)
+    // No API base: nothing to ask (a 404 from the wrong origin would wrongly forget the uploads).
+    if (base) for (const u of myUploads.list()) poll(u.id)
     return () => {
       alive.current = false
       for (const t of map.values()) clearTimeout(t)
       map.clear()
     }
-  }, [poll])
+  }, [poll, base])
 
   const startOne = useCallback(
     async (file: File): Promise<string | null> => {

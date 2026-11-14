@@ -8,6 +8,8 @@ node_modules/
 dist/
 .env
 .env.*
+# Public, no secrets: the dev build hides the bundled demo drawings from the library.
+!frontend/.env.development
 !.env.example
 frontend/e2e/__screens__/
 frontend/test-results/

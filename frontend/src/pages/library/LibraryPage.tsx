@@ -2,6 +2,7 @@ import { useUi } from "@/i18n/uiLang"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link } from "react-router"
 import {
+  FileUpIcon,
   LayersIcon,
   RotateCwIcon,
   SearchIcon,
@@ -13,7 +14,6 @@ import type { DrawingKind, DrawingSummary, Lang } from "@/api/contract"
 import {
   apiBase,
   displayDrawingTitle,
-  kindText,
   myProjects,
 } from "@/api/library"
 import { SiteHeader } from "@/components/shell/SiteHeader"
@@ -45,7 +45,19 @@ import {
   type SelectablePlan,
   type SelectionFloorMeta,
 } from "./ProjectBundlerBar"
-import { UploadPanel, type ReadyUploadSummary } from "./UploadPanel"
+import { UploadPanel } from "./UploadPanel"
+import { STEP_LABEL, reportedCounts } from "@/pages/upload/stages"
+import { useStoreMode, useUploads } from "@/pages/upload/useUploads"
+import { Badge } from "@/components/ui/badge"
+import type { UiKey } from "@/i18n/strings"
+import {
+  LIBRARY_SHOWS_BUNDLED,
+  fileTypeOf,
+  inProgressCount,
+  ownUploadEntries,
+  type FileType,
+  type OwnUpload,
+} from "./ownUploads"
 
 const GROUP_BTN_COPY: Record<Lang, { open: string; close: string }> = {
   en: { open: "Group plans", close: "Done grouping" },
@@ -63,13 +75,6 @@ type ListState =
       dropped?: number
     }
   | { state: "error"; message: string; unreadable?: boolean }
-
-function uploadKindFromName(name: string): DrawingKind {
-  const lower = name.toLowerCase()
-  if (lower.endsWith(".ifc")) return "ifc"
-  if (lower.endsWith(".dxf")) return "cad_dxf"
-  return "raster"
-}
 
 /** Library drawings come from GET /drawings; without an API only the bundled sample is listed (and says so). */
 function useLibrary(base: string | null) {
@@ -158,24 +163,39 @@ export default function LibraryPage() {
   const base = apiBase()
   const { list, retry, refresh } = useLibrary(base)
   const [query, setQuery] = useState("")
-  const [kind, setKind] = useState<"all" | DrawingKind>("all")
+  const [kind, setKind] = useState<"all" | FileType>("all")
 
   const [grouping, setGrouping] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectionMeta, setSelectionMeta] = useState<
     Record<string, SelectionFloorMeta>
   >({})
-  const [readyUploads, setReadyUploads] = useState<ReadyUploadSummary[]>([])
+  // The user's own uploads: finished ones become library cards; the rest stay on /upload.
+  const mode = useStoreMode(base)
+  const { rows: uploadRows, remove: removeUpload } = useUploadsOrNone(base, mode, refresh)
+  const own = useMemo(
+    () => ownUploadEntries(uploadRows, mode, (n) => tu("ul_page", { n })),
+    [uploadRows, mode, tu]
+  )
+  const ownById = useMemo(() => new Map(own.map((o) => [o.summary.id, o])), [own])
+  const uploading = inProgressCount(uploadRows)
 
+  // Bundled demo drawings are listed only where the build says so (off in dev); they always open by URL.
   // A failed list still offers the bundled sample, which works without the server.
-  const drawings = useMemo(
+  const bundled = useMemo(
     () =>
-      list.state === "ready"
-        ? list.drawings
-        : list.state === "error"
-          ? [BUNDLED_SUMMARY]
-          : [],
+      !LIBRARY_SHOWS_BUNDLED
+        ? []
+        : list.state === "ready"
+          ? list.drawings
+          : list.state === "error"
+            ? [BUNDLED_SUMMARY]
+            : [],
     [list]
+  )
+  const drawings = useMemo(
+    () => [...own.map((o) => ({ ...o.summary, subtitle: o.summary.subtitle ?? countsLine(o, tu) })), ...bundled],
+    [own, bundled, tu]
   )
 
   const selectablePlans = useMemo<SelectablePlan[]>(() => {
@@ -210,18 +230,8 @@ export default function LibraryPage() {
         })
       }
     }
-    for (const u of readyUploads) {
-      if (!map.has(u.id)) {
-        map.set(u.id, {
-          id: u.id,
-          title: u.name,
-          kind: uploadKindFromName(u.name),
-          source: "upload",
-        })
-      }
-    }
     return [...map.values()]
-  }, [drawings, list, readyUploads])
+  }, [drawings, list])
 
   const selectableSummaries = useMemo<DrawingSummary[]>(
     () =>
@@ -229,7 +239,7 @@ export default function LibraryPage() {
         id: p.id,
         title: p.title,
         subtitle: p.subtitle,
-        kind: p.kind ?? uploadKindFromName(p.title),
+        kind: p.kind ?? fileKind(p.title),
         status: "ready",
         source: p.source ?? "library",
         thumbnail: "",
@@ -254,14 +264,17 @@ export default function LibraryPage() {
     [selectableSummaries]
   )
 
-  const kinds = useMemo(
-    () => [...new Set(drawings.map((d) => d.kind))],
-    [drawings]
-  )
+  const kinds = useMemo(() => {
+    const order: FileType[] = ["DXF", "IFC", "PDF", "PNG", "JPG", "SVG", "WEBP", "IMAGE"]
+    const present = new Set(drawings.map((d) => fileTypeOf(d)))
+    return order
+      .filter((t) => present.has(t))
+      .map((t) => ({ t, n: drawings.filter((d) => fileTypeOf(d) === t).length }))
+  }, [drawings])
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase()
     return drawings.filter((d) => {
-      if (kind !== "all" && d.kind !== kind) return false
+      if (kind !== "all" && fileTypeOf(d) !== kind) return false
       if (!q) return true
       const display = displayDrawingTitle(d).toLowerCase()
       return (
@@ -279,11 +292,6 @@ export default function LibraryPage() {
     setSelectedIds((prev) =>
       prev.includes(d.id) ? prev.filter((x) => x !== d.id) : [...prev, d.id]
     )
-  }, [])
-
-  const handleBundleUploads = useCallback((uploadIds: string[]) => {
-    setSelectedIds(uploadIds)
-    setGrouping(true)
   }, [])
 
   const canGroup = selectablePlans.length >= 2 || grouping
@@ -353,15 +361,18 @@ export default function LibraryPage() {
                 <ToggleGroup
                   type="single"
                   variant="outline"
-                  spacing={0}
+                  spacing={1}
                   value={kind}
                   onValueChange={(v) => setKind((v || "all") as typeof kind)}
-                  aria-label={tu("drawing_kind")}
+                  aria-label={tu("lib_file_type")}
+                  className="flex-wrap"
+                  data-type-filter
                 >
                   <ToggleGroupItem value="all">{tu("lib_all")}</ToggleGroupItem>
-                  {kinds.map((k) => (
-                    <ToggleGroupItem key={k} value={k}>
-                      {kindText(k, tu)}
+                  {kinds.map(({ t, n }) => (
+                    <ToggleGroupItem key={t} value={t} aria-label={`${typeLabel(t, tu)} (${n})`}>
+                      {typeLabel(t, tu)}
+                      <span className="num text-muted-foreground">{n}</span>
                     </ToggleGroupItem>
                   ))}
                 </ToggleGroup>
@@ -450,6 +461,12 @@ export default function LibraryPage() {
                     >
                       <DrawingCard
                         d={d}
+                        badge={stageBadge(ownById.get(d.id), tu)}
+                        onDelete={
+                          ownById.get(d.id)?.deletable
+                            ? () => void removeUpload(ownById.get(d.id)!.row)
+                            : undefined
+                        }
                         offline={offline && d.id === BUNDLED_SUMMARY.id}
                         selectionMode={grouping}
                         selectedOrder={selectedOrder}
@@ -465,15 +482,20 @@ export default function LibraryPage() {
               <Empty className="border" data-library-empty>
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
-                    <SearchXIcon />
+                    {drawings.length ? <SearchXIcon /> : <FileUpIcon />}
                   </EmptyMedia>
                   <EmptyTitle>
-                    {drawings.length ? tu("no_match") : tu("no_drawings")}
+                    {drawings.length ? tu("no_match") : tu("lib_empty_title")}
                   </EmptyTitle>
                   <EmptyDescription>
-                    {drawings.length ? tu("no_match_text") : tu("no_drawings_text")}
+                    {drawings.length ? tu("no_match_text") : tu("lib_empty_desc")}
                   </EmptyDescription>
                 </EmptyHeader>
+                {drawings.length ? null : (
+                  <Button asChild>
+                    <Link to="/upload">{tu("ul_lib_cta")}</Link>
+                  </Button>
+                )}
               </Empty>
             )}
 
@@ -491,16 +513,50 @@ export default function LibraryPage() {
           </section>
 
           <aside className="order-first flex flex-col gap-4 min-[1100px]:sticky min-[1100px]:top-6 min-[1100px]:order-none min-[1100px]:-m-1 min-[1100px]:max-h-[calc(100dvh-3rem)] min-[1100px]:overflow-y-auto min-[1100px]:p-1">
-            <UploadPanel
-              base={base}
-              onReadyUploadsChange={setReadyUploads}
-              onBundleUploads={handleBundleUploads}
-              onProjectsDiscovered={refresh}
-              onOpenUpload={activateBundleForDrawing}
-            />
+            <UploadPanel base={base} uploading={uploading} />
           </aside>
         </div>
       </main>
     </div>
   )
+}
+
+/** The upload hook needs an API base; without one the user has no uploads. */
+function useUploadsOrNone(base: string | null, mode: "full" | "quick" | null, onProjectsDiscovered: () => void) {
+  const u = useUploads(base ?? "", { mode, onProjectsDiscovered })
+  return base ? u : { ...u, rows: [] }
+}
+
+const fileKind = (name: string): DrawingKind =>
+  /\.ifc$/i.test(name) ? "ifc" : /\.dxf$/i.test(name) ? "cad_dxf" : "raster"
+
+function typeLabel(t: FileType, tu: (k: UiKey) => string): string {
+  return t === "IMAGE" ? tu("kind_image") : t
+}
+
+/** "13 rooms · ≈16 doors · ≈8 windows": what the upload found; "≈" marks a model estimate. */
+function countsLine(o: OwnUpload, tu: (k: UiKey) => string): string | undefined {
+  const parts = reportedCounts(o.counts)
+    .filter((c) => c.key === "rooms" || c.key === "doors" || c.key === "windows")
+    .map((c) => `${o.estimates.has(c.key) ? "≈" : ""}${c.n} ${tu(`ul_c_${c.key}` as UiKey).toLowerCase()}`)
+  return parts.length ? parts.join(" · ") : undefined
+}
+
+/** The indexing stage while the store is still reading a finished upload; a warning when it stopped short. */
+function stageBadge(o: OwnUpload | undefined, tu: (k: UiKey) => string) {
+  if (!o) return undefined
+  const v = o.view
+  if (v.outcome === "working")
+    return (
+      <Badge variant="secondary" className="max-w-full bg-background/90 shadow-xs" data-upload-stage={v.step}>
+        <span className="truncate">{tu(STEP_LABEL[v.step])}</span>
+      </Badge>
+    )
+  if (v.outcome === "partial" || v.outcome === "store_failed" || v.outcome === "too_slow")
+    return (
+      <Badge variant="outline" className="max-w-full border-warning/40 bg-background/90 text-warning" data-upload-stage={v.outcome}>
+        <span className="truncate">{tu(v.outcome === "partial" ? "ul_o_partial" : v.outcome === "too_slow" ? "ul_o_too_slow" : "ul_o_store_failed")}</span>
+      </Badge>
+    )
+  return undefined
 }

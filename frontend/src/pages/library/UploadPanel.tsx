@@ -1,27 +1,18 @@
 import { useUi } from "@/i18n/uiLang"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { Link, useNavigate } from "react-router"
-import { CloudOffIcon, LayersIcon } from "lucide-react"
+import { ArrowRightIcon, CloudOffIcon } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
-import { StageTimeline } from "@/pages/upload/StageTimeline"
-import { stageView } from "@/pages/upload/stages"
-import { acceptAttr, uploadHandoff, useAccepted, useStoreMode, useUploads } from "@/pages/upload/useUploads"
-
-export interface ReadyUploadSummary {
-  id: string
-  name: string
-}
+import { acceptAttr, uploadHandoff, useAccepted } from "@/pages/upload/useUploads"
 
 export interface UploadPanelProps {
   base: string | null
-  onReadyUploadsChange?: (uploads: ReadyUploadSummary[]) => void
-  onBundleUploads?: (uploadIds: string[]) => void
-  onProjectsDiscovered?: () => void
-  onOpenUpload?: (uploadId: string) => void
+  /** Uploads still being sent or parsed (finished ones are cards in the library). */
+  uploading?: number
 }
 
 function UsageNote() {
@@ -37,16 +28,10 @@ function UsageNote() {
 }
 
 /**
- * The library's upload card: a drop target and a short list of the user's uploads. Uploading itself happens on
- * /upload (files dropped here are handed over), where every file and PDF page shows its full progress.
+ * The library's upload card: a drop target that hands files to /upload, a link there, and while something is in
+ * progress a compact "N uploading" line. Finished uploads are library cards, not a list here.
  */
-export function UploadPanel({
-  base,
-  onReadyUploadsChange,
-  onBundleUploads,
-  onProjectsDiscovered,
-  onOpenUpload,
-}: UploadPanelProps) {
+export function UploadPanel({ base, uploading = 0 }: UploadPanelProps) {
   const { tu } = useUi()
   return (
     <Card size="sm" role="region" aria-labelledby="upload-title">
@@ -57,13 +42,7 @@ export function UploadPanel({
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {base ? (
-          <Uploader
-            base={base}
-            onReadyUploadsChange={onReadyUploadsChange}
-            onBundleUploads={onBundleUploads}
-            onProjectsDiscovered={onProjectsDiscovered}
-            onOpenUpload={onOpenUpload}
-          />
+          <Uploader base={base} uploading={uploading} />
         ) : (
           <>
             <Alert data-uploads-off>
@@ -79,17 +58,9 @@ export function UploadPanel({
   )
 }
 
-function Uploader({
-  base,
-  onReadyUploadsChange,
-  onBundleUploads,
-  onProjectsDiscovered,
-  onOpenUpload,
-}: Omit<UploadPanelProps, "base"> & { base: string }) {
+function Uploader({ base, uploading }: { base: string; uploading: number }) {
   const { tu } = useUi()
   const navigate = useNavigate()
-  const mode = useStoreMode(base)
-  const { rows } = useUploads(base, { onProjectsDiscovered, mode })
   const accepted = useAccepted(base)
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
@@ -100,16 +71,6 @@ function Uploader({
     uploadHandoff.files = all
     navigate("/upload")
   }
-
-  const readyUploads = useMemo(
-    () => rows.filter((r) => r.phase === "ready" && !r.leaving).map((r) => ({ id: r.id, name: r.name })),
-    [rows]
-  )
-  const readySignature = readyUploads.map((u) => `${u.id}:${u.name}`).join("|")
-  useEffect(() => {
-    onReadyUploadsChange?.(readyUploads)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readySignature, onReadyUploadsChange])
 
   return (
     <>
@@ -155,54 +116,19 @@ function Uploader({
         />
       </div>
 
-      <UsageNote />
-
-      {rows.length ? (
-        <div className="flex flex-col gap-2">
-          <Separator />
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-xs font-medium text-muted-foreground">{tu("your_uploads")}</h3>
-            {onBundleUploads && readyUploads.length >= 2 ? (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onBundleUploads(readyUploads.map((u) => u.id))}
-                className="min-h-10 text-xs"
-                data-bundle-uploads
-              >
-                <LayersIcon data-icon="inline-start" />
-                {tu("proj_bundle_uploads")}
-              </Button>
-            ) : null}
-          </div>
-          <ul className="flex flex-col gap-1" aria-label={tu("your_uploads")}>
-            {rows.map((r) => {
-              const view = stageView(r.phase, r.status?.stage, { mode: r.status?.mode ?? mode ?? undefined, last: r.last, slow: r.slow })
-              return (
-                <li key={r.uid ?? r.id} data-upload={r.phase} className="flex flex-col gap-1.5 rounded-lg px-1 py-1.5">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Link
-                      to={`/upload/${encodeURIComponent(r.id)}`}
-                      className="min-w-0 flex-1 truncate text-sm underline-offset-2 hover:underline"
-                      title={r.name}
-                    >
-                      {r.name}
-                    </Link>
-                    {view.openable ? (
-                      <Button variant="outline" asChild>
-                        <Link to={`/d/${encodeURIComponent(r.id)}`} onClick={() => onOpenUpload?.(r.id)}>
-                          {tu("open")}
-                        </Link>
-                      </Button>
-                    ) : null}
-                  </div>
-                  <StageTimeline view={view} fraction={null} dense />
-                </li>
-              )
-            })}
-          </ul>
-        </div>
+      {uploading > 0 ? (
+        <Link
+          to="/upload"
+          className="flex min-h-10 items-center gap-2 rounded-lg bg-muted/60 px-3 text-sm outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50"
+          data-uploading={uploading}
+        >
+          <Spinner className="size-4 text-muted-foreground" />
+          <span className="flex-1">{tu("lib_uploading", { n: uploading })}</span>
+          <ArrowRightIcon className="size-4 text-muted-foreground" aria-hidden />
+        </Link>
       ) : null}
+
+      <UsageNote />
     </>
   )
 }
