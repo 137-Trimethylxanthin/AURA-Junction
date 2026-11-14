@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 11  # 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
+ROUTER_VERSION = 13  # 12: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
@@ -624,6 +624,35 @@ def rooms_by_count_of(s: str) -> tuple[str, int] | None:
     return None
 
 
+
+# Words that name the whole drawing (or all of it), not one thing on it.
+_WHOLE_WORDS = {
+    "floor", "floors", "plan", "floorplan", "drawing", "sheet", "building", "house", "home", "flat", "apartment",
+    "apartments", "unit", "units", "level", "storey", "story", "storeys", "stories", "whole", "entire", "all",
+    "every", "total", "rooms", "room", "spaces", "space", "property", "dwelling", "project", "site", "this",
+    "that", "it", "them", "everything", "interior", "indoor", "net", "gross", "usable", "living", "area", "areas",
+    "geschoss", "grundriss", "plan", "gebäude", "haus", "wohnung", "wohnungen", "etage", "stockwerk", "zeichnung",
+    "räume", "raum", "alle", "gesamte", "gesamt", "ganze", "ganzen", "fläche", "étage", "bâtiment", "logement",
+    "appartement", "maison", "pièces", "kerros", "rakennus", "asunto", "huoneisto",
+}
+_NAMED = re.compile(
+    rf"\b(?:of|for)\s+(?:the|this|that|our|my)\s+(?P<en>{_L}[{_L[1:-1]}\-]{{2,}})(?=\s*(?:\?|$|,|\.|in\b|on\b|at\b))|"
+    rf"\b(?:ist|sind|hat|der|des)\s+(?:die|der|das|den|dem)\s+(?P<de>[A-ZÄÖÜ]{_L}{{2,}})(?=\s*(?:\?|$|,|\.))",
+    re.IGNORECASE,
+)
+
+
+def named_subject(text: str) -> str | None:
+    """The one named thing an area question asks about ("the Lagerhalle", "the garage"), or None when it asks
+    about the whole drawing ("this floor", "the apartment") or names nothing."""
+    m = _NAMED.search(_EXCLUSION.sub(" ", text))
+    if not m:
+        return None
+    word = (m.group("en") or m.group("de") or "").strip()
+    if _norm(word) in _WHOLE_WORDS:
+        return None
+    return word
+
 def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     s = unicodedata.normalize("NFC", text or "")
     lang, signal = detect_lang(s)
@@ -774,6 +803,10 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
             return Routed("unknown", lang, signal, scope=scope, matched=["color_cue", subject])
         return Routed("count", lang, signal, subject=subject, scope=scope, matched=["count", subject])
     if is_area:
+        if scope is None and (named := named_subject(s)) is not None:
+            # "area of the Lagerhalle" / "area of the garage" names one thing the drawing has no room for:
+            # the whole-floor total would be a confident wrong answer. Tool steps (printed text) take it.
+            return Routed("unknown", lang, signal, scope=None, matched=["named_subject", named, *extra_match])
         return Routed("area", lang, signal, scope=scope, matched=["area", *extra_match])
 
     if (is_count or is_locate) and _counts_apartments(s) and not (scope and scope["kind"] == "unit"):

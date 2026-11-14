@@ -1189,7 +1189,7 @@ async def answer_with_tools(svc, d: tools.LoadedDrawing, question: str, lang: st
             why = f"the model step stopped ({type(e).__name__})"
     # Last step: the model answers from the plan data itself (prices, what-ifs, advice ...).
     try:
-        async with asyncio.timeout(REASON_TIMEOUT_S):
+        async with asyncio.timeout(REASON_SHEET_TIMEOUT_S if d.drawing.get("kind") == "raster" else REASON_TIMEOUT_S):
             built = await _reason(svc, d, question, lang, caller, meter, history, ctx.get("sess"), trace,
                                   scope, meter.calls - calls0, stats)
         if built is not None:
@@ -1206,6 +1206,7 @@ async def answer_with_tools(svc, d: tools.LoadedDrawing, question: str, lang: st
 
 
 REASON_TIMEOUT_S = 14.0  # the whole reasoning step, re-ask included: a typical answer stays under 10 s
+REASON_SHEET_TIMEOUT_S = 50.0  # with the sheet image on the vision model (image/PDF uploads)
 REASON_MODEL = os.environ.get("AURA_REASON_MODEL", "gemini-3.5-flash-lite")  # fast; ~2-5 s an answer
 SUMMARY_CHARS = 24_000  # ~6 k tokens of plan data at most
 REASON_SCHEMA = {"type": "object", "properties": {
@@ -1328,6 +1329,71 @@ def _totals(d, rooms: list[dict], tb: Toolbox | None) -> dict:
     return out
 
 
+
+PRINTED_TEXT_ROWS = 180
+
+
+
+# Image and PDF uploads: the sheet itself goes along, so the reasoning step can read what the index lacks
+# (a building's printed area, dimension strings, the scale, drawn items no detector knows, such as parking bays).
+REASON_SHEET_MODEL = os.environ.get("AURA_REASON_SHEET_MODEL", "gemini-4-hydrogen")
+SHEET_SIDE = 3072
+REASON_SHEET = (
+    " The sheet itself is attached as an image. Use it to read what the plan data lacks: printed labels, "
+    "printed areas (m², BGF, NF), dimension strings (cm, m, or feet-inches like 12'-6\"), the scale and "
+    "title block, and to count drawn items the data does not index (e.g. numbered parking bays). Prefer the "
+    "plan data when it has the value. Numbers you read on the sheet go in `working` marked 'read on the "
+    "sheet', never in `plan_values`; keep printed values exactly as printed (convert units only when asked).")
+
+
+def _sheet_image(d) -> dict | None:
+    """The served image of an image/PDF upload as an inline JPEG part (long side <= SHEET_SIDE), else None."""
+    if d.drawing.get("kind") != "raster":
+        return None
+    try:
+        import base64
+        import io
+
+        from PIL import Image
+
+        path = d.file("original.png")
+        if path is None:
+            return None
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            k = min(1.0, SHEET_SIDE / max(im.size))
+            if k < 1.0:
+                im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=88)
+        return {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}}
+    except Exception:  # noqa: BLE001 - the plan data alone still answers
+        log.debug("sheet image unavailable", exc_info=True)
+        return None
+
+def _printed_texts(d) -> list[str]:
+    """Text printed on the sheet (PDF text layer or OCR words) as 'text @ x%,y%', longest first: what a
+    reader would look up for facts the plan index lacks (a building's printed area, a scale, a dimension).
+    Empty when the drawing is not in the store or has no text."""
+    try:
+        from aura import store_sql
+        scope = store_sql.scope_for(d)
+        if scope is None:
+            return []
+        q = ("with t as (select text, x, y, max(x) over () as w, max(y) over () as h from q.texts "
+             "where length(trim(text)) >= 2) "
+             "select trim(text) as text, round((100 * x / nullif(w, 0))::numeric, 1) as px, "
+             "round((100 * y / nullif(h, 0))::numeric, 1) as py from t "
+             f"order by length(trim(text)) desc, y, x limit {PRINTED_TEXT_ROWS}")
+        res = store_sql.run(q, d, scope)
+        if not res.ok:
+            return []
+        return [f"{r['text'][:80]} @ {r['px']},{r['py']}" for r in res.rows if r.get("text")]
+    except Exception:  # noqa: BLE001 - extra context only; the plan index stands without it
+        log.debug("printed texts unavailable", exc_info=True)
+        return []
+
 def _plan_summary(d, sess: Session | None) -> dict:
     """What the model is handed: per room its label, type, apartment, area, perimeter, doors (clear
     widths), windows, fixtures and the rooms it connects to through a door; code-computed totals; scale
@@ -1373,6 +1439,12 @@ def _plan_summary(d, sess: Session | None) -> dict:
         "notes": "door_widths_m are clear openings; connects_to lists rooms sharing a door; outdoor rooms "
                  "are balconies/terraces.",
     }
+    if (texts := _printed_texts(d)):
+        out["printed_text"] = texts
+        out["notes"] += (" printed_text lists text printed on the sheet (longest first) as 'text @ x%,y%' "
+                         "(position on the sheet): labels, printed areas (m², BGF/NF/Wfl), dimensions (often "
+                         "in cm or ft-in) and title-block facts such as the scale; a value printed next to a "
+                         "name belongs to it.")
     if sess is not None and sess.sets:
         out["tool_results"] = [
             {"what": x.desc or x.rule, "kind": x.kind, "ids": x.ids[:60], "rule": x.rule,
@@ -1446,12 +1518,14 @@ async def _reason(svc, d, question: str, lang: str, caller, meter, history, sess
     t0 = time.perf_counter()
     summary = await asyncio.to_thread(_plan_summary, d, sess)
     data_numbers = _numbers_in(summary, set())
-    model = REASON_MODEL
+    sheet = await asyncio.to_thread(_sheet_image, d)
+    model = REASON_SHEET_MODEL if sheet else REASON_MODEL
     contents = [*_history_text(history), {"role": "user", "parts": [
+        *([sheet] if sheet else []),
         {"text": "Plan data: " + json.dumps(summary, ensure_ascii=False, default=str)},
         {"text": "Question: " + question}]}]
     language = A.LANG_NAME.get(lang, "the user's language")
-    system = REASON_SYSTEM.replace("{lang}", language)
+    system = REASON_SYSTEM.replace("{lang}", language) + (REASON_SHEET if sheet else "")
     cfg = {"responseMimeType": "application/json", "responseSchema": REASON_SCHEMA}
 
     async def ask() -> dict | None:
@@ -1488,7 +1562,8 @@ async def _reason(svc, d, question: str, lang: str, caller, meter, history, sess
     stats["route"] = "choice"
     calls = calls_before + (2 if reasked else 1)
     handed = ["plan index (rooms with areas, perimeters, doors and widths, windows, fixtures, connections)",
-              "totals computed by code"] + [x.desc or x.rule for x in (sess.sets.values() if sess else [])]
+              "totals computed by code", *(["the sheet image (to read printed text, dimensions and drawn items)"]
+                                          if sheet else [])] + [x.desc or x.rule for x in (sess.sets.values() if sess else [])]
     nodes = [A.stage_node(
         "resources", "handed", "Handed to the model", "plan data · " + model,
         "Gave the model the question, the conversation and: " + "; ".join(handed[:8]) + ".",
