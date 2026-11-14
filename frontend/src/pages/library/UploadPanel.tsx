@@ -73,6 +73,8 @@ type Row = StoredUpload & {
   error?: string
   /** Stable React key: the temporary id while uploading stays the key after the server id arrives. */
   uid?: string
+  /** Being removed: plays the exit fade before it leaves the list. */
+  leaving?: boolean
 }
 
 /** The user's own uploads: stored ids + delete tokens, with live status from the API. */
@@ -199,7 +201,9 @@ function useUploads(base: string) {
       }
       clearTimeout(timers.current.get(r.id))
       myUploads.remove(r.id)
-      setRows((rs) => rs.filter((x) => x.id !== r.id))
+      // Fade the row out (same path it came in), then drop it.
+      setRows((rs) => rs.map((x) => (x.id === r.id ? { ...x, leaving: true } : x)))
+      window.setTimeout(() => setRows((rs) => rs.filter((x) => x.id !== r.id)), 160)
       toast.success(`${r.name} deleted from the server`)
     },
     [base]
@@ -477,11 +481,7 @@ function Uploader({ base }: { base: string }) {
           </h3>
           <ul className="flex flex-col gap-2" aria-label="Your uploads">
             {rows.map((r) => (
-              <li
-                key={r.uid ?? r.id}
-                data-upload={r.phase}
-                className="enter-rise"
-              >
+              <li key={r.uid ?? r.id} data-upload={r.phase} className={r.leaving ? "exit-fall" : "enter-rise"}>
                 <UploadRow r={r} onDelete={(x) => void remove(x)} />
               </li>
             ))}

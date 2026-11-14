@@ -1,5 +1,5 @@
 import { Link } from "react-router"
-import type { DrawingKind, DrawingSummary } from "@/api/contract"
+import { licenceLabel, type DrawingKind, type DrawingSummary } from "@/api/contract"
 import { apiUrl } from "@/api/library"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -98,7 +98,7 @@ function CardBody({ d, offline }: { d: DrawingSummary; offline?: boolean }) {
           title={d.credit.text}
           data-credit
         >
-          <span className="text-foreground">{d.credit.license}</span> ·{" "}
+          <span className="text-foreground">{licenceLabel(d.credit)}</span> ·{" "}
           {d.credit.text}
         </p>
       </CardFooter>

@@ -98,7 +98,7 @@ const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
   const items = p.boxes.map((b, i) => {
     const rejected = isBoxRejected(b.id, { rejected: p.rejected, included: {} })
     const isSel = p.selected === b.id
-    return { b, i, n: i + 1, rejected, isSel, hot: isSel || p.hovered.includes(b.id), leaf2: secondLeaf.has(b.id) }
+    return { b, i, n: i + 1, rejected, isSel, hot: isSel || p.hovered.includes(b.id), leaf2: !!b.duplicate_of }
   })
   const tap = (id: string) => (e: React.MouseEvent) => {
     e.stopPropagation()

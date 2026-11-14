@@ -25,6 +25,8 @@ export function PlanToolbar() {
   const tool = useAppStore((s) => s.ui.tool)
   const compare = useAppStoreShallow((s) => s.ui.compare)
   const hasOriginal = useAppStore((s) => !!s.session.drawing.images.original)
+  // What-if needs rooms with a resizable rectangle; drawings without any (IFC, many uploads) do not offer it.
+  const canWhatIf = useAppStore((s) => s.session.drawing.rooms.some((r) => !!r.rect))
   const zoom = useAppStore(selectZoom)
   const zoomIndex = useAppStore((s) => s.ui.zoomIndex)
 
@@ -38,7 +40,7 @@ export function PlanToolbar() {
         onValueChange={pickTool}
         aria-label="Tool"
       >
-        {TOOLS.map(({ id, label, hint, Icon }) => (
+        {TOOLS.filter((x) => x.id !== 'whatif' || canWhatIf).map(({ id, label, hint, Icon }) => (
           <ToggleGroupItem
             key={id}
             value={id}

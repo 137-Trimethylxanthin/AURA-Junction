@@ -65,8 +65,13 @@ export interface Box extends PctRect {
   subject: BoxSubjectAny
   room_id?: RoomId
   unit?: string
-  /** Free-text remark, e.g. a double door drawn as two leaves at the same spot. */
+  /** Free-text remark from the solver (e.g. an IFC element id). Shown verbatim as a neutral line; never interpreted. */
   note?: string
+  /**
+   * 1.1: this box is the same object drawn a second time at the same spot in the CAD file; names the first copy.
+   * Both are counted, as the dataset does. This field (not `note`) is the only signal for "drawn twice".
+   */
+  duplicate_of?: string
 }
 
 export interface RoomPoly {
@@ -101,8 +106,17 @@ export interface DrawingFacts {
 
 export interface Credit {
   text: string
+  /** Licence id (SPDX or LicenseRef-…): for machines, never shown raw when `license_name` exists. */
   license: string
+  /** 1.1: the licence as people read it, e.g. "KIT IFC Examples: for unrestricted use". */
+  license_name?: string
   url?: string
+}
+
+/** The licence text to show: the human name, else an SPDX id such as "CC BY 4.0", never a LicenseRef-… id. */
+export function licenceLabel(c: Pick<Credit, 'license' | 'license_name'>): string {
+  if (c.license_name) return c.license_name
+  return /^LicenseRef-/i.test(c.license) ? 'Licence terms' : c.license
 }
 
 export interface Drawing {
@@ -363,7 +377,7 @@ export type ChatEvent =
   | { event: 'understood'; data: { detected_lang: Lang; canonical_en: string; route: AskRoute } }
   | { event: 'tool_call'; data: { node: TraceNode } }
   | { event: 'tool_result'; data: { node_id: string; evidence: AskResponse['evidence']; summary: string } }
-  | { event: 'check'; data: { check: RankedCheck } }
+  | { event: 'check'; data: { check: Check & Partial<Omit<RankedCheck, keyof Check>> } }
   | { event: 'answer'; data: { response: AskResponse } }
   | { event: 'error'; data: { error: string; code: ErrorCode } }
   | { event: 'done'; data: Record<string, never> }
@@ -550,7 +564,9 @@ export function isBox(v: unknown): v is Box {
     isRect(v) &&
     isStr(v.id) &&
     isOneOf(v.subject, BOX_SUBJECTS) &&
-    (v.room_id === undefined || isStr(v.room_id))
+    (v.room_id === undefined || isStr(v.room_id)) &&
+    (v.note === undefined || isStr(v.note)) &&
+    (v.duplicate_of === undefined || isStr(v.duplicate_of))
   )
 }
 
@@ -590,7 +606,8 @@ function isToolCall(v: unknown): v is ToolCall {
 const optStr = (v: unknown) => v === undefined || isStr(v)
 const optNum = (v: unknown) => v === undefined || isNum(v)
 
-function isCheck(v: unknown): boolean {
+/** Any 1.0/1.1 check body (ranked or not); a `check` chat event may carry a plain sample check. */
+export function isCheck(v: unknown): v is Check & Partial<Omit<RankedCheck, keyof Check>> {
   if (!isObj(v) || v.method !== 'decisions_api' || !isOneOf(v.status, ['sample', 'live'] as const)) return false
   return (
     optNum(v.agreed) &&
@@ -709,7 +726,7 @@ export function isDrawing(v: unknown): v is Drawing {
 }
 
 function isCredit(v: unknown): v is Credit {
-  return isObj(v) && isStr(v.text) && isStr(v.license) && optStr(v.url)
+  return isObj(v) && isStr(v.text) && isStr(v.license) && optStr(v.url) && optStr(v.license_name)
 }
 
 function isFacts(v: unknown): v is DrawingFacts {

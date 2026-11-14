@@ -52,13 +52,13 @@ export function StreamSteps({ turn, lang }: { turn: AgentTurn; lang: Lang }) {
             </motion.div>
           )
         })}
-        {st?.check ? (
+        {st?.check?.ranking?.length ? (
           <motion.div {...enter} data-stream-check>
             <TraceLine status="running">
               <TraceIcon>
                 <ScanSearchIcon />
               </TraceIcon>
-              <TraceTitle>{t(lang, 'stream_checked', { n: fmtCount(st.check.ranking.length, lang) })}</TraceTitle>
+              <TraceTitle>{t(lang, 'stream_checked', { n: fmtCount(st.check.ranking?.length ?? 0, lang) })}</TraceTitle>
             </TraceLine>
           </motion.div>
         ) : null}

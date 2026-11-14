@@ -83,3 +83,39 @@ describe('1.1 answer kinds', () => {
     expect(isRewriteResponse({ ...r, blocks: [{ ...r.blocks[0], scope: { kind: 'planet' } }] })).toBe(false)
   })
 })
+
+import { rows as evidenceRows } from '@/features/chat/view'
+import { licenceLabel } from '@/api/contract'
+
+describe('"drawn twice" comes only from duplicate_of', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many doors are drawn on this floor plan?' })
+  it('the bundled double doors are labelled (both copies), other doors are not', () => {
+    const titles = evidenceRows(base, emptyToggles(), bundledDrawing, 'en').map((r) => r.title)
+    expect(titles.filter((x) => x.includes('drawn twice'))).toHaveLength(2)
+    expect(titles.filter((x) => x.includes('second copy'))).toHaveLength(2)
+    expect(titles.filter((x) => x.includes('CAD file'))).toHaveLength(4)
+  })
+  it('an IFC-style box with a note is a plain "Window 1" with the note as a neutral line', () => {
+    const r = {
+      ...base,
+      answer: { kind: 'count' as const, value: 1, subject: 'window' as const },
+      evidence: { boxes: [{ id: 'win-01', x: 10, y: 5, w: 16, h: 2, subject: 'window' as const, note: 'IFC 1TAI4ouKX4Xx4lBDZIu5qM' }], rooms: [] },
+    }
+    const [row] = evidenceRows(r, emptyToggles(), bundledDrawing, 'en')
+    expect(row.title).toBe('Window 1')
+    expect(row.note).toBe('IFC 1TAI4ouKX4Xx4lBDZIu5qM')
+  })
+  it('two boxes with identical rectangles but no duplicate_of are not called duplicates', () => {
+    const box = { x: 10, y: 5, w: 16, h: 2, subject: 'window' as const, note: 'x' }
+    const r = { ...base, evidence: { boxes: [{ ...box, id: 'win-01' }, { ...box, id: 'win-02' }], rooms: [] } }
+    expect(evidenceRows(r, emptyToggles(), bundledDrawing, 'en').map((x) => x.title)).toEqual(['Window 1', 'Window 2'])
+  })
+})
+
+describe('licence label', () => {
+  it('shows the human name, an SPDX id as is, and never a LicenseRef id', () => {
+    expect(licenceLabel({ license: 'CC BY 4.0' })).toBe('CC BY 4.0')
+    expect(licenceLabel({ license: 'LicenseRef-KIT-unrestricted', license_name: 'KIT IFC Examples: for unrestricted use' })).toBe('KIT IFC Examples: for unrestricted use')
+    expect(licenceLabel({ license: 'LicenseRef-KIT-unrestricted' })).toBe('Licence terms')
+  })
+})

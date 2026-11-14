@@ -241,10 +241,10 @@ export function PlanStage() {
     })
   }
 
-  // The hint goes away after the first menu, or after 8 s.
+  // The hint goes away after the first menu, or after 6 s.
   useEffect(() => {
     if (hintSeen) return
-    const t = window.setTimeout(dismissHint, 8000)
+    const t = window.setTimeout(dismissHint, 6000)
     return () => window.clearTimeout(t)
   }, [hintSeen, dismissHint])
 
@@ -257,8 +257,10 @@ export function PlanStage() {
   }
 
   // Only at 100 %: zoomed in, the drawing fills the frame and the pill would cover badges.
+  // Once there is an answer, its boxes need the whole plan: the pill steps aside (it covered the bottom at 1366×768).
+  const hasTurns = useAppStore((s) => s.turns.length > 0)
   const showHint =
-    !hintSeen && tool === "select" && !compareOn && img === "ok" && zoom === 100
+    !hintSeen && !hasTurns && tool === "select" && !compareOn && img === "ok" && zoom === 100
   const touchMode = tool === "select" ? "pan-x pan-y" : "none"
 
   return (

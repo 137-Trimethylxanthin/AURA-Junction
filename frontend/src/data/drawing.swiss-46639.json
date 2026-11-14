@@ -1417,7 +1417,8 @@
         "subject": "door",
         "room_id": "3.08",
         "unit": "A",
-        "note": "Drawn twice at the same spot in the CAD file; the dataset counts both."
+        "note": "Drawn twice at the same spot in the CAD file; the dataset counts both.",
+        "duplicate_of": "door-15"
       },
       {
         "id": "door-17",
@@ -1449,7 +1450,8 @@
         "subject": "door",
         "room_id": "3.21",
         "unit": "B",
-        "note": "Drawn twice at the same spot in the CAD file; the dataset counts both."
+        "note": "Drawn twice at the same spot in the CAD file; the dataset counts both.",
+        "duplicate_of": "door-18"
       },
       {
         "id": "door-20",

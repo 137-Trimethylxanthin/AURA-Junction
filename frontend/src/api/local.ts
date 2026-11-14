@@ -263,7 +263,7 @@ export function ask(req: AskRequest, drawing: DrawingFile = bundledDrawing): Ask
       const layer = drawing.evidence[subject] ?? []
       const boxes = boxesInScope(drawing, layer, scope)
       const plural = noun(subject, 2, 'en')
-      const doubles = layer.filter((b) => b.note).length / 2
+      const doubles = layer.filter((b) => b.duplicate_of).length
       const readBody =
         `${layer.length} ${noun(subject, layer.length, 'en')} on the DXF ${subject} layer.` +
         (subject === 'door' && doubles > 0

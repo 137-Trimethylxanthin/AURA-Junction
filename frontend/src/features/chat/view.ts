@@ -151,12 +151,14 @@ export interface Row {
   state: string
   kind: 'box' | 'room'
   edited?: boolean
+  /** The solver's note, verbatim (neutral secondary line). */
+  note?: string
 }
 
-function leafNote(box: Box, i: number, boxes: Box[]): string | null {
-  if (!box.note) return null
-  const prev = boxes[i - 1]
-  return prev && prev.note && prev.x === box.x && prev.y === box.y ? 'leaf_2' : 'leaf_1'
+/** "Drawn twice" only from the explicit `duplicate_of` signal (contract 1.1), never from the presence of a note. */
+export function duplicateNote(box: Box, boxes: Box[]): 'leaf_1' | 'leaf_2' | null {
+  if (box.duplicate_of) return 'leaf_2'
+  return boxes.some((b) => b.duplicate_of === box.id) ? 'leaf_1' : null
 }
 
 function roomLabel(room: RoomPoly | undefined, id: string | undefined): string {
@@ -168,7 +170,7 @@ export function rows(resp: AskResponse, toggles: Toggles, drawing: Drawing, lang
   const byId = new Map(drawing.rooms.map((r) => [r.room_id, r]))
   const boxes = resp.evidence.boxes.map((b, i): Row => {
     const on = !isBoxRejected(b.id, toggles)
-    const leaf = leafNote(b, i, resp.evidence.boxes)
+    const leaf = duplicateNote(b, resp.evidence.boxes)
     const room = b.room_id ? byId.get(b.room_id) : undefined
     return {
       id: b.id,
@@ -176,6 +178,8 @@ export function rows(resp: AskResponse, toggles: Toggles, drawing: Drawing, lang
       badge: String(i + 1),
       title: `${cap(noun(b.subject, 1, lang))} ${i + 1}${leaf ? ` · ${t(lang, leaf as 'leaf_1' | 'leaf_2')}` : ''}`,
       sub: [roomLabel(room, b.room_id), b.unit ? `${b.unit}` : ''].filter(Boolean).join(' · '),
+      // A duplicate's note only repeats its label; any other note is shown as is.
+      ...(b.note && !leaf ? { note: b.note } : {}),
       on,
       state: on ? t(lang, 'counted') : t(lang, 'rejected'),
     }

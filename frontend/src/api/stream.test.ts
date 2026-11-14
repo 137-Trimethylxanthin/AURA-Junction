@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ApiError, TransportError } from './client'
 import type { ChatEvent } from './contract'
 import { ask } from './local'
-import { ChatUnavailable, splitFrames, streamChat } from './stream'
+import { ChatUnavailable, splitFrames, streamChat, toChatEvent } from './stream'
 
 const answer = ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
 const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
@@ -78,5 +78,13 @@ describe('streamChat', () => {
     const p = streamChat(req, { baseUrl: 'http://x', fetch: never, signal: ctrl.signal, onEvent: () => {} })
     ctrl.abort()
     await expect(p).rejects.toMatchObject({ name: 'AbortError' })
+  })
+})
+
+describe('toChatEvent', () => {
+  it('accepts a plain sample check (DXF upload, IFC) as well as a ranked one', () => {
+    expect(toChatEvent('check', { check: { method: 'decisions_api', status: 'sample', image: 'none' } })).not.toBeNull()
+    expect(toChatEvent('check', { check: { method: 'decisions_api', status: 'live', scope: 'drawn_boxes', ranking: ['win-01'] } })).not.toBeNull()
+    expect(() => toChatEvent('check', { check: { method: 'guess' } })).toThrow()
   })
 })

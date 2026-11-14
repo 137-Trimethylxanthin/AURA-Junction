@@ -1,4 +1,5 @@
 import { appStore, useAppStore } from '@/store'
+import { licenceLabel } from '@/api/contract'
 import './plan.css'
 
 export { PlanStage } from './PlanStage'
@@ -21,10 +22,10 @@ export function Credit() {
           rel="noreferrer"
           className="rounded-sm font-medium whitespace-nowrap text-foreground underline underline-offset-2"
         >
-          {credit.license}
+          {licenceLabel(credit)}
         </a>
       ) : (
-        <span className="font-medium whitespace-nowrap text-foreground">{credit.license}</span>
+        <span className="font-medium whitespace-nowrap text-foreground">{licenceLabel(credit)}</span>
       )}
     </p>
   )

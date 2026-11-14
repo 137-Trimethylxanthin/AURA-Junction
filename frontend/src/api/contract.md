@@ -484,7 +484,7 @@ Confirmed against the live backend (14 Nov):
 | `understood` | `{ detected_lang, canonical_en, route }` |
 | `tool_call` | `{ node: TraceNode }` (with `tool`) |
 | `tool_result` | `{ node_id, evidence: { boxes, rooms }, summary }` |
-| `check` | `{ check: RankedCheck }` |
+| `check` | `{ check: Check }`: ranked fields when the check ran; a plain `{ method, status: 'sample', image: 'none' }` for DXF uploads and IFC |
 | `answer` | `{ response: AskResponse }`: the same body `/ask` would return |
 | `error` | `{ error, code: ErrorCode }` |
 | `done` | `{}` |

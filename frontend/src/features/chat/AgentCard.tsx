@@ -106,7 +106,7 @@ function EvidenceRow({ turnId, row, active }: { turnId: string; row: Row; active
         type="button"
         aria-current={selected || undefined}
         aria-label={`Show ${row.title} on the plan`}
-        title={[row.title, row.sub].filter(Boolean).join('\n')}
+        title={[row.title, row.sub, row.note].filter(Boolean).join('\n')}
         onClick={() => actions().select(turnId, row.id)}
         className="flex min-h-10 min-w-0 flex-1 items-center gap-2.5 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
@@ -136,6 +136,11 @@ function EvidenceRow({ turnId, row, active }: { turnId: string; row: Row; active
                   {p}
                 </span>
               ))}
+            </span>
+          ) : null}
+          {row.note ? (
+            <span className="num truncate text-xs text-muted-foreground" title={row.note} data-evidence-note>
+              {row.note}
             </span>
           ) : null}
         </span>
@@ -197,7 +202,7 @@ function EvidenceList({ turn, lang, active }: { turn: AgentTurn; lang: Lang; act
         {turn.listOpen ? <span className="ml-auto truncate text-xs text-muted-foreground">{summary}</span> : null}
       </div>
       {turn.listOpen ? (
-        <CappedScroll label={`${label}: ${summary}`}>
+        <CappedScroll label={`${label}: ${summary}`} lang={lang}>
           <ul id={listId} ref={ref} className="flex flex-col gap-0.5" aria-label={label}>
             {list.map((r) => (
               <EvidenceRow key={r.id} turnId={turn.id} row={r} active={active} />
@@ -210,15 +215,31 @@ function EvidenceList({ turn, lang, active }: { turn: AgentTurn; lang: Lang; act
 }
 
 /** About four rows tall, scrolls inside the card; fades at an edge that hides rows; keyboard-scrollable. */
-function CappedScroll({ children, label }: { children: React.ReactNode; label: string }) {
+/** Tallest the evidence list gets before it scrolls (about four rows). */
+const CAP_PX = 188
+
+/**
+ * Evidence list capped to a whole number of rows: the cut always falls on a row boundary, never through a row,
+ * and a "N more" button says how many are below (and scrolls to them). The top keeps a soft fade once scrolled.
+ */
+function CappedScroll({ children, label, lang }: { children: React.ReactNode; label: string; lang: Lang }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [edges, setEdges] = useState({ top: false, bottom: false })
+  const reduce = useReducedMotion()
+  const [view, setView] = useState<{ cap: number | null; top: boolean; below: number }>({ cap: null, top: false, below: 0 })
   const measure = useCallback(() => {
     const el = ref.current
-    if (!el) return
+    const list = el?.firstElementChild as HTMLElement | null
+    if (!el || !list) return
+    const items = Array.from(list.children) as HTMLElement[]
+    const base = list.offsetTop
+    const bottoms = items.map((li) => li.offsetTop - base + li.offsetHeight)
+    const total = bottoms[bottoms.length - 1] ?? 0
+    // Largest whole-row height that fits the cap (at least one row).
+    const cap = total <= CAP_PX ? null : Math.max(bottoms[0] ?? CAP_PX, ...bottoms.filter((b) => b <= CAP_PX))
+    const viewBottom = el.scrollTop + (cap ?? total)
+    const below = cap === null ? 0 : items.filter((li) => li.offsetTop - base + li.offsetHeight > viewBottom + 1).length
     const top = el.scrollTop > 2
-    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 2
-    setEdges((p) => (p.top === top && p.bottom === bottom ? p : { top, bottom }))
+    setView((p) => (p.cap === cap && p.top === top && p.below === below ? p : { cap, top, below }))
   }, [])
   useEffect(() => {
     const el = ref.current
@@ -229,14 +250,10 @@ function CappedScroll({ children, label }: { children: React.ReactNode; label: s
     if (el.firstElementChild) ro.observe(el.firstElementChild)
     return () => ro.disconnect()
   }, [measure])
-  const fade = '1.75rem'
-  const mask =
-    edges.top || edges.bottom
-      ? `linear-gradient(to bottom, ${edges.top ? `transparent, black ${fade}` : 'black'}, ${edges.bottom ? `black calc(100% - ${fade}), transparent` : 'black'})`
-      : undefined
-  const scrollable = edges.top || edges.bottom
+  const mask = view.top ? 'linear-gradient(to bottom, transparent, black 1.25rem)' : undefined
+  const scrollable = view.cap !== null
   return (
-    <div className="relative border-t pt-1.5">
+    <div className="relative flex flex-col border-t pt-1.5">
       <div
         ref={ref}
         onScroll={measure}
@@ -244,16 +261,21 @@ function CappedScroll({ children, label }: { children: React.ReactNode; label: s
         role={scrollable ? 'region' : undefined}
         aria-label={scrollable ? label : undefined}
         data-evidence-scroll
-        className="max-h-[11.75rem] overflow-y-auto overscroll-contain rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-        style={{ maskImage: mask, WebkitMaskImage: mask }}
+        className="overflow-y-auto overscroll-contain rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        style={{ maxHeight: view.cap ?? undefined, maskImage: mask, WebkitMaskImage: mask }}
       >
         {children}
       </div>
-      {edges.bottom ? (
-        <ChevronDownIcon
-          aria-hidden
-          className="pointer-events-none absolute bottom-0 left-1/2 size-4 -translate-x-1/2 text-muted-foreground"
-        />
+      {view.below > 0 ? (
+        <Button
+          variant="ghost"
+          className="self-center text-xs text-muted-foreground"
+          data-evidence-more={view.below}
+          onClick={() => ref.current?.scrollBy({ top: view.cap ?? CAP_PX, behavior: reduce ? 'auto' : 'smooth' })}
+        >
+          <ChevronDownIcon data-icon="inline-start" />
+          {t(lang, 'more_n', { n: fmtCount(view.below, lang) })}
+        </Button>
       ) : null}
     </div>
   )

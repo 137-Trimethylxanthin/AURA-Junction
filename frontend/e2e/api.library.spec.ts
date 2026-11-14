@@ -255,3 +255,62 @@ test('when the session fell back to local data, an uploaded drawing is never ans
   await expect(lastCard(page).getByText('Couldn’t answer this one')).toBeVisible()
   await expect(lastCard(page).locator('[data-answer-value]')).toHaveCount(0)
 })
+
+test('an IFC drawing: notes are not read as "drawn twice", the licence id stays hidden, and dead tools are absent', async ({ page }) => {
+  const ifc = {
+    ...bundled,
+    id: 'ifc-1',
+    title: 'FZK-Haus · Erdgeschoss',
+    contract_version: V,
+    kind: 'ifc',
+    images: { rebuilt: '/drawings/swiss-46639/plan.svg' },
+    rooms: bundled.rooms.map((r: Record<string, unknown>) => ({ ...r, rect: undefined })),
+    credit: {
+      text: 'FZK-Haus: KIT IFC Examples',
+      license: 'LicenseRef-KIT-unrestricted',
+      license_name: 'KIT IFC Examples: for unrestricted use',
+      url: 'https://www.ifcwiki.org/',
+    },
+  }
+  await fakeApi(page, { statuses: { 'ifc-1': [{ status: 'ready' }] }, drawings: { 'ifc-1': ifc } })
+  await page.route('**/__api/ask', (r) =>
+    json(r, 200, {
+      contract_version: V,
+      answer: { kind: 'count', value: 2, subject: 'window' },
+      evidence: {
+        boxes: [
+          { id: 'win-01', x: 11.7, y: 5.5, w: 16.7, h: 2.5, subject: 'window', note: 'IFC 1TAI4ouKX4Xx4lBDZIu5qM' },
+          { id: 'win-02', x: 39.1, y: 5.5, w: 16.7, h: 2.5, subject: 'window', note: 'IFC 2Q9w7oRXP249jBobEMVqlZ' },
+        ],
+        rooms: [],
+      },
+      detected_lang: 'en',
+      canonical_en: 'How many windows are on this storey',
+      scope: { kind: 'floor' },
+      method: 'cad_geometry',
+      check: { method: 'decisions_api', status: 'sample', image: 'none' },
+      trace: [{ id: 'q', title: 'Question', tag: 'API', body: 'fake', kind: 'info' }],
+      calls: 0,
+      cost_usd: 0,
+      latency_ms: 4,
+      source: 'api',
+    }),
+  )
+  await page.goto('/d/ifc-1')
+  await expect(composerOf(page)).toBeVisible()
+  // No dead controls: no rooms with a rectangle → no What-if; no original image → no Compare.
+  await expect(page.getByRole('radio', { name: 'What-if sizes' })).toHaveCount(0)
+  await expect(page.locator('[aria-label="Compare with original"]')).toHaveCount(0)
+  // The licence reads as words, never as the LicenseRef id.
+  await expect(page.getByText('KIT IFC Examples: for unrestricted use')).toBeVisible()
+  await expect(page.getByText('LicenseRef-KIT-unrestricted')).toHaveCount(0)
+  const box = composerOf(page)
+  await box.fill('How many windows are on this storey?')
+  await box.press('Enter')
+  const card = page.locator('article[data-turn]').last()
+  await expect(card.locator('[data-answer-value]')).toHaveAttribute('data-answer-value', '2')
+  await expect(card.getByRole('button', { name: 'Show Window 1 on the plan' })).toBeVisible()
+  await expect(card.locator('[data-evidence-note]').first()).toHaveText('IFC 1TAI4ouKX4Xx4lBDZIu5qM')
+  await expect(page.getByText(/drawn twice|second copy/)).toHaveCount(0)
+  await expect(card.locator('[data-chip="check"]')).toHaveText('No independent image to check against')
+})

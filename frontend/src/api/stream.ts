@@ -2,7 +2,7 @@ import { ApiError, TransportError, checkVersion, type ClientOptions, type FetchL
 import {
   isAskResponse,
   isErrorBody,
-  isRankedCheck,
+  isCheck,
   type ChatEvent,
   type ChatRequest,
   type Conversation,
@@ -64,7 +64,7 @@ export function toChatEvent(event: string, data: unknown): ChatEvent | null {
       if (!isObj(data) || typeof data.node_id !== 'string' || !isObj(data.evidence)) throw bad()
       return { event, data: data as never }
     case 'check':
-      if (!isObj(data) || !isRankedCheck(data.check)) throw bad()
+      if (!isObj(data) || !isCheck(data.check)) throw bad()
       return { event, data: data as never }
     case 'answer':
       if (!isObj(data) || !isAskResponse(data.response)) throw bad()

@@ -147,7 +147,7 @@ export default function LibraryPage() {
             aria-labelledby="library-title"
             className="flex min-w-0 flex-col gap-4"
           >
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex min-h-10 flex-wrap items-center gap-3">
               <h2 id="library-title" className="mr-auto text-sm font-medium">
                 Library
                 {list.state === "ready" ? (

@@ -1,5 +1,5 @@
 import { createStore, type StoreApi } from 'zustand/vanilla'
-import type { AskResponse, AskRoute, Box, ChatEvent, Drawing, EvidenceRoom, Lang, Override, PctRect, RankedCheck, Scope, TraceNode } from '@/api/contract'
+import type { AskResponse, AskRoute, Box, ChatEvent, Check, Drawing, EvidenceRoom, Lang, Override, PctRect, RankedCheck, Scope, TraceNode } from '@/api/contract'
 import { ApiError, TransportError } from '@/api/client'
 import { createSource, type Source, type SourceStatus } from '@/api/source'
 import { BUNDLED_DRAWING_ID, bundledDrawing } from '@/data/drawing'
@@ -51,7 +51,7 @@ export interface StreamState {
   resolved: string[]
   /** Evidence collected from tool results (lit on the plan before the answer lands). */
   evidence: { boxes: Box[]; rooms: EvidenceRoom[] }
-  check?: RankedCheck
+  check?: Check & Partial<Omit<RankedCheck, keyof Check>>
 }
 
 export type Turn = UserTurn | AgentTurn
