@@ -158,13 +158,12 @@ class _Completions:
             kw.pop("reasoning_effort", None)
         try:
             ret = await self._inner.create(**kw)
-        except BadRequestError as e:
-            if "reasoning_effort" in kw and ("reasoning" in str(e).lower() or e.status_code == 400):
-                self._drop_reasoning = True
-                kw = {k: v for k, v in kw.items() if k != "reasoning_effort"}
-                ret = await self._inner.create(**kw)
-            else:
+        except BadRequestError:
+            if "reasoning_effort" not in kw:
                 raise
+            kw = {k: v for k, v in kw.items() if k != "reasoning_effort"}
+            ret = await self._inner.create(**kw)
+            self._drop_reasoning = True
         return _ReindexedStream(ret) if kw.get("stream") else ret
 
     def __getattr__(self, name):

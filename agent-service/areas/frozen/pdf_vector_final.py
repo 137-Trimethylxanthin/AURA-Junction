@@ -69,7 +69,7 @@ def render_page(path, page_idx: int = 0, dpi: float = 150.0):
 
 def _norm_color(c) -> tuple[float, float, float] | None:
     """Normalise PDF grayscale / RGB / CMYK stroke or fill colour to RGB floats in [0..1]."""
-    if c is None:
+    if c is None or isinstance(c, bool):
         return None
     if isinstance(c, (int, float)):
         v = float(c)
@@ -80,17 +80,16 @@ def _norm_color(c) -> tuple[float, float, float] | None:
     if isinstance(c, (tuple, list)):
         if not c:
             return None
-        if all(isinstance(x, (int, float)) for x in c):
-            vals = [float(x) for x in c]
-            scale = 255.0 if any(x > 1.0 for x in vals) else 1.0
-            vals = [min(1.0, max(0.0, x / scale)) for x in vals]
+        nums = [float(x) for x in c if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        if len(nums) in (1, 3, 4):
+            scale = 255.0 if any(x > 1.0 for x in nums) else 1.0
+            vals = [min(1.0, max(0.0, x / scale)) for x in nums]
             if len(vals) == 1:
                 return (vals[0], vals[0], vals[0])
             if len(vals) == 3:
                 return (vals[0], vals[1], vals[2])
-            if len(vals) == 4:
-                cc, mm, yy, kk = vals
-                return ((1.0 - cc) * (1.0 - kk), (1.0 - mm) * (1.0 - kk), (1.0 - yy) * (1.0 - kk))
+            cc, mm, yy, kk = vals
+            return ((1.0 - cc) * (1.0 - kk), (1.0 - mm) * (1.0 - kk), (1.0 - yy) * (1.0 - kk))
         return (0.5, 0.5, 0.5)
     return (0.5, 0.5, 0.5)
 
@@ -107,17 +106,28 @@ def _is_dashed(dash) -> bool:
     return False
 
 
-def _to_drawing(obj: dict) -> dict:
-    """Convert a pdfplumber vector object (curve/rect/line) into normalised drawing metadata.
-    Note: pdfplumber's Page.process_object already maps both `pts` and `path` (LTCurve.original_path)
-    via `point2coord` into top-down page coordinates (x, top) in PostScript points."""
+def _to_drawing(obj: dict, dx: float = 0.0, dy: float = 0.0) -> dict:
+    """Convert a pdfplumber vector object (curve/rect/line) into normalised drawing metadata
+    in CropBox-relative top-down points (matching pypdfium2's rendered page origin)."""
+    raw_path = obj.get("path") or []
+    raw_pts = obj.get("pts") or []
+    if dx or dy:
+        path = [(it[0], *((float(p[0]) - dx, float(p[1]) - dy) for p in it[1:])) for it in raw_path if it]
+        pts = [(float(p[0]) - dx, float(p[1]) - dy) for p in raw_pts]
+    else:
+        path = raw_path
+        pts = raw_pts
+    if not path and not pts and all(k in obj for k in ("x0", "top", "x1", "bottom")):
+        x0, y0 = float(obj["x0"]) - dx, float(obj["top"]) - dy
+        x1, y1 = float(obj["x1"]) - dx, float(obj["bottom"]) - dy
+        pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
     return {
         "fill": _norm_color(obj.get("non_stroking_color")) if obj.get("fill") else None,
         "color": _norm_color(obj.get("stroking_color")) if obj.get("stroke") else None,
         "width": float(obj.get("linewidth") or 0.0),
         "dashes": "dashed" if _is_dashed(obj.get("dash")) else None,
-        "path": obj.get("path") or [],
-        "pts": obj.get("pts") or [],
+        "path": path,
+        "pts": pts,
     }
 
 
@@ -194,8 +204,8 @@ def to_poly(rs):
     return g
 
 
-def lines(page):
-    """text items: (text, bbox, size), one per span."""
+def lines(page, dx: float = 0.0, dy: float = 0.0):
+    """text items: (text, bbox, size), one per span, in CropBox-relative top-down points."""
     out = []
     words = page.extract_words(
         keep_blank_chars=True,
@@ -210,23 +220,76 @@ def lines(page):
             raw_cs.pop(0)
         while raw_cs and not str(raw_cs[-1].get("text", "")).strip():
             raw_cs.pop()
-        t = ("".join(str(c.get("text", "")) for c in raw_cs) if raw_cs else str(w.get("text", ""))).strip()
-        if not t:
-            continue
+        size_hint = float(w.get("size") or (float(w["bottom"]) - float(w["top"])))
         if raw_cs:
+            ch = []
+            parts = []
+            for idx, c in enumerate(raw_cs):
+                ct = str(c.get("text", ""))
+                cb = Rect(float(c["x0"]) - dx, float(c["top"]) - dy, float(c["x1"]) - dx, float(c["bottom"]) - dy)
+                if idx > 0 and ct.strip() and parts[-1].strip():
+                    prev_cb = ch[-1]["bbox"]
+                    if cb.x0 - prev_cb.x1 > 0.18 * size_hint and not (parts[-1][-1].isdigit() and ct[0].isdigit()):
+                        sp_bb = Rect(prev_cb.x1, min(prev_cb.y0, cb.y0), cb.x0, max(prev_cb.y1, cb.y1))
+                        parts.append(" ")
+                        ch.append(dict(c=" ", bbox=sp_bb))
+                parts.append(ct)
+                ch.append(dict(c=ct, bbox=cb))
+            t = "".join(parts).strip()
+            if not t:
+                continue
             bb = Rect(
-                min(float(c["x0"]) for c in raw_cs),
-                min(float(c["top"]) for c in raw_cs),
-                max(float(c["x1"]) for c in raw_cs),
-                max(float(c["bottom"]) for c in raw_cs),
+                min(c["bbox"].x0 for c in ch),
+                min(c["bbox"].y0 for c in ch),
+                max(c["bbox"].x1 for c in ch),
+                max(c["bbox"].y1 for c in ch),
             )
-            ch = [dict(c=str(c.get("text", "")), bbox=Rect(float(c["x0"]), float(c["top"]), float(c["x1"]), float(c["bottom"])))
-                  for c in raw_cs]
         else:
-            bb = Rect(float(w["x0"]), float(w["top"]), float(w["x1"]), float(w["bottom"]))
+            t = str(w.get("text", "")).strip()
+            if not t:
+                continue
+            bb = Rect(float(w["x0"]) - dx, float(w["top"]) - dy, float(w["x1"]) - dx, float(w["bottom"]) - dy)
             ch = []
         size = float(w.get("size") or bb.height)
         out.append(dict(text=t, bbox=bb, size=size, chars=ch))
+
+    # Join Td/TJ-kerned words on the same baseline (e.g. "Whg." + "A", "20.5" + "m2", "Salle" + "de" + "bains")
+    # when PDF streams omit literal space glyphs, without merging room numbers or scale-bar integer ticks.
+    if len(out) >= 2:
+        out.sort(key=lambda item: (round(item["bbox"].y0, 1), item["bbox"].x0))
+        merged = [out[0]]
+        for cur in out[1:]:
+            prev = merged[-1]
+            same_line = (
+                abs(cur["bbox"].y0 - prev["bbox"].y0) <= 0.25 * max(prev["size"], cur["size"])
+                and abs(cur["size"] - prev["size"]) <= 0.25 * max(prev["size"], cur["size"])
+            )
+            gap = cur["bbox"].x0 - prev["bbox"].x1
+            if same_line and 0.0 <= gap <= 0.75 * max(prev["size"], cur["size"]):
+                pt, ct = prev["text"], cur["text"]
+                cand = f"{pt} {ct}"
+                is_area_tag_scale = bool(
+                    AREA.match(cand.replace("\xa0", " "))
+                    or TAG.match(cand)
+                    or re.match(r"^(?:(?:massstab|maßstab|echelle|échelle|scala|scale)[:\s]*)?1\s*:\s*\d{1,4}$", cand, re.I)
+                )
+                both_alpha = bool(
+                    re.search(r"[A-Za-zÀ-ÿ]", pt)
+                    and re.search(r"[A-Za-zÀ-ÿ]", ct)
+                    and not NUM.match(pt)
+                    and not NUM.match(ct)
+                )
+                if is_area_tag_scale or both_alpha:
+                    sp = dict(c=" ", bbox=Rect(prev["bbox"].x1, prev["bbox"].y0, cur["bbox"].x0, cur["bbox"].y1))
+                    merged[-1] = dict(
+                        text=cand,
+                        bbox=prev["bbox"] | cur["bbox"],
+                        size=prev["size"],
+                        chars=(prev["chars"] + [sp] + cur["chars"]) if (prev["chars"] and cur["chars"]) else [],
+                    )
+                    continue
+            merged.append(cur)
+        out = merged
 
     # overlapping room numbers come out as one span ("2.22.23" = 2.22 + 2.23 sharing a glyph): split them using the
     # drawing's dominant number format, allowing overlapping matches
@@ -294,10 +357,12 @@ def scalebar_m_per_pt(ls):
 def read(path, page_idx: int = 0):
     with pdfplumber.open(path) as pdf:
         page = pdf.pages[page_idx]
-        ls = lines(page)
+        cb = getattr(page, "cropbox", None) or getattr(page, "mediabox", None) or (0.0, 0.0, 0.0, 0.0)
+        dx, dy = float(cb[0]), float(cb[1])
+        ls = lines(page, dx=dx, dy=dy)
         scale = scale_of(page, ls)
         raw_objs = [*page.rects, *page.curves, *page.lines]
-    drawings = [_to_drawing(o) for o in raw_objs]
+    drawings = [_to_drawing(o, dx=dx, dy=dy) for o in raw_objs]
 
     mpp = PT * scale if scale else None
     bar = scalebar_m_per_pt(ls)

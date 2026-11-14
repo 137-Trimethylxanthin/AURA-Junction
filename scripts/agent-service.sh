@@ -10,10 +10,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_DIR="${REPO_ROOT}/agent-service"
 
 DEMO_MODE=0
-if [ "${1:-}" = "--demo" ]; then
-  DEMO_MODE=1
-  shift
-fi
+UVICORN_ARGS=()
+for arg in "$@"; do
+  if [ "${arg}" = "--demo" ]; then
+    DEMO_MODE=1
+  else
+    UVICORN_ARGS+=("${arg}")
+  fi
+done
 
 ENV_FILE="${JUNCTION_ENV_FILE:-${HOME}/.config/junction/env}"
 if [ -f "${ENV_FILE}" ]; then
@@ -22,6 +26,10 @@ if [ -f "${ENV_FILE}" ]; then
   # shellcheck disable=SC1090
   . "${ENV_FILE}"
   set +a
+fi
+
+if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 fi
 
 if [ "${DEMO_MODE}" -eq 1 ]; then
@@ -75,5 +83,10 @@ fi
 HOST="${JUNCTION_HOST:-127.0.0.1}"
 PORT="${JUNCTION_PORT:-${PORT:-8090}}"
 
+if [ ! -x "${SERVICE_DIR}/.venv/bin/uvicorn" ]; then
+  echo "error: ${SERVICE_DIR}/.venv/bin/uvicorn not found; create Python 3.12 venv and install requirements.txt first." >&2
+  exit 1
+fi
+
 cd "${SERVICE_DIR}"
-exec "${SERVICE_DIR}/.venv/bin/uvicorn" service.app:app --no-proxy-headers --host "${HOST}" --port "${PORT}" "$@"
+exec "${SERVICE_DIR}/.venv/bin/uvicorn" service.app:app --no-proxy-headers --host "${HOST}" --port "${PORT}" "${UVICORN_ARGS[@]}"

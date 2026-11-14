@@ -123,10 +123,12 @@ class Registry:
         run = self.get(run_id)
         if run.status in TERMINAL:
             return run
+        already_requested = run._cancel_requested
         run._cancel_requested = True
         task = self.task_by_id.get(run.id)
         if task is not None and not task.done():
-            task.cancel()
+            if not already_requested:
+                task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         elif run.status not in TERMINAL:
             run.status, run.error = "cancelled", "cancelled by client"
@@ -199,8 +201,12 @@ class Registry:
                                  ended="rejected", seconds=0.0, output=clip(str(ev.item.output), s.max_event_chars))
             except asyncio.CancelledError:
                 result.cancel()  # stop the SDK's background run loop too
-                if ctx.calls:  # the SDK cancels a running tool call without waiting for it: let it kill its command
-                    await asyncio.wait(set(ctx.calls), timeout=10)
+                deadline = time.monotonic() + 10.0
+                while ctx.calls and (rem := deadline - time.monotonic()) > 0:
+                    try:  # the SDK cancels a running tool call without waiting for it: let it kill its command
+                        await asyncio.wait(set(ctx.calls), timeout=rem)
+                    except asyncio.CancelledError:
+                        continue  # absorb duplicate cancel signals while waiting for tool cleanup
                 raise
             except ModelBehaviorError:  # the final message did not parse as it stands: salvage it if the answer is in there
                 out = parse_final(last_text)
@@ -221,7 +227,9 @@ class Registry:
         try:
             run.answers = await _stream_once(effort)
         except BadRequestError as e:
-            if effort is not None and "reasoning" in str(e).lower():
+            msg = str(e).lower()
+            no_tools_yet = not any(ev["type"] == "tool_started" for ev in run.events)
+            if effort is not None and (any(w in msg for w in ("reasoning", "effort", "thinking")) or no_tools_yet):
                 run.answers = await _stream_once(None)
             else:
                 raise

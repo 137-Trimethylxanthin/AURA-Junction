@@ -70,6 +70,76 @@ def test_render_page_pypdfium2(tmp_path: Path):
     assert im.size == (288, 216)
 
 
+def _build_minimal_cad_pdf(rotate: int = 0, mediabox: tuple[int, int, int, int] = (0, 0, 600, 400),
+                           cropbox: tuple[int, int, int, int] | None = None, ctm: str = "1 0 0 1 0 0 cm") -> bytes:
+    cb = f"/CropBox [{cropbox[0]} {cropbox[1]} {cropbox[2]} {cropbox[3]}]" if cropbox else ""
+    content = (
+        f"{ctm}\n".encode()
+        + b"q 0.9 0.2 0.2 rg 0 0 0 RG 1 w 100 200 200 100 re B Q\n"
+        + b"q [6 3] 0 d 0 0 1 RG 1 w 90 180 220 130 re S Q\n"
+        + b"0 0 0 rg BT /F1 12 Tf 110 295 Td (Whg.) Tj 36 0 Td (A) Tj ET\n"
+        + b"0 0 0 rg BT /F1 12 Tf 135 262 Td (Salle) Tj 29 0 Td (de) Tj 17 0 Td (bains) Tj "
+        + b"-46 -14 Td (1.01) Tj 0 -14 Td (20.5) Tj 28 0 Td (m2) Tj 240 0 Td (1:100) Tj ET\n"
+    )
+    objs = [
+        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+        (f"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [{mediabox[0]} {mediabox[1]} {mediabox[2]} {mediabox[3]}] "
+         f"{cb} /Rotate {rotate} /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n").encode(),
+        f"4 0 obj << /Length {len(content)} >> stream\n".encode() + content + b"endstream endobj\n",
+        b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for o in objs:
+        offsets.append(len(out))
+        out += o
+    xref_pos = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += f"trailer << /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode()
+    return bytes(out)
+
+
+@pytest.mark.parametrize(
+    "name,rotate,mediabox,cropbox,ctm",
+    [
+        ("rot0", 0, (0, 0, 600, 400), None, "1 0 0 1 0 0 cm"),
+        ("rot90", 90, (0, 0, 400, 600), None, "0 1 -1 0 400 0 cm"),
+        ("rot180", 180, (0, 0, 600, 400), None, "-1 0 0 -1 600 400 cm"),
+        ("rot270", 270, (0, 0, 400, 600), None, "0 -1 1 0 0 600 cm"),
+        ("nonzero_mediabox", 0, (50, 80, 650, 480), None, "1 0 0 1 50 80 cm"),
+        ("cropbox_inset", 0, (0, 0, 800, 600), (100, 100, 700, 500), "1 0 0 1 100 100 cm"),
+    ],
+)
+def test_rotated_pages_mediabox_cropbox_and_kerned_text(tmp_path: Path, name, rotate, mediabox, cropbox, ctm):
+    import numpy as np
+
+    pdf_path = tmp_path / f"{name}.pdf"
+    pdf_path.write_bytes(_build_minimal_cad_pdf(rotate=rotate, mediabox=mediabox, cropbox=cropbox, ctm=ctm))
+
+    im = pdf_vector_final.render_page(pdf_path, page_idx=0, dpi=72.0)
+    assert im.size == (600, 400)
+    arr = np.asarray(im)
+    red = (arr[:, :, 0] > 180) & (arr[:, :, 1] < 100)
+    ys, xs = np.nonzero(red)
+    assert len(xs) > 0
+    px_bbox = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
+
+    info = pdf_vector_final.read(str(pdf_path))
+    assert len(info["rooms"]) == 1
+    r = info["rooms"][0]
+    assert r["number"] == "1.01"
+    assert r["label"] == "Salle de bains"
+    assert r["unit"] == "A"
+    assert r["printed"] is True
+    assert r["area"] == 20.5
+    assert r["bbox"] == [100.0, 100.0, 300.0, 200.0]
+    # Vector bbox in points aligns within 2 px of pypdfium2's 72-DPI rendered raster image
+    assert all(abs(a - b) <= 2 for a, b in zip(r["bbox"], px_bbox))
+
+
 @pytest.mark.skipif(not SWISS_DIR.is_dir(), reason="Swiss Dwellings dataset not mounted")
 @pytest.mark.parametrize("stem", SWISS_STEMS)
 def test_swiss_pdf_matches_dxf_within_2_percent(stem: str):

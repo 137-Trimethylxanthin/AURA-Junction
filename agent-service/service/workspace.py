@@ -10,6 +10,7 @@ called drawing.<ext>, drawing_2.<ext>, ...
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import shutil
@@ -61,13 +62,23 @@ def extension(name: str) -> str | None:
     return ext if ext in ALLOWED_EXT else None
 
 
+def _validate_contained_tree(tree_root: Path, boundary_root: Path | None = None) -> None:
+    """Verify no entry or symlink inside `tree_root` resolves outside `boundary_root` (defaults to `tree_root`)."""
+    bound = (boundary_root or tree_root).resolve()
+    for dirpath, dirnames, filenames in os.walk(tree_root, followlinks=False):
+        dp = Path(dirpath)
+        for name in (*dirnames, *filenames):
+            contained(bound, dp / name)
+
+
 def _copy_dir_cow(src: Path, dst: Path) -> None:
-    """Copy `src` directory to `dst` using Btrfs/XFS CoW (`cp --reflink=auto -r`) with `shutil.copytree` fallback.
-    Never creates symlinks so `contained()` inside `ws/` stays happy."""
-    if dst.exists():
-        shutil.rmtree(dst)
+    """Copy `src` directory to `dst` using Btrfs/XFS CoW (`cp --reflink=auto -rL`) with `shutil.copytree` fallback.
+    Validates containment first and never creates symlinks in `dst` so `contained()` inside `ws/` stays happy."""
+    _validate_contained_tree(src)
+    if dst.exists() or dst.is_symlink():
+        shutil.rmtree(dst, ignore_errors=True)
     try:
-        r = subprocess.run(["cp", "--reflink=auto", "-r", str(src), str(dst)], capture_output=True, timeout=30)
+        r = subprocess.run(["cp", "--reflink=auto", "-rL", "--", str(src), str(dst)], capture_output=True, timeout=30)
         if r.returncode == 0 and dst.is_dir():
             return
     except (OSError, subprocess.SubprocessError):
@@ -130,6 +141,7 @@ class FileStore:
             pre_p = contained(root, precomputed_dir)
             if not pre_p.is_dir():
                 raise NotFound(precomputed_dir)
+            _validate_contained_tree(pre_p, root)
             pre_str = str(pre_p)
         return self.commit(new_id(), p.name, p, registered=True, precomputed_dir=pre_str)
 

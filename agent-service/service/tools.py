@@ -16,13 +16,13 @@ from typing import Any, Callable
 from agents import ToolOutputImage, ToolOutputText, function_tool
 from agents.tool_context import ToolContext
 
-from .config import ROOT, Settings
+from .config import ROOT, Settings, docker_client_env
 from .workspace import Forbidden, NotFound, Workspace, contained, new_id
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg"}
 MAX_PIXELS = 150_000_000  # refuse to decode anything larger (decompression bombs); far above any drawing render
 CROP_NAME_RE = re.compile(
-    r"(?:^|/)crop_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)(?:[_.]|$)",
+    r"(?:^|/|[_-])crop_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)(?:[_.]|$)",
     re.I,
 )
 
@@ -84,8 +84,7 @@ def _argv(settings: Settings, ws: Path, command: str, name: str) -> list[str]:
 
 def _client_env() -> dict[str, str]:
     """Environment of the `docker` / rootless `podman` client process itself (the command's environment is set with -e)."""
-    keep = ("PATH", "HOME", "XDG_RUNTIME_DIR", "TMPDIR")
-    return {k: v for k, v in os.environ.items() if k in keep or k.startswith(("DOCKER_", "CONTAINER_"))}
+    return docker_client_env()
 
 
 def clip(text: str, limit: int) -> str:
@@ -137,7 +136,7 @@ def _sweep(call: str) -> None:
             continue
 
 
-async def _kill(s: Settings, proc: asyncio.subprocess.Process, name: str) -> None:
+async def _kill(s: Settings, proc: asyncio.subprocess.Process, name: str, force_container_kill: bool = False) -> None:
     """End everything a call started; runs after every call, whether it exited, timed out or was cancelled."""
     try:  # the command runs in its own session: kill the whole group, background children included
         os.killpg(proc.pid, signal.SIGKILL)
@@ -145,7 +144,7 @@ async def _kill(s: Settings, proc: asyncio.subprocess.Process, name: str) -> Non
         pass
     if s.sandbox == "none":
         await asyncio.to_thread(_sweep, name)
-    elif proc.returncode is None:  # docker: killing the client does not stop the container
+    elif force_container_kill or proc.returncode is None:  # docker: killing the client does not stop the container
         k = await asyncio.create_subprocess_exec("docker", "kill", name, stdout=asyncio.subprocess.DEVNULL,
                                                  stderr=asyncio.subprocess.DEVNULL, env=_client_env())
         await k.wait()
@@ -159,11 +158,11 @@ async def _exited(proc: asyncio.subprocess.Process) -> None:
 
 
 async def run_shell(ctx: RunCtx, command: str, timeout_s: int | None) -> dict:
-    """Run one command -> {exit_code, ended (exit | timeout | overflow), seconds, output, timeout_s}."""
+    """Run one command -> {exit_code, ended (exit | timeout | overflow | cancelled), seconds, output, timeout_s}."""
     s, ws = ctx.settings, ctx.workspace.root.resolve()
     timeout = max(1, min(timeout_s or s.shell_timeout, s.shell_timeout))
     name = "junction-" + new_id()
-    t0, ended = time.monotonic(), "exit"
+    t0, ended = time.monotonic(), "cancelled"
     proc = await asyncio.create_subprocess_exec(
         *_argv(s, ws, command, name), cwd=ws, env=shell_env(s, ws, name) if s.sandbox == "none" else _client_env(),
         stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
@@ -177,18 +176,28 @@ async def run_shell(ctx: RunCtx, command: str, timeout_s: int | None) -> dict:
                 ended = "overflow"
             else:  # exited (children may still hold the pipe), or closed its stdout and is still running
                 await wait
+                ended = "exit"
     except TimeoutError:
         ended = "timeout"
     finally:
-        await _kill(s, proc, name)
-        try:  # the pipe is closed now: take what was still in it (after an overflow: discard it)
+        kill_task = asyncio.create_task(_kill(s, proc, name, force_container_kill=(ended != "exit")))
+        while not kill_task.done():
+            try:
+                await asyncio.shield(kill_task)
+            except asyncio.CancelledError:
+                continue
+        try:  # the pipe is closed now: take what was still in it (after an overflow/cancel: discard quickly)
             async with asyncio.timeout(2):
                 await drain
                 while await proc.stdout.read(1 << 16):
                     pass
-        except (TimeoutError, OSError):
-            pass
-        await wait
+        except (TimeoutError, OSError, asyncio.CancelledError):
+            drain.cancel()
+        try:
+            async with asyncio.timeout(2):
+                await asyncio.shield(wait)
+        except (TimeoutError, asyncio.CancelledError):
+            wait.cancel()
     return dict(exit_code=proc.returncode if ended == "exit" else None, ended=ended,
                 seconds=round(time.monotonic() - t0, 2), output=cap.text(s.max_output_chars), timeout_s=timeout)
 
@@ -213,7 +222,8 @@ def _read_crop_telemetry(ws: Workspace, raw_path: str, resolved: Path | None,
     """Extract live crop telemetry (`crop_px`, `image_px`, `scale`, `source_image`) from `crop_<x0>_<y0>_<x1>_<y1>`
     filename or `<path>.crop.json` sidecar + image headers."""
     out: dict[str, Any] = {}
-    m = CROP_NAME_RE.search(raw_path.replace("\\", "/"))
+    norm_path = raw_path.replace("\\", "/")
+    m = CROP_NAME_RE.search(norm_path)
     if m:
         coords = [_num_or_int(float(g)) for g in m.groups()]
         if coords[2] > coords[0] and coords[3] > coords[1]:
@@ -242,18 +252,58 @@ def _read_crop_telemetry(ws: Workspace, raw_path: str, resolved: Path | None,
         orig = _peek_image_size(resolved)
 
     if "crop_px" in out and "image_px" not in out:
+        cpx = out["crop_px"]
         ws_root = ws.root.resolve()
-        for cand_name in ("drawing.png", "drawing.jpg", "drawing.jpeg", "page1.png", "full.png", "_precomputed/plan.png"):
-            cand = ws_root / cand_name
-            if cand.is_file() and (resolved is None or cand.resolve() != resolved.resolve()):
+        resolved_real = resolved.resolve() if resolved is not None else None
+        priority: list[str] = []
+        if isinstance(out.get("source_image"), str):
+            priority.append(out["source_image"])
+        m_num = re.search(r"(?:^|/)(?:drawing|page|floor|plan)_?(\d+)", norm_path, re.I)
+        if m_num:
+            k = m_num.group(1)
+            priority.extend([
+                f"drawing_{k}.png", f"drawing_{k}.jpg", f"drawing_{k}.jpeg",
+                f"page{k}.png", f"page_{k}.png", f"plan_{k}.png", f"_precomputed_{k}/plan.png",
+            ])
+        priority.extend([
+            "drawing.png", "drawing.jpg", "drawing.jpeg",
+            "page1.png", "page_1.png", "page0.png", "page_0.png", "page.png",
+            "plan.png", "render.png", "sheet.png", "full.png", "_precomputed/plan.png",
+        ])
+        for cand_name in priority:
+            try:
+                cand = contained(ws.root, cand_name)
+            except Forbidden:
+                continue
+            if cand.is_file() and (resolved_real is None or cand != resolved_real):
                 sz = _peek_image_size(cand)
-                if sz:
+                if sz and sz[0] >= cpx[2] and sz[1] >= cpx[3]:
                     out["image_px"] = [sz[0], sz[1]]
                     out.setdefault("source_image", cand_name)
                     break
+        if "image_px" not in out and ws_root.is_dir():
+            best_cand: tuple[int, str, tuple[int, int]] | None = None
+            for entry in sorted(ws_root.iterdir()):
+                if entry.suffix.lower() not in IMAGE_EXT or CROP_NAME_RE.search(entry.name):
+                    continue
+                try:
+                    cand = contained(ws.root, entry.name)
+                except Forbidden:
+                    continue
+                if not cand.is_file() or (resolved_real is not None and cand == resolved_real):
+                    continue
+                sz = _peek_image_size(cand)
+                if sz and sz[0] >= cpx[2] and sz[1] >= cpx[3]:
+                    area = sz[0] * sz[1]
+                    if best_cand is None or area > best_cand[0]:
+                        best_cand = (area, entry.name, sz)
+            if best_cand is not None:
+                out["image_px"] = [best_cand[2][0], best_cand[2][1]]
+                out.setdefault("source_image", best_cand[1])
 
     if "image_px" not in out and orig is not None:
-        out["image_px"] = [orig[0], orig[1]]
+        if "crop_px" not in out or (orig[0] >= out["crop_px"][2] and orig[1] >= out["crop_px"][3]):
+            out["image_px"] = [orig[0], orig[1]]
 
     if "scale" not in out and orig is not None and orig[0] > 0:
         if shown is not None:

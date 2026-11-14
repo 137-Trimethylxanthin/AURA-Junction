@@ -86,6 +86,20 @@ class Settings:
         return None if u is None else u if u.endswith("/v1") else u + "/openai/v1"
 
 
+def docker_client_env() -> dict[str, str]:
+    """Minimal environment for the `docker` / rootless `podman` CLI without leaking service secrets."""
+    keep = ("PATH", "HOME", "XDG_RUNTIME_DIR", "TMPDIR")
+    env = {k: v for k, v in os.environ.items() if k in keep or k.startswith(("DOCKER_", "CONTAINER_"))}
+    if "XDG_RUNTIME_DIR" not in env and hasattr(os, "getuid"):
+        rt = Path(f"/run/user/{os.getuid()}")
+        try:
+            if rt.is_dir() and rt.stat().st_uid == os.getuid():
+                env["XDG_RUNTIME_DIR"] = str(rt)
+        except OSError:
+            pass
+    return env
+
+
 def sandbox_available(mode: str, docker_image: str = Settings.docker_image) -> tuple[bool, str]:
     """Can this machine actually run the given sandbox mode? -> (ok, human-readable detail)."""
     if mode == "none":
@@ -97,7 +111,8 @@ def sandbox_available(mode: str, docker_image: str = Settings.docker_image) -> t
         if not exe:
             return False, "docker is not installed"
         try:
-            r = subprocess.run([exe, "image", "inspect", docker_image], capture_output=True, timeout=20)
+            r = subprocess.run([exe, "image", "inspect", docker_image], capture_output=True, timeout=20,
+                               env=docker_client_env())
         except (OSError, subprocess.TimeoutExpired) as e:
             return False, f"docker failed: {e}"
         return (True, f"{exe}, image {docker_image}") if r.returncode == 0 else (

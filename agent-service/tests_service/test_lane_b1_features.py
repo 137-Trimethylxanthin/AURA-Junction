@@ -117,6 +117,14 @@ async def test_precomputed_cow_placement_and_artifacts_exclusion(make_client, re
         arts = (await c.get(f"/runs/{rid}/artifacts")).json()["artifacts"]
         assert [a["name"] for a in arts] == ["agent_note.txt"]
 
+    # Symlink inside precomputed_dir escaping register_root is rejected on register and _copy_dir_cow
+    pre_bad = register_root / "pre_escape"
+    pre_bad.mkdir(parents=True)
+    (pre_bad / "leak.dxf").symlink_to(register_root.parent / "outside.dxf")
+    async with make_client() as c:
+        r_bad = await c.post("/files/register", json={"path": "sub/Secret Name A-801.dxf", "precomputed_dir": "pre_escape"})
+        assert r_bad.status_code == 403
+
     # Also test shutil.copytree fallback when `cp --reflink=auto` fails
     import subprocess as sp
     real_run = sp.run
@@ -241,6 +249,32 @@ async def test_view_image_crop_telemetry(make_client):
         assert ev_map["c3"]["source_image"] == "drawing.png"
         assert ev_map["c3"]["scale"] == 1.0
 
+    # Rendered sheet (non-drawing.png, e.g. render.png) + prefixed crop name + escaping symlink guard
+    outside_img = Path("/tmp/outside_telem_probe.png")
+    Image.new("RGB", (9999, 9999), "black").save(outside_img, "PNG")
+    try:
+        prep_pdf = (
+            f"ln -sf {outside_img} drawing.png; "
+            "python -c \"from PIL import Image; "
+            "Image.new('RGB', (2400, 1600), 'white').save('sheet_custom.png'); "
+            "Image.new('RGB', (400, 400), 'green').save('page1_crop_1000_800_1400_1200.png')\""
+        )
+        model_pdf = script(
+            [function_call("shell", dict(command=prep_pdf, timeout_s=None), call_id="p1")],
+            [function_call("view_image", dict(path="page1_crop_1000_800_1400_1200.png"), call_id="p2")],
+            [final()],
+        )
+        async with make_client(model_pdf) as c:
+            fid_dxf = await upload(c, "plan.dxf", b"0\nEOF\n")
+            rid_dxf = (await c.post("/ask", json={"file_ids": [fid_dxf], **Q})).json()["run_id"]
+            run_dxf = (await c.get(f"/runs/{rid_dxf}")).json()
+        p2_fin = [e for e in run_dxf["events"] if e.get("call_id") == "p2" and e["type"] == "tool_finished"][0]
+        assert p2_fin["crop_px"] == [1000, 800, 1400, 1200]
+        assert p2_fin["image_px"] == [2400, 1600]  # parent sheet size, NOT [400, 400] and NOT [9999, 9999] symlink!
+        assert p2_fin["source_image"] == "sheet_custom.png"
+    finally:
+        outside_img.unlink(missing_ok=True)
+
 
 async def test_cancel_endpoint_kills_running_task_and_subprocess(make_client, settings):
     slow = script([function_call("shell", dict(command="echo $$ > slow.pid; sleep 120", timeout_s=None), call_id="c1")],
@@ -344,6 +378,132 @@ async def test_reasoning_effort_and_http_400_fallback(make_client, monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
+
+    # Unrelated HTTP 400 (where retry without reasoning_effort also fails) must NOT poison _drop_reasoning
+    seen_transient: list[dict] = []
+    fail_all = True
+
+    class Transient400Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            raw = self.rfile.read(int(self.headers.get("content-length") or 0))
+            body = json.loads(raw)
+            seen_transient.append(body)
+            if fail_all:
+                err = json.dumps({"error": {"message": "Malformed request payload", "type": "invalid_request_error"}}).encode()
+                self.send_response(400)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+            chunk1 = {"id": "c1", "object": "chat.completion.chunk", "created": 0, "model": body["model"],
+                      "choices": [{"index": 0, "delta": {"role": "assistant", "content": ans_payload}, "finish_reason": "stop"}]}
+            chunk2 = {"id": "c1", "object": "chat.completion.chunk", "created": 0, "model": body["model"],
+                      "choices": [], "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}}
+            sse = f"data: {json.dumps(chunk1)}\n\ndata: {json.dumps(chunk2)}\n\ndata: [DONE]\n\n".encode()
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(sse)))
+            self.end_headers()
+            self.wfile.write(sse)
+
+    srv2 = ThreadingHTTPServer(("127.0.0.1", 0), Transient400Handler)
+    threading.Thread(target=srv2.serve_forever, daemon=True).start()
+    try:
+        url2 = f"http://127.0.0.1:{srv2.server_address[1]}/v1"
+        async with make_client(False, model="gemini-3.8-flash", openai_base_url=url2, openai_api_key="k",
+                               api_style="chat", reasoning_effort="low") as c:
+            fid = await upload(c)
+            r_err = await c.post("/ask", json={"file_ids": [fid], **Q})
+            assert r_err.status_code == 502
+            fail_all = False
+            r_ok = await c.post("/ask", json={"file_ids": [fid], **Q})
+            assert r_ok.status_code == 200
+        # Subsequent valid run still receives reasoning_effort="low" because the earlier 400 was unrelated
+        assert seen_transient[-1].get("reasoning_effort") == "low"
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+
+@pytest.mark.skipif(not sandbox_available("docker")[0], reason="docker/podman image not available")
+async def test_staggered_concurrent_cancel_preserves_event_order_and_kills_container(make_client):
+    import subprocess as sp
+
+    slow = script([function_call("shell", dict(command="sleep 60", timeout_s=None), call_id="c1")], [final()])
+    async with make_client(slow, sandbox="docker") as c:
+        fid = await upload(c)
+        rid = (await c.post("/runs", json={"file_ids": [fid], **Q})).json()["run_id"]
+        for _ in range(100):
+            ps = sp.run(["docker", "ps", "-q", "--filter", "name=junction-"], capture_output=True)
+            if ps.stdout.strip():
+                break
+            await asyncio.sleep(0.05)
+        assert ps.stdout.strip(), "expected running sandbox container"
+
+        async def second_cancel():
+            await asyncio.sleep(0.01)
+            return await c.post(f"/runs/{rid}/cancel")
+
+        r1, r2 = await asyncio.gather(c.post(f"/runs/{rid}/cancel"), second_cancel())
+        assert r1.status_code == 200 and r1.json() == {"id": rid, "status": "cancelled"}
+        assert r2.status_code == 200 and r2.json() == {"id": rid, "status": "cancelled"}
+
+        ps_after = sp.run(["docker", "ps", "-q", "--filter", "name=junction-"], capture_output=True)
+        assert ps_after.stdout.strip() == b""
+
+        run_doc = (await c.get(f"/runs/{rid}")).json()
+        ev_types = [e["type"] for e in run_doc["events"]]
+        assert ev_types == ["run_started", "tool_started", "tool_finished", "run_finished"]
+        assert run_doc["events"][-2]["ended"] == "cancelled"
+        assert run_doc["events"][-1]["status"] == "cancelled"
+
+
+async def test_launcher_script_demo_arg_order(tmp_path: Path):
+    import os
+    import socket
+    import subprocess as sp
+    import httpx
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+    launcher = ROOT.parent / "scripts" / "agent-service.sh"
+    env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("JUNCTION_") and k not in ("GEMINI_API_KEY", "OPENAI_API_KEY")
+    }
+    env["JUNCTION_ENV_FILE"] = str(tmp_path / "nonexistent.env")
+    env["JUNCTION_DATA_DIR"] = str(tmp_path / "data")
+    env["JUNCTION_REGISTER_ROOT"] = str(tmp_path / "reg")
+
+    # Pass --demo AFTER uvicorn flags to verify order-independent flag parsing
+    proc = sp.Popen([str(launcher), "--log-level", "warning", "--demo"], env={**env, "JUNCTION_PORT": str(port)})
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=15) as c:
+            for _ in range(100):
+                try:
+                    if (await c.get("/health")).status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    await asyncio.sleep(0.05)
+            tok_file = tmp_path / "data" / "token"
+            assert tok_file.is_file() and (tok_file.stat().st_mode & 0o777) == 0o600
+            tok = tok_file.read_text().strip()
+            assert (await c.post("/files", files={"file": ("a.dxf", b"0\nEOF\n")})).status_code == 401
+            auth = {"Authorization": f"Bearer {tok}"}
+            h = (await c.get("/health", headers=auth)).json()
+            assert h["model"]["name"] == "demo"
+            fid = (await c.post("/files", headers=auth, files={"file": ("a.dxf", b"0\nEOF\n")})).json()["file_id"]
+            ask = await c.post("/ask", headers=auth, json={"file_ids": [fid], "questions": ["How many doors?"]})
+            assert ask.status_code == 200 and ask.json()["answers"][0]["answer"] == 42
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
 
 
 @pytest.mark.skipif(not sandbox_available("docker")[0], reason="docker/podman image not available")
