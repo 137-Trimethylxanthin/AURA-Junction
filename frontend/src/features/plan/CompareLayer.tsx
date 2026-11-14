@@ -13,6 +13,8 @@ const clampSplit = (v: number) => Math.min(98, Math.max(2, v))
 export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
   const { tu } = useUi()
   const src = useAppStore((s) => s.session.drawing.images.original)
+  // The right-hand label names what the rebuilt plan was made from: a scan is not CAD.
+  const kind = useAppStore((s) => s.session.drawing.kind)
   const { on, mode, opacity } = useAppStoreShallow((s) => s.ui.compare)
   const imgRef = useRef<HTMLImageElement>(null)
   const divRef = useRef<HTMLDivElement>(null)
@@ -129,7 +131,7 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
             {tu('cmp_original')}
           </span>
           <span className="pointer-events-none absolute right-2 bottom-2 z-30 rounded-sm border border-foreground bg-background px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-foreground">
-            {tu('cmp_rebuilt')}
+            {tu(kind === 'raster' ? 'cmp_rebuilt_scan' : kind === 'ifc' ? 'cmp_rebuilt_model' : 'cmp_rebuilt')}
           </span>
         </>
       ) : null}
