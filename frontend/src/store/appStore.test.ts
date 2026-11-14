@@ -675,3 +675,19 @@ describe('plan shared helpers & shortcut guards', () => {
     host.remove()
   })
 })
+
+describe('stampFloor', () => {
+  it('gives untagged evidence the floor it was asked on and keeps explicit floors', async () => {
+    const { stampFloor } = await import('./appStore')
+    const ev = {
+      boxes: [
+        { id: 'w1', subject: 'window', x: 1, y: 1, w: 1, h: 1 },
+        { id: 'w2', subject: 'window', x: 2, y: 2, w: 1, h: 1, drawing_id: 'og1' },
+      ],
+      rooms: [{ room_id: 'r1', included: true, area_m2: 10 }],
+    } as unknown as Parameters<typeof stampFloor>[0]
+    const out = stampFloor(ev, 'eg') as unknown as { boxes: { drawing_id?: string }[]; rooms: { drawing_id?: string }[] }
+    expect(out.boxes.map((b) => b.drawing_id)).toEqual(['eg', 'og1'])
+    expect(out.rooms[0].drawing_id).toBe('eg')
+  })
+})

@@ -119,6 +119,7 @@ export function PlanStage() {
   const aspect = planAspect(drawing)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
+  useFloorEntrance(stageRef)
   const fit = useFitWidth(scrollRef, aspect)
   const width = Math.round((fit * zoom) / 100)
 
@@ -896,4 +897,36 @@ function ImageState({
       </div>
     </div>
   )
+}
+
+/**
+ * Moving between floors of one building: like a lift, going up moves the world down, so the new plan enters
+ * from above (and from below going down), the same way the 3D title slides. Reduced motion gets a short
+ * cross-fade instead.
+ */
+function useFloorEntrance(ref: React.RefObject<HTMLDivElement | null>) {
+  const drawingId = useAppStore((s) => s.session.drawing.id)
+  const floors = useAppStore((s) => s.activeProject?.floors)
+  const prev = useRef(drawingId)
+  useEffect(() => {
+    const from = prev.current
+    prev.current = drawingId
+    const el = ref.current
+    if (!el || from === drawingId || !floors || typeof el.animate !== "function") return
+    const order = (id: string) => floors.find((f) => f.drawing_id === id)?.order
+    const a = order(from)
+    const b = order(drawingId)
+    if (a === undefined || b === undefined) return
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    const dir = b > a ? 1 : -1
+    el.animate(
+      reduced
+        ? [{ opacity: 0.4 }, { opacity: 1 }]
+        : [
+            { opacity: 0, transform: `translateY(${-dir * 28}px) scale(0.985)`, filter: "blur(2px)" },
+            { opacity: 1, transform: "none", filter: "none" },
+          ],
+      { duration: reduced ? 160 : 420, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+    )
+  }, [drawingId, floors, ref])
 }

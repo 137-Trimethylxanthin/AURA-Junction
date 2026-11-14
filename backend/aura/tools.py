@@ -413,6 +413,8 @@ class LoadedDrawing:
     gold: list[dict] = field(default_factory=list)
     anchors: list[dict] = field(default_factory=list)
     source: str = "library"
+    #: The registry this drawing was found in (set by Registry), so a whole-building answer can reach sibling floors.
+    registry: Any = field(default=None, repr=False, compare=False)
 
     @property
     def ctx(self) -> DrawingCtx:
@@ -431,6 +433,23 @@ class LoadedDrawing:
         out.setdefault("capabilities", self.engine.capabilities())
         out.setdefault("kind", "cad_dxf")
         out.setdefault("source", self.source)
+        out["images"] = self._versioned(out.get("images"))
+        if isinstance(out.get("thumbnail"), str):
+            out["thumbnail"] = self._versioned({"t": out["thumbnail"]})["t"]
+        return out
+
+    def _versioned(self, images):
+        """Image URLs that change when the file changes (`?v=<mtime>`): files are served with a public cache, so
+        without this a re-imported plan.svg or original.png stays stale in browsers for up to an hour."""
+        if not isinstance(images, dict) or self.dir is None:
+            return images
+        out = dict(images)
+        for k, url in images.items():
+            if not isinstance(url, str) or "?" in url:
+                continue
+            p = self.file(url.rsplit("/", 1)[-1])
+            if p is not None:
+                out[k] = f"{url}?v={int(p.stat().st_mtime)}"
         return out
 
     def image_path(self) -> Path | None:
@@ -459,11 +478,13 @@ class Registry:
         self.uploads_dir = uploads_dir  # looked up by id only, never listed
         self._cache: dict[str, LoadedDrawing] = dict(extra or {})
         self.skipped: set[str] = set()  # unreadable entries (count shown in /health)
+        self._loaded_at: dict[str, float | None] = {}  # drawing.json mtime when each cached entry was read
 
     def evict(self, drawing_id: str) -> None:
         self._cache.pop(drawing_id, None)
 
     def add(self, d: LoadedDrawing) -> None:
+        d.registry = self
         self._cache[d.id] = d
 
     def library_ids(self) -> list[str]:
@@ -489,7 +510,11 @@ class Registry:
 
     def get(self, drawing_id: str) -> LoadedDrawing | None:
         if drawing_id in self._cache:
-            return self._cache[drawing_id]
+            cached = self._cache[drawing_id]
+            # A drawing re-imported on disk (scripts/import_building.py, preprocess) is read again, not served stale.
+            if drawing_id not in self._loaded_at or self._loaded_at[drawing_id] == _mtime(cached.dir):
+                return cached
+            del self._cache[drawing_id]
         if not ID_RE.match(drawing_id):
             return None
         bases = [*self.dirs, *([self.uploads_dir] if self.uploads_dir else [])]
@@ -504,8 +529,28 @@ class Registry:
                     self.skipped.add(drawing_id)
                     return None
                 self.skipped.discard(drawing_id)
+                d.registry = self
                 self._cache[drawing_id] = d
+                self._loaded_at[drawing_id] = _mtime(p)
                 return d
+        return None
+
+
+def data_version(d: LoadedDrawing, scope: dict | None = None) -> int:
+    """Newest drawing.json time among this drawing and the floors an all-floors scope names (0 when unknown)."""
+    ids = [d.id, *((scope or {}).get("drawing_ids") or [])] if (scope or {}).get("kind") == "project" else [d.id]
+    newest = 0.0
+    for i in ids:
+        fd = d if i == d.id else (d.registry.get(i) if d.registry is not None else None)
+        t = _mtime(fd.dir) if fd is not None and fd.dir is not None else None
+        newest = max(newest, t or 0.0)
+    return int(newest)
+
+
+def _mtime(d: Path) -> float | None:
+    try:
+        return (d / "drawing.json").stat().st_mtime
+    except OSError:
         return None
 
 
@@ -627,6 +672,8 @@ def measure(d: LoadedDrawing, family: str, scope: dict | None = None) -> ToolRes
 def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> ToolResult:
     scope = scope or {"kind": "floor"}
     args = {"subject": subject, "scope": scope}
+    if scope.get("kind") == "project":
+        return _count_across_floors(d, subject, scope, args)
     if (bad := _model_scope_unsupported(d, "count_objects", args)) is not None:
         return bad
     t0 = time.perf_counter()
@@ -636,7 +683,87 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
                           summary=f"No {noun(subject, 2)} are extracted from this drawing yet, "
                                   "so there is nothing to count.")
     raw = d.engine.answer(subject, scope, None)
+    if scope.get("kind") == "model":
+        raw = _box_on_sibling_floors(d, subject, raw)
     return _to_result(d, "count_objects", args, raw, _ms(t0), "count", subject)
+
+
+def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict) -> ToolResult:
+    """An exact count over the floors of a building ("All N floors"): each floor drawing in the scope is counted
+    on its own, the counts are summed, and every box and room is tagged with its floor. A floor that cannot be
+    loaded or does not extract this subject is named in the summary and left out of the sum."""
+    t0 = time.perf_counter()
+    ids = [i for i in scope.get("drawing_ids") or [] if isinstance(i, str)] or [d.id]
+    total = 0
+    boxes: list[Box] = []
+    rooms: list[EvidenceRoom] = []
+    parts: list[str] = []
+    missing: list[str] = []
+    counted = 0
+    for fid in ids:
+        fd = d if fid == d.id else (d.registry.get(fid) if d.registry is not None else None)
+        if fd is None:
+            missing.append(fid)
+            continue
+        tr = count_objects(fd, subject, {"kind": "floor"})
+        if not tr.supported or tr.kind == "none" or tr.value is None:
+            missing.append(fd.drawing.get("floor_label") or fd.drawing.get("title") or fid)
+            continue
+        counted += 1
+        n = int(tr.value)
+        total += n
+        tag = fid.split("--", 1)[-1] if "--" in fid else fid
+        boxes += [b.model_copy(update={"id": f"{b.id}@{tag}", "drawing_id": fid}) for b in tr.boxes]
+        rooms += [r.model_copy(update={"drawing_id": fid}) for r in tr.rooms]
+        parts.append(f"{fd.drawing.get('floor_label') or fd.drawing.get('title') or fid}: {n}")
+    if counted == 0:
+        return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                          kind="none", subject=subject, supported=False, meta={"abstain": "not_supported_yet"},
+                          summary=f"No floor of this building extracts {noun(subject, 2)}.", ms=_ms(t0))
+    summary = f"{total} {noun(subject, total)} across {counted} floors ({'; '.join(parts)})."
+    if missing:
+        summary += f" Not counted: {', '.join(missing)}."
+    return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                      kind="count", subject=subject, value=float(total), numbers=[float(total)],
+                      boxes=boxes, rooms=rooms, summary=summary, ms=_ms(t0),
+                      meta={"floors_counted": counted, "floors_missing": missing})
+
+
+def _box_on_sibling_floors(d: LoadedDrawing, subject: str, raw: dict) -> dict:
+    """A whole-building IFC count lists its elements by GlobalId without boxes (one drawing is one storey). When
+    the building's other storeys are library drawings too (`ifc-<model>--<storey>`), each element is boxed on the
+    storey drawing whose evidence holds it (matched by the GUID in the box note), tagged with that drawing's id.
+    Elements no storey drawing boxes stay as rows. The count itself is unchanged."""
+    ev = raw.get("evidence") or {}
+    rows = ev.get("rows") or []
+    if ev.get("boxes") or not rows or d.registry is None or "--" not in d.id:
+        return raw
+    stem = d.id.split("--", 1)[0]
+    by_guid: dict[str, tuple[str, dict]] = {}
+    for sid in d.registry.library_ids():
+        if not sid.startswith(stem + "--"):
+            continue
+        sd = d.registry.get(sid)
+        for b in ((sd.drawing.get("evidence") or {}).get(subject) or []) if sd is not None else []:
+            m = re.search(r"\bIFC (\S+)$", b.get("note") or "")
+            if m:
+                by_guid[m.group(1)] = (sid, b)
+    boxes, left = [], []
+    for r in rows:
+        hit = by_guid.get(str(r.get("id")))
+        if hit is None:
+            left.append(r)
+            continue
+        sid, b = hit
+        # Box ids repeat per storey (win-01 on every floor): qualify them with the storey.
+        boxes.append({**b, "id": f"{b['id']}@{sid.split('--', 1)[1]}", "drawing_id": sid})
+    if not boxes:
+        return raw
+    floors = len({b["drawing_id"] for b in boxes})
+    summary = raw.get("summary", "")
+    summary += (f" {len(boxes)} of them boxed on their storey plans ({floors} floors)"
+                + (f"; {len(left)} have no box." if left else "."))
+    return {**raw, "evidence": {**ev, "boxes": boxes, "rows": left}, "summary": summary}
 
 
 def count_rooms_labelled(d: LoadedDrawing, label: str, scope: dict | None = None) -> ToolResult:

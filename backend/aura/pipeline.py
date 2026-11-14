@@ -959,8 +959,10 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     question = req.question.strip()
     scope_dump = req.scope.model_dump(exclude_none=True) if req.scope else None
     ov_dump = [o.model_dump() for o in req.overrides] if req.overrides else None
+    # The drawings' data version is part of the key: a re-imported drawing (or any floor of an all-floors scope)
+    # must not keep answering from the old data out of the cache.
     key = (answer_key(d.id, question, scope_dump, ov_dump, req.lang_hint, models_enabled())
-           + f"|router:{ROUTER_VERSION}")
+           + f"|router:{ROUTER_VERSION}|data:{tools.data_version(d, scope_dump)}")
     prev_resp = last_turn_response(history)
     r_pre = route(question, d.ctx)
     has_followup_semantics = prev_resp is not None and (
@@ -1049,7 +1051,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         is_deictic_region = eff_scope.get("kind") == "region" and bool(DEICTIC_SIMILARITY.search(question))
 
         # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
-        if mode == "hybrid" and not is_project and not has_followup_semantics:
+        # A count across a building's floors is exact too (each floor counted, then summed): no model needed.
+        exact_project = is_project and r.intent == "count"
+        if mode == "hybrid" and (not is_project or exact_project) and not has_followup_semantics:
             if (indexed and r.intent in (
                     "count", "area", "quantity", "find_text", "room_rank", "adjacent")) or (
                     # Detected image/PDF page: door/window counts (and show/list variants) come from

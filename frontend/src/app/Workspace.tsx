@@ -84,8 +84,19 @@ export default function Workspace() {
     return () => actions().stopLoading()
   }, [drawingId])
 
+  // Switching to a cached floor of the same building swaps in place: for the one render between the URL change
+  // and the store swap, keep the workspace (and the 3D scene) mounted instead of flashing the loading screen.
+  const siblingSwitch = useAppStore((s) => {
+    const floors = s.activeProject?.floors ?? []
+    return (
+      s.session.load.state === "ready" &&
+      !!s.drawingById[drawingId] &&
+      floors.some((f) => f.drawing_id === drawingId) &&
+      floors.some((f) => f.drawing_id === s.session.drawing.id)
+    )
+  })
   const ready =
-    load.id === drawingId && load.state === "ready" && drawing.id === drawingId
+    (load.id === drawingId && load.state === "ready" && drawing.id === drawingId) || siblingSwitch
   const readyDrawingId = ready ? drawing.id : null
   useTitle(ready ? drawing.title : "Drawing")
   const sourceKind = useAppStore((s) => (s.session.source.state === 'ready' ? s.session.source.kind : null))

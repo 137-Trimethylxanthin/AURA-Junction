@@ -39,10 +39,13 @@ export interface PlanModel {
   group: THREE.Group
   /** Footprint size in metres (x, z) and the radius used to frame the camera. */
   size: { w: number; d: number; radius: number }
+  /** Centre of the drawn content relative to the centre of the drawing frame, in metres (x, 0, z). */
+  contentCenter: THREE.Vector3
   rooms: RoomHandle[]
   setWallHeight(h: number): void
   setHighlight(state: { evidence: Set<string>; hovered: string | null; selected: string | null }): void
-  setPins(boxes: Box[]): void
+  /** Numbered pins; `numberOf` gives each box its number in the answer (default: 1..n in order). */
+  setPins(boxes: Box[], numberOf?: (b: Box, i: number) => number): void
   setLabels(on: boolean): void
   /** Hide labels that would overlap a more important one (evidence, selected, then larger rooms). */
   afterRender(camera: THREE.Camera, viewW: number, viewH: number): void
@@ -207,6 +210,7 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
     })
     const lineGeo = track(new THREE.BufferGeometry().setFromPoints(linePts))
     const lineMat = track(new THREE.LineBasicMaterial({ color: COLORS.selected, transparent: true, opacity: 0 }))
+    lineMat.userData.v3dDynamic = true // its opacity is driven by setHighlight, not by a building fade
     const outline = new THREE.LineLoop(lineGeo, lineMat)
     group.add(outline)
 
@@ -365,6 +369,7 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
   const model: PlanModel = {
     group: root,
     size: { w, d, radius: Math.hypot(w, d) / 2 },
+    contentCenter: new THREE.Vector3(center.x, 0, center.z),
     rooms,
     toWorld,
     setWallHeight(h) {
@@ -396,8 +401,8 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
         r.label.element.classList.toggle('is-selected', selected === id)
       }
     },
-    setPins(boxes) {
-      const key = boxes.map((b) => b.id).join('|')
+    setPins(boxes, numberOf) {
+      const key = boxes.map((b, i) => `${b.id}#${numberOf ? numberOf(b, i) : i + 1}`).join('|')
       if (key === pinKey) return
       pinKey = key
       clearPins()
@@ -410,12 +415,13 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
         const stem = new THREE.Mesh(stemGeo, pinMat)
         const el = document.createElement('div')
         el.className = 'v3d-pin'
-        el.textContent = String(i + 1)
+        el.textContent = String(numberOf ? numberOf(b, i) : i + 1)
         el.title = b.id
         const badge = new CSS2DObject(el)
         pin.add(ring, stem, badge)
         pin.userData.place = (h: number) => {
-          const top = Math.max(h, 1) + 0.5
+          // Just above the walls: in the exploded stack (low walls) the badge must read as this floor's, not the next.
+          const top = Math.max(h, 0.6) + 0.35
           stem.scale.y = top
           stem.position.y = top / 2
           badge.position.y = top + 0.15

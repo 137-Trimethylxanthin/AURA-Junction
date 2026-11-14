@@ -984,6 +984,11 @@ const uiEn = {
   v3d_close: "Close",
   v3d_bad_file: "That file isn’t an image this browser can open.",
   v3d_evidence: "Answer evidence: {n}",
+  v3d_floors: "Floors",
+  v3d_floor_up: "Floor up",
+  v3d_floor_down: "Floor down",
+  v3d_all_floors: "All {n} floors",
+  v3d_hint_stack: "Click a floor to step inside · drag to orbit",
 }
 export type UiKey = keyof typeof uiEn
 type UiDict = Record<UiKey, string>
@@ -1321,6 +1326,11 @@ const uiFr: UiDict = {
   v3d_close: "Fermer",
   v3d_bad_file: "Ce fichier n’est pas une image lisible par ce navigateur.",
   v3d_evidence: "Preuves de la réponse : {n}",
+  v3d_floors: "Étages",
+  v3d_floor_up: "Étage supérieur",
+  v3d_floor_down: "Étage inférieur",
+  v3d_all_floors: "Les {n} étages",
+  v3d_hint_stack: "Cliquez sur un étage pour y entrer · glisser pour tourner",
 }
 
 const uiFi: UiDict = {
@@ -1656,6 +1666,11 @@ const uiFi: UiDict = {
   v3d_close: "Sulje",
   v3d_bad_file: "Tämä tiedosto ei ole kuva, jonka selain voi avata.",
   v3d_evidence: "Vastauksen todisteet: {n}",
+  v3d_floors: "Kerrokset",
+  v3d_floor_up: "Kerros ylös",
+  v3d_floor_down: "Kerros alas",
+  v3d_all_floors: "Kaikki {n} kerrosta",
+  v3d_hint_stack: "Napsauta kerrosta astuaksesi sisään · vedä kiertääksesi",
 }
 
 const uiDe: UiDict = {
@@ -1991,6 +2006,11 @@ const uiDe: UiDict = {
   v3d_close: "Schließen",
   v3d_bad_file: "Diese Datei ist kein Bild, das dieser Browser öffnen kann.",
   v3d_evidence: "Belege der Antwort: {n}",
+  v3d_floors: "Stockwerke",
+  v3d_floor_up: "Stockwerk hoch",
+  v3d_floor_down: "Stockwerk runter",
+  v3d_all_floors: "Alle {n} Stockwerke",
+  v3d_hint_stack: "Stockwerk anklicken zum Betreten · ziehen zum Drehen",
 }
 
 export const UI: Record<Lang, UiDict> = { en: uiEn, fr: uiFr, fi: uiFi, de: uiDe }

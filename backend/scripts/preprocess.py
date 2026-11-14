@@ -193,6 +193,30 @@ def ifc_credit(data: Path, model: str) -> dict:
     raise SystemExit(f'no licence row for {model}.ifc')
 
 
+def attach_original(drawing: dict, model, data: Path, model_name: str, out_dir: Path,
+                    maps: dict | None = None) -> str:
+    """Write original.png from the dataset's own plan sheet of this storey. Aligned from this storey's matched
+    elements; failing that, with the mapping of an exactly aligned sibling storey (`maps`, per model)."""
+    from aura.render.ifc_original import find_sheet, render_original
+
+    sheet = find_sheet(data / 'data' / IFC_ROOT, model_name, model.storey or '')
+    if sheet is None:
+        return 'no dataset sheet'
+    try:
+        img, fit = render_original(model, *sheet, sibling_map=(maps or {}).get(model_name))
+    except ValueError as e:
+        return f'not aligned ({e})'
+    img.save(out_dir / 'original.png', optimize=True)
+    drawing['images']['original'] = f"{drawing['images']['rebuilt'].rsplit('/', 1)[0]}/original.png"
+    exact = fit['method'] == 'fit' and fit['residual_px'] <= 2
+    drawing['images']['original_alignment'] = 'exact' if exact else 'approximate'
+    if exact and maps is not None:
+        maps.setdefault(model_name, fit['model_map'])
+    how = (f"{fit['matched']} elements, worst {fit['residual_px']} px" if fit['method'] == 'fit'
+           else f"mapping of a sibling storey, checked on {fit['matched']} elements")
+    return f"original from {sheet[0].name} ({how})"
+
+
 def process_ifc(entry: dict, data: Path, qlines) -> dict:
     model = ifc.load(data / 'data' / IFC_ROOT / f"{entry['model']}.ifc", storey=entry['storey'],
                      drawing_id=entry['id'])
@@ -208,6 +232,7 @@ def process_ifc(entry: dict, data: Path, qlines) -> dict:
     ev = {s: ifc.boxes(model, s) or [] for s in ifc.BOX_SUBJECTS}
     drawing['evidence'] = ev
     drawing['gold'] = [{k: v for k, v in g.items() if k not in ('solver_family', 'solver_value', 'match')} for g in gold]
+    print(f"  {model.id}: {attach_original(drawing, model, data, entry['model'], d)}")
     write_json(d / 'drawing.json', drawing)
     (d / 'plan.svg').write_text(rifc.render_svg(model), encoding='utf-8')
     write_json(d / 'model.json', model.to_json())
