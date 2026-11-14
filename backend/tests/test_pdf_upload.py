@@ -312,3 +312,23 @@ def test_pdf_detection_failure_leaves_the_upload_ready_and_not_indexed(tmp_path)
             assert c.get(f"/drawings/{fid}/status").json()["status"] == "ready"
             assert c.get(f"/drawings/{fid}").json()["capabilities"] == []
             assert c.get(f"/drawings/{fid}/original.png").status_code == 200
+
+
+def test_detected_pdf_answers_doors_and_windows_at_zero_calls_in_hybrid_mode(tmp_path):
+    """Hybrid mode with a sidecar configured: detected door/window questions never reach it."""
+    from tests.test_agent_client import MockSidecarState, make_hybrid_app
+
+    sc = MockSidecarState()
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc)) as c:
+        c.app.state.jobs.after_raster = _fake_detect_hook([])
+        did = upload_pdf(c, make_pdf(["Erdgeschoss EG"]), "Haus.pdf").json()["drawing_id"]
+        assert wait_status(c, did)["status"] == "ready"
+        for q, subject, n in (("How many doors are there?", "door", 2),
+                              ("Highlight all the windows", "window", 1),
+                              ("list the doors", "door", 2)):
+            b = c.post("/ask", json={"drawing_id": did, "question": q}).json()
+            assert b["answer"] == {"kind": "count", "value": n, "subject": subject}, (q, b)
+            assert b["method"] == "vision" and b["calls"] == 0 and b.get("route") != "agent"
+            assert len(b["evidence"]["boxes"]) == n
+            assert "Model estimate" in next(x for x in b["trace"] if x["id"] == "answer")["body"]
+        assert sc.runs == []  # the sidecar was never asked

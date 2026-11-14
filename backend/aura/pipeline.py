@@ -1039,8 +1039,12 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
         # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
         if mode == "hybrid" and not is_project and not has_followup_semantics:
-            if dkind in ("cad_dxf", "ifc") and r.intent in (
-                    "count", "area", "quantity", "find_text", "room_rank", "adjacent"):
+            if (dkind in ("cad_dxf", "ifc") and r.intent in (
+                    "count", "area", "quantity", "find_text", "room_rank", "adjacent")) or (
+                    # Detected image/PDF page: door/window counts (and show/list variants) come from
+                    # raster.json at 0 calls, as a model estimate; never the sidecar.
+                    isinstance(d.engine, tools.RasterEngine) and r.intent == "count"
+                    and d.engine.supports(r.subject or "")):
                 tag = ("router · reference" if ref else
                        "router · follow-up" if "follow-up" in r.matched else "router")
                 exact_built, ok_exact = await _execute_exact_intent(
