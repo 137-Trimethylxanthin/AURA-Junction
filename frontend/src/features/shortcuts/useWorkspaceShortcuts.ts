@@ -1,13 +1,12 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import {
-  isProjectBundle,
   type Drawing,
   type Lang,
   type ProjectBundle,
   type ProjectFloor,
 } from '@/api/contract'
-import { listDrawings, request } from '@/api/client'
+import { listDrawings, listProjects } from '@/api/client'
 import { apiBase, inferFloorOrderAndLabel, myProjects } from '@/api/library'
 import { useDraft } from '@/features/chat/draft'
 import { isEditable, overlayOpen, shouldIgnoreShortcut } from '@/features/plan/shared'
@@ -95,13 +94,7 @@ export async function hydrateActiveProject(opts: {
   if (sourceKind === 'api' && base) {
     let srvProjects: ProjectBundle[] = []
     try {
-      const body = await request({ baseUrl: base }, '/projects', { method: 'GET', signal }, 8_000)
-      const list = Array.isArray(body)
-        ? body
-        : body && typeof body === 'object' && Array.isArray((body as { projects?: unknown }).projects)
-          ? (body as { projects: unknown[] }).projects
-          : []
-      srvProjects = list.filter(isProjectBundle)
+      srvProjects = await listProjects({ baseUrl: base }, { timeoutMs: 8_000 })
       if (srvProjects.length > 0 && !signal?.aborted) myProjects.syncFromServer(srvProjects)
     } catch {
       if (signal?.aborted) return null

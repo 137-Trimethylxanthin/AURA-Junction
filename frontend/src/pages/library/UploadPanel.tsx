@@ -21,8 +21,8 @@ import {
   Trash2Icon,
   TriangleAlertIcon,
 } from "lucide-react"
-import { ApiError, deleteDrawing, getDrawingStatus } from "@/api/client"
-import { isProjectBundle, type DrawingStatus } from "@/api/contract"
+import { ApiError, deleteDrawing, getDrawingStatus, listProjects } from "@/api/client"
+import type { DrawingStatus } from "@/api/contract"
 import {
   ACCEPT,
   UPLOAD_CAPS,
@@ -107,17 +107,8 @@ const rejectedCount = (r: { n?: number }[]) => r.reduce((k, x) => k + (x.n ?? 1)
 /** Discover server-created multi-page PDF projects & sibling drawings once a PDF upload finishes processing. */
 async function discoverServerProjects(base: string, onProjectsDiscovered?: () => void) {
   try {
-    const resp = await fetch(`${base.replace(/\/+$/, "")}/projects`)
-    if (resp.ok) {
-      const body: unknown = await resp.json()
-      const projects =
-        body && typeof body === "object" && Array.isArray((body as { projects?: unknown }).projects)
-          ? (body as { projects: unknown[] }).projects.filter(isProjectBundle)
-          : []
-      if (projects.length > 0) {
-        myProjects.syncFromServer(projects)
-      }
-    }
+    const projects = await listProjects({ baseUrl: base })
+    if (projects.length > 0) myProjects.syncFromServer(projects)
   } catch {
     /* ignore network / 404 / storage errors */
   } finally {

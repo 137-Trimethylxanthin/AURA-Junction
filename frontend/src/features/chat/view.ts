@@ -455,7 +455,7 @@ export interface SlashCommandSpec {
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
-  { id: 'clear', cmd: '/clear', aliases: ['reset'], description: 'Clear conversation (with Undo)' },
+  { id: 'clear', cmd: '/clear', aliases: ['reset'], description: 'Clear conversation (with Undo)', descriptionKey: 'slash_clear_desc' },
   {
     id: 'new',
     cmd: '/new',
@@ -476,28 +476,30 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     argHint: '[by]',
     aliases: ['colour', 'colors'],
     description: 'Color-code apartments or prior chat items',
+    descriptionKey: 'slash_color_desc',
     acceptsArgs: true,
   },
-  { id: 'stairs', cmd: '/stairs', aliases: ['stair'], description: 'Show all stairs and where they lead in colors' },
-  { id: 'summary', cmd: '/summary', aliases: ['breakdown'], description: 'Complete breakdown of rooms, area, doors & windows' },
-  { id: 'all-floors', cmd: '/all-floors', aliases: ['floors'], description: 'Toggle cross-plan matching across all floors' },
-  { id: 'export', cmd: '/export', aliases: ['csv'], description: 'Download active answer evidence as CSV' },
-  { id: 'trace', cmd: '/trace', aliases: ['tree'], description: 'Toggle reasoning tree panel' },
-  { id: 'compare', cmd: '/compare', aliases: ['diff'], description: 'Toggle original vs rebuilt comparison' },
-  { id: 'fit', cmd: '/fit', aliases: [], description: 'Reset drawing zoom to 100 %' },
+  { id: 'stairs', cmd: '/stairs', aliases: ['stair'], description: 'Show all stairs and where they lead in colors', descriptionKey: 'slash_stairs_desc' },
+  { id: 'summary', cmd: '/summary', aliases: ['breakdown'], description: 'Complete breakdown of rooms, area, doors & windows', descriptionKey: 'slash_summary_desc' },
+  { id: 'all-floors', cmd: '/all-floors', aliases: ['floors'], description: 'Toggle cross-plan matching across all floors', descriptionKey: 'slash_all_floors_desc' },
+  { id: 'export', cmd: '/export', aliases: ['csv'], description: 'Download active answer evidence as CSV', descriptionKey: 'slash_export_desc' },
+  { id: 'trace', cmd: '/trace', aliases: ['tree'], description: 'Toggle reasoning tree panel', descriptionKey: 'slash_trace_desc' },
+  { id: 'compare', cmd: '/compare', aliases: ['diff'], description: 'Toggle original vs rebuilt comparison', descriptionKey: 'slash_compare_desc' },
+  { id: 'fit', cmd: '/fit', aliases: [], description: 'Reset drawing zoom to 100 %', descriptionKey: 'slash_fit_desc' },
   {
     id: 'zoom',
     cmd: '/zoom',
     argHint: '<100..450>',
     aliases: [],
     description: 'Set drawing zoom percentage (100–450 %)',
+    descriptionKey: 'slash_zoom_desc',
     acceptsArgs: true,
   },
-  { id: 'select', cmd: '/select', aliases: [], description: 'Switch to Select tool' },
-  { id: 'mark', cmd: '/mark', aliases: [], description: 'Switch to Mark area tool' },
-  { id: 'whatif', cmd: '/whatif', aliases: ['what-if'], description: 'Switch to What-if room resize tool' },
-  { id: 'undo', cmd: '/undo', aliases: [], description: 'Undo last evidence toggle' },
-  { id: 'help', cmd: '/help', aliases: ['shortcuts', '?'], description: 'Open keyboard shortcuts cheatsheet' },
+  { id: 'select', cmd: '/select', aliases: [], description: 'Switch to Select tool', descriptionKey: 'slash_select_desc' },
+  { id: 'mark', cmd: '/mark', aliases: [], description: 'Switch to Mark area tool', descriptionKey: 'slash_mark_desc' },
+  { id: 'whatif', cmd: '/whatif', aliases: ['what-if'], description: 'Switch to What-if room resize tool', descriptionKey: 'slash_whatif_desc' },
+  { id: 'undo', cmd: '/undo', aliases: [], description: 'Undo last evidence toggle', descriptionKey: 'slash_undo_desc' },
+  { id: 'help', cmd: '/help', aliases: ['shortcuts', '?'], description: 'Open keyboard shortcuts cheatsheet', descriptionKey: 'slash_help_desc' },
 ]
 
 export type ParsedSlashAction =
@@ -507,7 +509,7 @@ export type ParsedSlashAction =
     }
   | { kind: 'client'; id: 'zoom'; zoom: number }
   | { kind: 'prompt'; id: 'color' | 'stairs' | 'summary'; prompt: string }
-  | { kind: 'invalid'; id: SlashCommandId; message: string }
+  | { kind: 'invalid'; id: SlashCommandId; message: string; messageKey?: UiKey }
 
 /** Filter slash palette candidates while the composer starts with `/` and has no newline. */
 export function filterSlashCommands(input: string): SlashCommandSpec[] {
@@ -555,7 +557,7 @@ export function resolveSlashCommand(input: string, ctx: { hasTurns: boolean }): 
       if (!arg) return { kind: 'client', id: 'fit' }
       const rawNum = Number(arg.replace(/%$/, '').trim())
       if (!Number.isFinite(rawNum)) {
-        return { kind: 'invalid', id: 'zoom', message: 'Usage: /zoom <100..450>' }
+        return { kind: 'invalid', id: 'zoom', message: 'Usage: /zoom <100..450>', messageKey: 'slash_zoom_usage' }
       }
       const clamped = Math.min(450, Math.max(100, Math.round(rawNum)))
       return { kind: 'client', id: 'zoom', zoom: clamped }
@@ -588,3 +590,22 @@ export function resolveSlashCommand(input: string, ctx: { hasTurns: boolean }): 
   }
 }
 
+
+export type AgentFailure = 'unavailable' | 'timeout' | 'error'
+
+/**
+ * A deep-agent run that failed (service down, deadline, run error) arrives as a `low_confidence` abstain with no
+ * estimate. Prefers an explicit `agent_failure` field when the backend sends one; otherwise reads the backend's
+ * fixed "look" trace wording. Never returns the raw text: the card shows its own translated copy.
+ */
+export function agentFailure(resp: AskResponse): AgentFailure | null {
+  const a = resp.answer
+  if (a.kind !== 'abstain' || a.reason !== 'low_confidence' || resp.estimate) return null
+  const explicit = (resp as { agent_failure?: unknown }).agent_failure
+  if (explicit === 'unavailable' || explicit === 'timeout' || explicit === 'error') return explicit
+  const look = resp.trace.find((n) => n.id === 'look')?.body ?? ''
+  if (/service is unavailable/i.test(look)) return 'unavailable'
+  if (/did not finish in/i.test(look)) return 'timeout'
+  if (/could not complete this run/i.test(look)) return 'error'
+  return null
+}

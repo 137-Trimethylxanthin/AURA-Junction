@@ -109,6 +109,16 @@ export const myUploads = {
 // ---- multi-plan house / project bundles & floor auto-matching (1.2) ---------------------------------------
 
 const PROJECTS_KEY = 'aura.projects'
+/** Field on a stored bundle holding the ownership token the server returned when it was created. */
+const PROJECT_TOKEN_FIELD = 'owner_token'
+/** Header the backend reads the project ownership token from; rename here once the backend fixes it. */
+export const PROJECT_TOKEN_HEADER = 'x-project-token'
+const tokenField = (p: ProjectBundle): string | undefined => {
+  const v = (p as unknown as Record<string, unknown>)[PROJECT_TOKEN_FIELD]
+  return typeof v === 'string' && v ? v : undefined
+}
+const withToken = (p: ProjectBundle, token: string | undefined): ProjectBundle =>
+  token ? ({ ...p, [PROJECT_TOKEN_FIELD]: token } as ProjectBundle) : p
 const UNGROUPED_PROJECTS_KEY = 'aura.projects.ungrouped'
 
 const projectListeners = new Set<() => void>()
@@ -516,10 +526,71 @@ export const myProjects = {
     }
     const ungrouped = readUngroupedIds()
     if (ungrouped.delete(normalized.id)) writeUngroupedIds(ungrouped)
-    const rest = myProjects.list().filter((p) => p.id !== normalized.id)
-    write(PROJECTS_KEY, JSON.stringify([normalized, ...rest]))
+    const all = myProjects.list()
+    const prev = all.find((p) => p.id === normalized.id)
+    const kept = tokenField(normalized) ? normalized : withToken(normalized, prev && tokenField(prev))
+    const rest = all.filter((p) => p.id !== normalized.id)
+    write(PROJECTS_KEY, JSON.stringify([kept, ...rest]))
     notifyProjects()
-    return normalized
+    return kept
+  },
+
+  /** The ownership token stored with a project (returned by the server when it was created). */
+  tokenOf(id: string): string | undefined {
+    const p = myProjects.get(id)
+    return p ? tokenField(p) : undefined
+  },
+
+  /** Keep the token the server returned for a project alongside it in `aura.projects`. */
+  setToken(id: string, token: string | undefined) {
+    if (!token) return
+    const all = myProjects.list()
+    if (!all.some((p) => p.id === id)) return
+    write(PROJECTS_KEY, JSON.stringify(all.map((p) => (p.id === id ? withToken(p, token) : p))))
+  },
+
+  /**
+   * Ownership headers for updating or deleting a project on the server: its stored token, else the
+   * delete token of one of this browser's uploads among its floors. Empty when neither is known.
+   */
+  authHeaders(bundle: ProjectBundle): Record<string, string> {
+    const token = tokenField(bundle) ?? myProjects.tokenOf(bundle.id)
+    if (token) return { [PROJECT_TOKEN_HEADER]: token }
+    const uploads = new Map(myUploads.list().map((u) => [u.id, u.delete_token]))
+    const owned = bundle.floors.map((f) => uploads.get(f.drawing_id)).find(Boolean)
+    return owned ? { 'x-delete-token': owned } : {}
+  },
+
+  /**
+   * Drop floors whose drawing is gone (expired uploads 404 after 24 h) and any project left with
+   * fewer than 2 floors. Returns how many projects changed.
+   */
+  pruneFloors(missing: Iterable<string>): number {
+    const gone = new Set(missing)
+    if (gone.size === 0) return 0
+    let changed = 0
+    const next: ProjectBundle[] = []
+    for (const p of myProjects.list()) {
+      const floors = p.floors.filter((f) => !gone.has(f.drawing_id))
+      if (floors.length === p.floors.length) {
+        next.push(p)
+        continue
+      }
+      changed++
+      if (floors.length >= 2) next.push({ ...p, floors })
+    }
+    if (changed) {
+      write(PROJECTS_KEY, JSON.stringify(next))
+      notifyProjects()
+    }
+    return changed
+  },
+
+  /** Check every stored floor once with `isMissing` (true only for a definite 404) and prune the gone ones. */
+  async pruneExpired(isMissing: (drawingId: string) => Promise<boolean>): Promise<number> {
+    const ids = [...new Set(myProjects.list().flatMap((p) => p.floors.map((f) => f.drawing_id)))]
+    const results = await Promise.all(ids.map(async (id) => ((await isMissing(id).catch(() => false)) ? id : null)))
+    return myProjects.pruneFloors(results.filter((x): x is string => x !== null))
   },
 
   /** Convenience builder for grouping 2+ plans into a named user project bundle. */
@@ -563,7 +634,7 @@ export const myProjects = {
       if (sp.auto_matched && ungrouped.has(sp.id)) continue
       const existing = localById.get(sp.id)
       if (existing && !existing.auto_matched) continue
-      const normalized: ProjectBundle = { ...sp, floors: sortProjectFloors(sp.floors) }
+      const normalized = withToken({ ...sp, floors: sortProjectFloors(sp.floors) }, existing && tokenField(existing))
       if (!existing || JSON.stringify(existing) !== JSON.stringify(normalized)) {
         localById.set(sp.id, normalized)
         changed = true

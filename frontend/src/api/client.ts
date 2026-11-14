@@ -235,9 +235,38 @@ export function isProjectBundle(v: unknown): v is ProjectBundle {
   )
 }
 
+/**
+ * Per-call extras for the `/projects` calls. Ownership headers (a project token, an upload's
+ * `x-delete-token`) go in `headers`, so adding one is a one-line change at the call site.
+ */
+export interface ProjectCallOptions {
+  timeoutMs?: number
+  headers?: Record<string, string>
+}
+
+/** A saved project plus the ownership token the server returned with it, when it returns one. */
+export interface SavedProject {
+  project: ProjectBundle
+  token?: string
+}
+
+/** Response fields that may carry the project's ownership token (none is part of the bundle itself). */
+const PROJECT_TOKEN_FIELDS = ['token', 'owner_token', 'project_token'] as const
+
+const withoutTokens = (v: Record<string, unknown>): Record<string, unknown> => {
+  const out = { ...v }
+  for (const k of PROJECT_TOKEN_FIELDS) delete out[k]
+  return out
+}
+
 /** `GET /projects` (1.2): multi-plan house / project bundles stored or auto-grouped by the server. */
-export async function listProjects(opts: ClientOptions, timeoutMs = 15_000): Promise<ProjectBundle[]> {
-  const body = await request(opts, '/projects', { method: 'GET' }, timeoutMs)
+export async function listProjects(opts: ClientOptions, call: ProjectCallOptions = {}): Promise<ProjectBundle[]> {
+  const body = await request(
+    opts,
+    '/projects',
+    { method: 'GET', headers: { ...presenterHeader(), ...call.headers } },
+    call.timeoutMs ?? 15_000,
+  )
   if (Array.isArray(body)) return body.filter(isProjectBundle)
   if (isObjRecord(body)) {
     if (typeof body.contract_version === 'string') checkVersion(body.contract_version, body)
@@ -247,30 +276,41 @@ export async function listProjects(opts: ClientOptions, timeoutMs = 15_000): Pro
 }
 
 /** `POST /projects` (1.2): create or update a multi-plan house / project bundle. */
-export async function saveProject(opts: ClientOptions, bundle: ProjectBundle, timeoutMs = 15_000): Promise<ProjectBundle> {
+export async function saveProject(
+  opts: ClientOptions,
+  bundle: ProjectBundle,
+  call: ProjectCallOptions = {},
+): Promise<SavedProject> {
   const body = await request(
     opts,
     '/projects',
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...presenterHeader() },
-      body: JSON.stringify(bundle),
+      headers: { 'content-type': 'application/json', ...presenterHeader(), ...call.headers },
+      // Client-side fields (a stored token) never go into the body.
+      body: JSON.stringify(withoutTokens(bundle as unknown as Record<string, unknown>)),
     },
-    timeoutMs,
+    call.timeoutMs ?? 15_000,
   )
   if (isObjRecord(body) && typeof body.contract_version === 'string') checkVersion(body.contract_version, body)
+  const outer = isObjRecord(body) ? body : {}
   const candidate = isObjRecord(body) && 'project' in body ? body.project : body
   if (!isProjectBundle(candidate))
     throw new ApiError('The saved project does not match the contract', 200, 'invalid_response', body)
-  return candidate
+  const inner = candidate as unknown as Record<string, unknown>
+  const token = [...PROJECT_TOKEN_FIELDS.map((k) => outer[k]), ...PROJECT_TOKEN_FIELDS.map((k) => inner[k])].find(
+    (v): v is string => typeof v === 'string' && v.length > 0,
+  )
+  const project = withoutTokens(inner) as unknown as ProjectBundle
+  return token ? { project, token } : { project }
 }
 
 /** `DELETE /projects/:id` (1.2): ungroup/delete a server-stored project bundle. */
-export async function deleteProject(opts: ClientOptions, id: string, timeoutMs = 15_000): Promise<void> {
+export async function deleteProject(opts: ClientOptions, id: string, call: ProjectCallOptions = {}): Promise<void> {
   await request(
     opts,
     `/projects/${encodeURIComponent(id)}`,
-    { method: 'DELETE', headers: { ...presenterHeader() } },
-    timeoutMs,
+    { method: 'DELETE', headers: { ...presenterHeader(), ...call.headers } },
+    call.timeoutMs ?? 15_000,
   )
 }

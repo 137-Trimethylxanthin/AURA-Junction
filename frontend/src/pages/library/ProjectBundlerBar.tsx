@@ -19,6 +19,7 @@ import type {
   ProjectBundle,
   ProjectFloor,
 } from "@/api/contract"
+import { deleteProject, saveProject } from "@/api/client"
 import {
   displayDrawingTitle,
   inferFloorOrderAndLabel,
@@ -197,21 +198,17 @@ function buildingStemOf(plan: SelectablePlan): { key: string; title: string } | 
 
 function syncProjectToServer(base: string | null, bundle: ProjectBundle) {
   if (!base) return
-  void fetch(`${base.replace(/\/+$/, "")}/projects`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(bundle),
-  }).catch(() => {
-    /* localStorage remains authoritative when offline or before /projects is enabled */
-  })
+  void saveProject({ baseUrl: base }, bundle, { headers: myProjects.authHeaders(bundle) })
+    .then(({ token }) => myProjects.setToken(bundle.id, token))
+    .catch(() => {
+      /* localStorage remains authoritative when offline or before /projects is enabled */
+    })
 }
 
-function deleteProjectOnServer(base: string | null, projectId: string) {
+/** Takes the bundle, not its id: it is already removed locally, and its stored token rides along on it. */
+function deleteProjectOnServer(base: string | null, bundle: ProjectBundle) {
   if (!base) return
-  void fetch(
-    `${base.replace(/\/+$/, "")}/projects/${encodeURIComponent(projectId)}`,
-    { method: "DELETE" }
-  ).catch(() => {
+  void deleteProject({ baseUrl: base }, bundle.id, { headers: myProjects.authHeaders(bundle) }).catch(() => {
     /* ignore offline / 404 */
   })
 }
@@ -386,7 +383,7 @@ export function ProjectBundlerBar({
   const handleUngroup = useCallback(
     (bundle: ProjectBundle) => {
       myProjects.remove(bundle.id)
-      deleteProjectOnServer(base, bundle.id)
+      deleteProjectOnServer(base, bundle)
       actions().setActiveProject(null)
       if (editingId === bundle.id) resetBuilder()
       toast.success(tu("proj_ungrouped_toast", { title: bundle.title }))

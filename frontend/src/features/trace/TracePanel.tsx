@@ -2,9 +2,12 @@ import { useEffect, useMemo, useRef } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { ChevronLeftIcon } from 'lucide-react'
 import type { TraceKind, TraceNode } from '@/api/contract'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useDraft } from '@/features/chat/draft'
+import { useUi } from '@/i18n/uiLang'
 import { cn } from '@/lib/utils'
+import { traceDetail } from './detail'
 import { actions, appStore, selectActiveTurn, useAppStore } from '@/store'
 
 const KIND: Record<TraceKind, { dot: string; card: string; conf: string }> = {
@@ -15,6 +18,9 @@ const KIND: Record<TraceKind, { dot: string; card: string; conf: string }> = {
 }
 
 const KIND_LABEL: Record<TraceKind, string> = { exact: 'Exact step', model: 'Model step', warn: 'Warning', info: 'Info' }
+
+/** Unknown node kinds (newer backends) render as plain info steps. */
+const kindOf = (k: string): TraceKind => (k in KIND ? (k as TraceKind) : 'info')
 
 /** Depth-first order with each node's depth, following `parent` links (unknown parents → roots). */
 function flattenTrace(nodes: TraceNode[]): { node: TraceNode; depth: number }[] {
@@ -52,6 +58,7 @@ export function TracePanel() {
     const u = turn ? s.turns.find((x) => x.id === turn.replyTo) : undefined
     return u && u.role === 'user' ? u.text : ''
   })
+  const { tu } = useUi()
   const reduce = useReducedMotion()
   const back = useRef<HTMLButtonElement>(null)
   // A finished answer shows its full trace; a streaming one shows its tool calls as they arrive.
@@ -95,7 +102,7 @@ export function TracePanel() {
 
   return (
     <motion.section
-      aria-label="Reasoning tree"
+      aria-label={tu('trace_region')}
       data-trace-panel
       initial={reduce ? { opacity: 0 } : { opacity: 0, x: 24 }}
       animate={reduce ? { opacity: 1 } : { opacity: 1, x: 0 }}
@@ -105,12 +112,12 @@ export function TracePanel() {
       className={cn('flex min-h-0 flex-1 flex-col', !traceOpen && 'pointer-events-none!')}
     >
       <header className="flex items-center gap-2 border-b px-2 py-2">
-        <Button ref={back} variant="ghost" onClick={close} aria-label="Back to chat (Escape)">
+        <Button ref={back} variant="ghost" onClick={close} aria-label={tu('trace_back')}>
           <ChevronLeftIcon data-icon="inline-start" />
-          Chat
+          {tu('trace_chat')}
         </Button>
         <div className="flex min-w-0 flex-1 flex-col">
-          <h2 className="text-sm font-semibold">Reasoning tree</h2>
+          <h2 className="text-sm font-semibold">{tu('trace_region')}</h2>
           <p className="truncate text-xs text-muted-foreground" title={question}>
             {question}
           </p>
@@ -118,10 +125,12 @@ export function TracePanel() {
       </header>
       <ol className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain p-3" onPointerLeave={(e) => e.pointerType === 'mouse' && actions().hover([])}>
         {nodes.length === 0 ? (
-          <li className="text-sm text-muted-foreground">No reasoning steps for this answer yet.</li>
+          <li className="text-sm text-muted-foreground">{tu('trace_empty')}</li>
         ) : null}
         {nodes.map(({ node, depth }) => {
-          const k = KIND[node.kind]
+          const kind = kindOf(node.kind)
+          const k = KIND[kind]
+          const detail = traceDetail(node)
           const conf = confidence(node.confidence)
           const ids = node.evidence_ids ?? []
           const light = () => actions().hover(ids)
@@ -138,13 +147,14 @@ export function TracePanel() {
               <div
                 tabIndex={0}
                 data-trace-node={node.id}
-                aria-label={`${KIND_LABEL[node.kind]}: ${node.title}. ${node.body}${ids.length ? ` Lights ${ids.length} on the plan.` : ''}`}
+                aria-label={`${detail.decision ? tu('tr_decision') : KIND_LABEL[kind]}: ${node.title}. ${node.body}${ids.length ? ` Lights ${ids.length} on the plan.` : ''}`}
                 onPointerEnter={(e) => e.pointerType === 'mouse' && light()}
                 onFocus={light}
                 onBlur={() => actions().hover([])}
                 className={cn(
                   'flex flex-col gap-1 rounded-lg border px-3 py-2.5 outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50',
                   k.card,
+                  detail.decision && 'border-primary/40',
                   ids.length > 0 && 'hover:border-info',
                 )}
               >
@@ -156,6 +166,45 @@ export function TracePanel() {
                   {conf ? <span className={cn('num text-xs font-semibold', k.conf)}>{conf}</span> : null}
                 </div>
                 <p className="text-[13px] text-foreground/85">{node.body}</p>
+                {detail.decision ? (
+                  <div className="flex flex-wrap items-center gap-1.5" data-decision>
+                    <Badge>{tu('tr_decision')}</Badge>
+                    {detail.decision.confidencePct !== undefined ? (
+                      <span className="num text-xs font-semibold text-primary">{detail.decision.confidencePct} %</span>
+                    ) : null}
+                    {detail.decision.matched ? (
+                      <Badge variant="secondary">
+                        {tu('tr_matched')}: {detail.decision.matched}
+                      </Badge>
+                    ) : null}
+                    {detail.decision.runnerUp ? (
+                      <Badge variant="outline">
+                        {tu('tr_runner_up')}: {detail.decision.runnerUp}
+                      </Badge>
+                    ) : null}
+                  </div>
+                ) : null}
+                {detail.kept !== undefined || detail.dropped !== undefined || detail.grabbed?.count !== undefined ? (
+                  <div className="flex flex-wrap items-center gap-1.5" data-counts>
+                    {detail.grabbed?.count !== undefined ? (
+                      <Badge variant="outline" className="num">
+                        {detail.grabbed.source
+                          ? tu('tr_grabbed_from', { n: detail.grabbed.count, source: detail.grabbed.source })
+                          : tu('tr_grabbed', { n: detail.grabbed.count })}
+                      </Badge>
+                    ) : null}
+                    {detail.kept !== undefined ? (
+                      <Badge variant="secondary" className="num">
+                        {tu('tr_kept', { n: detail.kept })}
+                      </Badge>
+                    ) : null}
+                    {detail.dropped !== undefined ? (
+                      <Badge variant="outline" className="num text-muted-foreground">
+                        {tu('tr_dropped', { n: detail.dropped })}
+                      </Badge>
+                    ) : null}
+                  </div>
+                ) : null}
                 {node.tool ? (
                   <p className="num text-xs text-muted-foreground" data-tool={node.tool.name}>
                     {node.tool.name}

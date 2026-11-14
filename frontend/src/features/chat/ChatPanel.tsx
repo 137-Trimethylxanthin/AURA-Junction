@@ -94,7 +94,7 @@ function useChatSideEffects() {
       for (const t of s.turns) {
         if (t.role === "agent" && t.fellBack && !seenFallback.has(t.id)) {
           seenFallback.add(t.id)
-          toast("Backend unreachable. Answering from local data.", {
+          toast(tu("chat_fell_back"), {
             id: "fell-back",
             toasterId: CHAT_TOASTER,
           })
@@ -237,7 +237,7 @@ export function ChatPanel() {
           <SuggestionList />
         </div>
       ) : (
-        <ol className="flex flex-col gap-5 p-4" aria-label="Conversation">
+        <ol className="flex flex-col gap-5 p-4" aria-label={tu("shell_conversation")}>
           {pairs.map(({ user, reply }) => (
             // A new question rises in from the composer below (same path as the text it came from); fade only
             // with reduced motion. Transform/opacity only, so the scroll measurement above is unaffected.

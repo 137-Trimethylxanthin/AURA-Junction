@@ -7,7 +7,9 @@ import {
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
+  CloudOffIcon,
   SquareIcon,
+  TimerOffIcon,
   EyeIcon,
   GitBranchIcon,
   MinusIcon,
@@ -18,7 +20,7 @@ import {
 import type { Drawing, Lang } from '@/api/contract'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { t, type StringKey } from '@/i18n/strings'
+import { t, type StringKey, type UiKey } from '@/i18n/strings'
 import { fmtCount, noun } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
@@ -27,6 +29,7 @@ import {
   selectDrawing,
   selectDrawingById,
   selectFocusedGroupId,
+  selectIsPending,
   useAppStore,
   useDerived,
   type AgentTurn,
@@ -35,6 +38,7 @@ import { BoxCropThumb } from './BoxCropThumb'
 import { StreamSteps } from './StreamSteps'
 import { ListenButton } from '@/features/voice/ListenButton'
 import {
+  agentFailure,
   chips,
   evidenceGroupsOf,
   footerParts,
@@ -42,6 +46,7 @@ import {
   rows,
   sentence,
   valueParts,
+  type AgentFailure,
   type Chip,
   type EvidenceGroupItem,
   type Row,
@@ -656,11 +661,12 @@ function CardShell({
   turnId: string
   lang: Lang
 }) {
+  const { tu } = useUi()
   return (
     <article
       data-turn={turnId}
       data-active={active || undefined}
-      aria-label="Answer"
+      aria-label={tu('answer_region')}
       lang={lang}
       className={cn(
         'flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground transition-[border-color,box-shadow] duration-200',
@@ -807,6 +813,8 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
     )
 
   const a = resp.answer
+  const failure = agentFailure(resp)
+  if (failure) return <AgentFailureCard turn={turn} failure={failure} active={active} lang={lang} />
   if (a.kind === 'abstain') {
     const title =
       a.reason === 'not_on_drawing'
@@ -958,3 +966,43 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
     </CardShell>
   )
 })
+
+const FAILURE_COPY: Record<AgentFailure, { icon: typeof CloudOffIcon; title: UiKey }> = {
+  unavailable: { icon: CloudOffIcon, title: 'ag_fail_unavailable' },
+  timeout: { icon: TimerOffIcon, title: 'ag_fail_timeout' },
+  error: { icon: CircleAlertIcon, title: 'ag_fail_error' },
+}
+
+/** A deep-agent run that failed: neutral, translated copy, a Retry that re-asks, never the raw error text. */
+function AgentFailureCard({ turn, failure, active, lang }: { turn: AgentTurn; failure: AgentFailure; active: boolean; lang: Lang }) {
+  const { tu } = useUi()
+  const question = useAppStore((s) => s.turns.find((x) => x.id === turn.replyTo))
+  const pending = useAppStore(selectIsPending)
+  const { icon: Icon, title } = FAILURE_COPY[failure]
+  const retry = () => {
+    if (question?.role === 'user') void actions().ask(question.text, { scope: question.scope, overrides: question.overrides })
+  }
+  return (
+    <CardShell active={active} turnId={turn.id} lang={lang}>
+      <div className="flex items-start gap-3" data-agent-failure={failure}>
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground" aria-hidden>
+          <Icon className="size-4" />
+        </span>
+        <div className="flex min-w-0 flex-col gap-1">
+          <h3 className="text-base leading-snug font-semibold text-balance">{tu(title)}</h3>
+          <p className="text-sm text-muted-foreground">{tu('ag_fail_body')}</p>
+          <p className="text-sm text-muted-foreground">{tu('ag_fail_hint')}</p>
+        </div>
+      </div>
+      {question?.role === 'user' ? (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={retry} disabled={pending} data-agent-retry>
+            <RotateCcwIcon data-icon="inline-start" />
+            {tu('ag_fail_retry')}
+          </Button>
+        </div>
+      ) : null}
+      <Feedback turn={turn} lang={lang} />
+    </CardShell>
+  )
+}

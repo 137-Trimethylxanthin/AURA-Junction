@@ -229,7 +229,7 @@ describe('1.2 /health answerer & /projects client transport', () => {
     const listed = await listProjects({ baseUrl: 'http://x', fetch: mockFetch })
     expect(listed).toEqual([sampleBundle])
     const saved = await saveProject({ baseUrl: 'http://x', fetch: mockFetch }, sampleBundle)
-    expect(saved).toEqual(sampleBundle)
+    expect(saved).toEqual({ project: sampleBundle })
     await deleteProject({ baseUrl: 'http://x', fetch: mockFetch }, 'proj-villa-1')
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       'GET http://x/projects',

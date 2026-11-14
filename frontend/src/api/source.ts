@@ -10,6 +10,8 @@ import {
   saveProject,
   type FetchLike,
   type ProjectBundle,
+  type ProjectCallOptions,
+  type SavedProject,
 } from './client'
 import type { AnswererMode, AskRequest, AskResponse, ChatEvent, Drawing, DrawingStatusBody, Lang, Override, Scope } from './contract'
 import { ChatUnavailable, getConversation, streamChat } from './stream'
@@ -60,11 +62,11 @@ export interface Source {
   /** GET /conversations/:id (API only; null when unknown or local). */
   conversation(id: string): Promise<Conversation | null>
   /** GET /projects (1.2; empty array when local or unconfigured). */
-  projects?(): Promise<ProjectBundle[]>
+  projects?(call?: ProjectCallOptions): Promise<ProjectBundle[]>
   /** POST /projects (1.2; API only). */
-  saveProject?(bundle: ProjectBundle): Promise<ProjectBundle>
+  saveProject?(bundle: ProjectBundle, call?: ProjectCallOptions): Promise<SavedProject>
   /** DELETE /projects/:id (1.2; API only). */
-  deleteProject?(id: string): Promise<void>
+  deleteProject?(id: string, call?: ProjectCallOptions): Promise<void>
 }
 
 export interface ChatTurnRequest {
@@ -176,25 +178,25 @@ export function createSource(opts: SourceOptions = {}): Source {
       if (status.kind !== 'api' || !baseUrl) return null
       return getConversation({ baseUrl, fetch: opts.fetch }, id)
     },
-    async projects() {
+    async projects(call) {
       await init()
       if (status.kind !== 'api' || !baseUrl) return []
       try {
-        return await listProjects({ baseUrl, fetch: opts.fetch })
+        return await listProjects({ baseUrl, fetch: opts.fetch }, call)
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return []
         throw e
       }
     },
-    async saveProject(bundle) {
+    async saveProject(bundle, call) {
       await init()
       if (!baseUrl) throw new TransportError('No API configured', 'network')
-      return saveProject({ baseUrl, fetch: opts.fetch }, bundle)
+      return saveProject({ baseUrl, fetch: opts.fetch }, bundle, call)
     },
-    async deleteProject(id) {
+    async deleteProject(id, call) {
       await init()
       if (!baseUrl) throw new TransportError('No API configured', 'network')
-      await deleteProject({ baseUrl, fetch: opts.fetch }, id)
+      await deleteProject({ baseUrl, fetch: opts.fetch }, id, call)
     },
     async chat(turn, onEvent, signal) {
       await init()

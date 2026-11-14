@@ -595,6 +595,9 @@ export interface Budget {
   event_cap: number
   day_used: number
   day_cap: number
+  /** Running totals across all answers; never shown with a cap. */
+  model_calls_total?: number
+  cost_usd_total?: number
 }
 
 /** `GET /stats` body (1.1): public counters, each with its n. */

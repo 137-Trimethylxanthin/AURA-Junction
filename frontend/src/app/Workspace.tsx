@@ -2,7 +2,8 @@ import { useEffect } from "react"
 import { useUi } from "@/i18n/uiLang"
 import { Link, useParams } from "react-router"
 import { AlertTriangleIcon, CloudOffIcon, FileQuestionIcon } from "lucide-react"
-import { myProjects } from "@/api/library"
+import { ApiError, getDrawingStatus } from "@/api/client"
+import { apiBase, myProjects } from "@/api/library"
 import { AppShell } from "@/components/shell"
 import { SiteHeader } from "@/components/shell/SiteHeader"
 import { Button } from "@/components/ui/button"
@@ -43,6 +44,9 @@ import {
   type DrawingLoad,
 } from "@/store"
 
+/** Set once the stored projects were checked for expired floors on this page load. */
+let prunedThisPage = false
+
 /** /d/:drawingId: the plan + chat workspace for one drawing. */
 export default function Workspace() {
   const { drawingId = BUNDLED_DRAWING_ID } = useParams()
@@ -78,6 +82,7 @@ export default function Workspace() {
 
   const ready =
     load.id === drawingId && load.state === "ready" && drawing.id === drawingId
+  const readyDrawingId = ready ? drawing.id : null
   useTitle(ready ? drawing.title : "Drawing")
   const sourceKind = useAppStore((s) => (s.session.source.state === 'ready' ? s.session.source.kind : null))
   const traceOpen = useAppStore((s) => s.ui.traceOpen)
@@ -91,7 +96,8 @@ export default function Workspace() {
       controller = new AbortController()
       void hydrateActiveProject({
         drawingId,
-        drawing: ready ? drawing : undefined,
+        // Read at call time: depending on the drawing object re-fetched /projects and /drawings on every change.
+        drawing: ready ? actions().session.drawing : undefined,
         sourceKind,
         signal: controller.signal,
       })
@@ -102,7 +108,28 @@ export default function Workspace() {
       controller.abort()
       unsub()
     }
-  }, [drawingId, ready, drawing, sourceKind])
+  }, [drawingId, ready, readyDrawingId, sourceKind])
+
+  // Expired uploads (404 after 24 h) leave dead floor pills: prune them once per page load, and at once
+  // when the open drawing itself is gone.
+  useEffect(() => {
+    if (sourceKind !== "api" || prunedThisPage) return
+    const base = apiBase()
+    if (!base) return
+    prunedThisPage = true
+    void myProjects.pruneExpired(async (id) => {
+      if (id === BUNDLED_DRAWING_ID) return false
+      try {
+        await getDrawingStatus({ baseUrl: base }, id)
+        return false
+      } catch (e) {
+        return e instanceof ApiError && e.status === 404
+      }
+    })
+  }, [sourceKind])
+  useEffect(() => {
+    if (load.id === drawingId && load.state === "not_found") myProjects.pruneFloors([drawingId])
+  }, [load.id, load.state, drawingId])
 
   // After a reload: bring back this drawing's (or hydrated House Project's) last conversation from the API.
   useEffect(() => {

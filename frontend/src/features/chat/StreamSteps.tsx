@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Trace, TraceDescription, TraceIcon, TraceLine, TraceTitle } from '@/components/ui/trace'
 import { t } from '@/i18n/strings'
+import { tu } from '@/i18n/uiLang'
 import { fmtCount } from '@/lib/format'
 import { actions, type AgentTurn } from '@/store'
 
@@ -25,7 +26,7 @@ export function StreamSteps({ turn, lang }: { turn: AgentTurn; lang: Lang }) {
   const done = <CheckIcon className="text-foreground" />
   return (
     <div className="flex flex-col gap-3" data-stream-steps={st?.phase ?? 'sent'}>
-      <Trace aria-live="polite" aria-label="Progress">
+      <Trace aria-live="polite" aria-label={tu('steps_progress')}>
         {st?.queuePosition !== undefined && st.queuePosition > 0 ? (
           <motion.div {...enter} data-stream-queue={st.queuePosition}>
             <TraceLine status="running" className="overflow-hidden">

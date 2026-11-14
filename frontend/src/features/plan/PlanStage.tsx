@@ -14,6 +14,8 @@ import { ImageOffIcon, MousePointerClickIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { myProjects } from "@/api/library"
+import type { Drawing } from "@/api/contract"
+import type { UiKey } from "@/i18n/strings"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { cn } from "@/lib/utils"
 import { ZOOM_MAX, ZOOM_MIN, actions, selectZoom, useActiveTurn, useAppStore } from "@/store"
@@ -687,7 +689,7 @@ export function PlanStage() {
                   <img
                     key={imgKey}
                     src={drawing.images.rebuilt}
-                    alt={`${drawing.title}: floor plan rebuilt from the CAD geometry`}
+                    alt={tu(planAltKey(drawing), { title: drawing.title })}
                     draggable={false}
                     onLoad={() => setImg("ok")}
                     onError={() => setImg("error")}
@@ -854,6 +856,13 @@ export function PlanStage() {
   )
 }
 
+/** The plan image's alt text names where the drawing came from (CAD, IFC, PDF or an uploaded image). */
+function planAltKey(d: Drawing): UiKey {
+  if (d.kind === "ifc") return "alt_plan_ifc"
+  if (d.kind === "raster") return d.source_ext?.toLowerCase() === ".pdf" ? "alt_plan_pdf" : "alt_plan_raster"
+  return "alt_plan_cad"
+}
+
 function ImageState({
   state,
   onRetry,
@@ -861,13 +870,14 @@ function ImageState({
   state: "loading" | "error"
   onRetry: () => void
 }) {
+  const { tu } = useUi()
   if (state === "loading")
     return (
       <div
         className="absolute inset-0 grid place-items-center bg-muted/60"
         role="status"
       >
-        <span className="text-sm text-muted-foreground">Loading drawing…</span>
+        <span className="text-sm text-muted-foreground">{tu("plan_loading")}</span>
       </div>
     )
   return (
@@ -878,10 +888,10 @@ function ImageState({
       <div className="flex flex-col items-center gap-3 text-center">
         <ImageOffIcon aria-hidden className="size-6 text-muted-foreground" />
         <span className="text-sm text-muted-foreground">
-          The drawing couldn’t be loaded.
+          {tu("plan_load_failed")}
         </span>
         <Button variant="outline" onClick={onRetry}>
-          Try again
+          {tu("vo_retry")}
         </Button>
       </div>
     </div>

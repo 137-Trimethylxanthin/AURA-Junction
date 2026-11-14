@@ -153,7 +153,7 @@ export function Composer() {
 
   const executeSlashAction = (action: ParsedSlashAction) => {
     if (action.kind === "invalid") {
-      toast(action.message, { toasterId: CHAT_TOASTER })
+      toast(action.messageKey ? tu(action.messageKey) : action.message, { toasterId: CHAT_TOASTER })
       ta.current?.focus()
       return
     }
@@ -219,14 +219,14 @@ export function Composer() {
         if (drawing.images.original) {
           actions().setCompare({ on: !st.ui.compare.on })
         } else {
-          toast("No separate original image on this drawing.", { toasterId: CHAT_TOASTER })
+          toast(tu("cmp_no_original"), { toasterId: CHAT_TOASTER })
         }
         break
       case "all-floors":
         if (activeProject && activeProject.floors.length >= 2) {
           setCrossPlanScopeSafe(!crossPlanScope)
         } else {
-          toast("Open or bundle a multi-floor project in the library first.", { toasterId: CHAT_TOASTER })
+          toast(tu("cmp_need_project"), { toasterId: CHAT_TOASTER })
         }
         break
       case "fit":
@@ -245,7 +245,7 @@ export function Composer() {
         if (canWhatIf) {
           actions().setTool("whatif")
         } else {
-          toast("What-If resizing requires CAD room geometry in Exact or Hybrid mode.", { toasterId: CHAT_TOASTER })
+          toast(tu("cmp_whatif_needs_cad"), { toasterId: CHAT_TOASTER })
         }
         break
       }
@@ -332,7 +332,7 @@ export function Composer() {
         <ul
           id={slashMenuId}
           role="listbox"
-          aria-label="Slash commands"
+          aria-label={tu("cmp_slash_region")}
           data-slash-menu
           className="flex max-h-56 flex-col gap-0.5 overflow-y-auto rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-md"
         >
@@ -374,7 +374,7 @@ export function Composer() {
         // Suggested by the local heuristic (several questions, long or rambling text): never a model call to decide.
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1 truncate">
-            {withModel ? "Looks like several questions." : "Looks like several questions; they can be split locally."}
+            {withModel ? tu("cmp_tidy_model") : tu("cmp_tidy_local")}
           </span>
           <Button variant="secondary" data-tidy="suggested" onClick={() => startTidy(text)}>
             <SparklesIcon data-icon="inline-start" />
@@ -499,7 +499,7 @@ export function Composer() {
             variant="ghost"
             size="icon"
             aria-label={t(lang, "rw_offer")}
-            title={withModel ? "Tidy this up with Gemini (1 model request)" : "Split into separate questions (local, no model)"}
+            title={withModel ? tu("cmp_tidy_title_model") : tu("cmp_tidy_title_local")}
             data-tidy="manual"
             onClick={() => startTidy(text)}
           >
@@ -535,7 +535,7 @@ export function Composer() {
       ) : null}
 
       <ScrollRow label={tu("pb_row")}>
-        <ul aria-label="Prompt blocks" className="flex shrink-0 gap-1.5">
+        <ul aria-label={tu("pl_prompts_title")} className="flex shrink-0 gap-1.5">
           {promptBlocks.map((b) => (
             <li key={b.label}>
               <button

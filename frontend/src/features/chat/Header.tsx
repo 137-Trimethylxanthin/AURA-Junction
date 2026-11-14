@@ -8,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { actions, selectActiveProject, selectActiveTurn, selectDrawing, useAppStore } from "@/store"
 import { useEver } from "@/hooks/use-ever"
 import { openSessionHistory } from "@/features/history"
+import { budgetTotals, useBudget } from "@/features/budget/budget"
 
 /** Loaded the first time the Plugins sheet opens. */
 const PluginsSheet = lazy(() =>
@@ -55,6 +56,7 @@ function SessionButton() {
   const turns = useAppStore((s) => s.turns)
   const spend = useAppStore((s) => s.session.spend)
   const active = useAppStore(selectActiveTurn)
+  const total = budgetTotals(useBudget())
   const { calls, cost } = useMemo(() => {
     let calls = spend.calls
     let cost = roundCost(spend.cost_usd)
@@ -69,6 +71,11 @@ function SessionButton() {
     return { calls, cost }
   }, [turns, spend])
   const canOpen = !!active?.response
+  const conv = tu("session_conv", { calls: callsText(calls, lang), cost: fmtUsd(cost) })
+  const shown = total ?? { calls, cost }
+  const label = total
+    ? tu("session_total", { cost: fmtUsd(shown.cost), calls: callsText(shown.calls, lang) })
+    : `${callsText(calls, lang)} · ${fmtUsd(cost)}`
   return (
     <Button
       variant="outline"
@@ -78,15 +85,19 @@ function SessionButton() {
       data-trace-opener
       onClick={() => actions().setTraceOpen(true)}
       title={
-        canOpen
-          ? "Open the reasoning tree for the answer on the plan"
-          : "Ask a question to see its reasoning"
+        total
+          ? `${conv}\n${canOpen ? "Open the reasoning tree for the answer on the plan" : "Ask a question to see its reasoning"}`
+          : canOpen
+            ? "Open the reasoning tree for the answer on the plan"
+            : "Ask a question to see its reasoning"
       }
-      aria-label={tu("session_aria", { calls: callsText(calls, lang), cost: fmtUsd(cost) })}
+      aria-label={
+        total
+          ? tu("session_total_aria", { calls: callsText(shown.calls, lang), cost: fmtUsd(shown.cost) })
+          : tu("session_aria", { calls: callsText(calls, lang), cost: fmtUsd(cost) })
+      }
     >
-      <span className="num text-xs">
-        {callsText(calls, lang)} · {fmtUsd(cost)}
-      </span>
+      <span className="num text-xs">{label}</span>
     </Button>
   )
 }

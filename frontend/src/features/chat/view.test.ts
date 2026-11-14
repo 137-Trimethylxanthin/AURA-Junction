@@ -1,4 +1,5 @@
-import { checkParts, footerParts } from '@/features/chat/view'
+import { agentFailure, checkParts, footerParts } from '@/features/chat/view'
+import type { AskResponse } from '@/api/contract'
 import { ask as askLocalForFooter } from '@/api/local'
 import { describe, expect, it } from 'vitest'
 
@@ -781,5 +782,28 @@ describe('1.2 BoxCropThumb, AgentCard, and DrawingTitle DOM verification', () =>
       root.unmount()
     })
     host.remove()
+  })
+})
+
+describe('agentFailure', () => {
+  const failed = (look: string, extra: Record<string, unknown> = {}) =>
+    ({
+      answer: { kind: 'abstain', reason: 'low_confidence' },
+      method: 'none',
+      route: 'agent',
+      trace: [{ id: 'look', title: 'Look for the data', tag: 'drawing', body: look, kind: 'warn' }],
+      ...extra,
+    }) as unknown as AskResponse
+
+  it('tells unavailable, timeout and run errors apart without exposing the text', () => {
+    expect(agentFailure(failed('The deep agent service is unavailable (ConnectError http://x); nothing guessed.'))).toBe('unavailable')
+    expect(agentFailure(failed('The agent did not finish in 61 s; nothing guessed.'))).toBe('timeout')
+    expect(agentFailure(failed('The deep agent could not complete this run (boom).'))).toBe('error')
+    expect(agentFailure(failed('anything', { agent_failure: 'timeout' }))).toBe('timeout')
+  })
+
+  it('leaves real low-confidence abstains alone', () => {
+    expect(agentFailure(failed("The agent's confidence (0.31) is below the 0.50 threshold; nothing guessed."))).toBeNull()
+    expect(agentFailure(failed('x', { estimate: { confidence: 0.4 } }))).toBeNull()
   })
 })
