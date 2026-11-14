@@ -72,9 +72,9 @@ export function deriveAnswer(resp: AskResponse, t: Toggles, drawing?: Drawing): 
   if (answer.kind === 'count') {
     original = answer.value
     if (!changed) value = answer.value
-    else if (answer.subject === 'room') value = includedRooms.length
+    else if (answer.subject === 'room' && evidence.rooms.length > 0) value = includedRooms.length
     else if (answer.subject === 'apartment') {
-      if (drawing) {
+      if (drawing && evidence.rooms.length > 0) {
         const unitOf = new Map(drawing.rooms.map((r) => [r.room_id, r.unit]))
         value = new Set(includedRooms.map((r) => unitOf.get(r.room_id)).filter(Boolean)).size
       } else value = answer.value
@@ -86,6 +86,9 @@ export function deriveAnswer(resp: AskResponse, t: Toggles, drawing?: Drawing): 
   } else if (answer.kind === 'area') {
     original = answer.value
     value = changed ? round2(includedRooms.reduce((s, r) => s + (r.area_m2 === null ? 0 : r.area_m2), 0)) : answer.value
+  } else if (answer.kind === 'note') {
+    original = answer.number ?? null
+    value = answer.number ?? null
   }
   // An unknown area is never summed as 0: such rooms are listed apart, whatever the toggles say.
   const noArea = answer.kind === 'area' ? evidence.rooms.filter((r) => r.area_m2 === null) : []
@@ -96,8 +99,10 @@ export function deriveAnswer(resp: AskResponse, t: Toggles, drawing?: Drawing): 
 export function goldChip(resp: AskResponse, changed: boolean): GoldChip {
   const g = resp.gold
   if (!g || resp.answer.kind === 'abstain' || resp.answer.kind === 'text') return { state: 'none' }
+  const ansVal = resp.answer.kind === 'note' ? resp.answer.number : resp.answer.value
+  if (ansVal === undefined) return { state: 'none' }
   const base = { dataset: g.value, dataset_qid: g.dataset_qid }
   if (changed) return { state: 'user_changed', ...base }
   if (!g.match) return { state: 'mismatch', ...base }
-  return { state: round2(resp.answer.value) === round2(g.value) ? 'match' : 'within_tolerance', ...base }
+  return { state: round2(ansVal) === round2(g.value) ? 'match' : 'within_tolerance', ...base }
 }

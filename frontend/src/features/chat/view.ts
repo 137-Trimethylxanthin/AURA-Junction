@@ -35,6 +35,8 @@ export function scopeChipText(scope: Scope, lang: Lang): string {
 /** Formatted value with the unit/noun, e.g. ["12", "windows"] or ["139,34", "m²"]. */
 export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, string] | null {
   if (resp.answer.kind === 'text') return [resp.answer.value, t(lang, resp.answer.subject === 'fire_rating' ? 'text_fire_rating' : 'text_label')]
+  if (resp.answer.kind === 'note')
+    return resp.answer.number !== undefined ? [fmtArea(resp.answer.number, lang), resp.answer.unit ?? ''] : [resp.answer.value, '']
   if (d.value === null) return null
   if (resp.answer.kind === 'count') return [fmtCount(d.value, lang), noun(resp.answer.subject, d.value, lang)]
   if (resp.answer.kind === 'area') return [fmtArea(d.value, lang), 'm²']
@@ -73,10 +75,11 @@ export interface Chip {
   evidenceId?: string
 }
 
-const METHOD_KEY: Record<Exclude<Method, 'cad_geometry'>, 'method_ocr' | 'method_detector' | 'method_vision' | 'method_none'> = {
+const METHOD_KEY: Record<Exclude<Method, 'cad_geometry'>, StringKey> = {
   ocr: 'method_ocr',
   detector: 'method_detector',
   vision: 'method_vision',
+  agent_estimate: 'method_agent',
   none: 'method_none',
 }
 
@@ -246,6 +249,7 @@ const METHOD_FOOTER: Record<Method, StringKey> = {
   ocr: 'method_ocr',
   detector: 'method_detector',
   vision: 'method_vision',
+  agent_estimate: 'method_agent',
   none: 'method_none',
 }
 

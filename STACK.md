@@ -12,7 +12,7 @@ Research behind these choices: `.omc/research/stoa/stoa-research.md` (sections 5
 | Layer | Choice | Why |
 |---|---|---|
 | Language, API | Python 3.12, FastAPI, `uv` | All drawing libraries are Python |
-| Swiss plans (DXF twin) | `ezdxf` + `shapely` | 99.0 % correct, measured on the full set, 0 model calls |
+| Swiss plans (DXF twin) | `ezdxf` + `shapely` | 99.2 % correct (`18,660 / 18,792` after room-number normalisation; `99.0 %` / `18,606` raw), measured on the full set, 0 model calls |
 | IFC models | `IfcOpenShell` | 99.5 % correct, measured; LGPL is fine as an imported library |
 | PDF schedules, rasterising | `pdfplumber` + `pypdfium2` | Not PyMuPDF (AGPL) |
 | CubiCasa images (67 % of the score) | OCR (`RapidOCR` or Tesseract `fin`) for room labels; RF-DETR (Apache-2.0) detector for doors, windows, fixtures | Biggest risk: exact-count accuracy not measured yet |
@@ -51,10 +51,10 @@ Colour meanings (one colour = one meaning):
 
 | Meaning | Token | Value |
 |---|---|---|
-| Agent evidence (boxes, rooms, active answer) | `--info` / `--info-surface` | `#166ed1` / `#ddeaf7` |
+| Agent evidence (boxes, rooms, active answer) | `--info` / `--info-surface` | `#1260b8` / `#ddeaf7` |
 | Exact, from CAD geometry | `--success` / `--success-surface` | `#367c48` / `#e3f9ea` |
-| User corrections (rejected, changed) | `--warning` / `--warning-surface` | `#a55e29` / `#f9f3d4` |
-| Errors | `--destructive` / `--destructive-surface` | `#ca482a` / `#f9e5e2` |
+| User corrections (rejected, changed) | `--warning` / `--warning-surface` | `#965422` / `#f9f3d4` |
+| Errors | `--destructive` / `--destructive-surface` | `#b3391e` / `#f9e5e2` |
 | User input (marked areas, scope, what-if sizes) | `--user` / `--user-surface` (ours) | `#0f766e` / `#ccfbf1` |
 
 ```css
@@ -75,16 +75,16 @@ Colour meanings (one colour = one meaning):
   --accent: #00000008;
   --accent-foreground: #1a1a1a;
   --border: #e7e7e7;
-  --input: #a1a1a1;
+  --input: #767676;
   --ring: #7d7d7d;
-  --destructive: #ca482a;
+  --destructive: #b3391e;
   --destructive-foreground: #ffffff;
   --destructive-surface: #f9e5e2;
   --success: #367c48;
   --success-surface: #e3f9ea;
-  --warning: #a55e29;
+  --warning: #965422;
   --warning-surface: #f9f3d4;
-  --info: #166ed1;
+  --info: #1260b8;
   --info-surface: #ddeaf7;
   /* ours: user input */
   --user: #0f766e;

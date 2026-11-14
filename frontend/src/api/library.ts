@@ -1,6 +1,16 @@
 import { ApiError, TransportError } from './client'
 import { tu } from '@/i18n/uiLang'
-import { fastApiMessage, isErrorBody, isUploadResult, safeUrl, type UploadResult } from './contract'
+import {
+  fastApiMessage,
+  isErrorBody,
+  isUploadResult,
+  licenceLabel,
+  safeUrl,
+  type Credit,
+  type DrawingKind,
+  type DrawingSummary,
+  type UploadResult,
+} from './contract'
 
 /**
  * Thin, JSON-free helpers for the library page: API base, presenter token, the user's own uploads and the upload
@@ -93,19 +103,91 @@ export const myUploads = {
   },
 }
 
+// ---- library card display helpers (pure, JSON-free) -------------------------------------------------------
+
+export const KIND_LABEL: Record<DrawingKind, string> = {
+  cad_dxf: 'CAD · DXF',
+  raster: 'Image',
+  ifc: 'IFC',
+}
+
+/** Drawing kind in the interface language; distinguishes PDF uploads (`source_ext === '.pdf'`) from raster images. */
+export function kindText(
+  k: DrawingKind,
+  tuFn: (key: 'kind_image' | 'kind_pdf') => string = tu,
+  sourceExt?: string,
+): string {
+  if (k === 'raster' && sourceExt?.toLowerCase() === '.pdf') return tuFn('kind_pdf')
+  return k === 'raster' ? tuFn('kind_image') : KIND_LABEL[k]
+}
+
+const nf = new Intl.NumberFormat('en-US')
+
+/** "38/38": only from measured facts; null when the API sends none. */
+export function factsRatio(d: Pick<DrawingSummary, 'facts'>): string | null {
+  const f = d.facts
+  if (!f || f.gold_total <= 0) return null
+  return `${nf.format(f.correct)}/${nf.format(f.gold_total)}`
+}
+
+/** Replaces generic IFC exporter placeholder `"Project Name"` with the dataset project name while preserving real titles. */
+export function displayDrawingTitle(d: Pick<DrawingSummary, 'title'> & Partial<Pick<DrawingSummary, 'id' | 'credit'>>): string {
+  const raw = d.title.trim()
+  if (!/^project name\b/i.test(raw)) return raw
+  const rest = raw.replace(/^project name\b/i, '')
+  const creditHead = d.credit?.text?.split(/[:(]/)[0]?.replace(/\s+demo site\b/i, '')?.trim()
+  if (creditHead && !/^project name\b/i.test(creditHead)) {
+    return `${creditHead}${rest}`
+  }
+  if (d.id) {
+    const slug = d.id
+      .replace(/^ifc-/, '')
+      .split(/--|_/)[0]
+      .replace(/-/g, ' ')
+      .trim()
+    if (slug) {
+      const titled = slug.replace(/\b\w/g, (c) => c.toUpperCase())
+      return `${titled}${rest}`
+    }
+  }
+  return raw
+}
+
+/** Compact 1-line attribution for library cards that always preserves the licence token (`CC BY 4.0`, `CC BY-NC 4.0`, etc.). */
+export function compactCredit(credit: Credit): string {
+  const lic = licenceLabel(credit)
+  const text = credit.text.trim()
+  if (/Swiss Dwellings/i.test(text)) {
+    const m = /Swiss Dwellings(?:\s+v[\d.]+)?/i.exec(text)
+    return `${lic} · ${m ? m[0] : 'Swiss Dwellings'}`
+  }
+  if (/BIM-Speed Warmond/i.test(text)) {
+    return `${lic} · BIM-Speed Warmond`
+  }
+  if (/KIT IFC Examples/i.test(text)) {
+    return `${lic} · IAI / KIT`
+  }
+  let short = text.split(/\.\s+|\s+doi:/i)[0].trim()
+  if (short.toLowerCase().endsWith(`, ${lic.toLowerCase()}`)) {
+    short = short.slice(0, -(lic.length + 2)).trim()
+  }
+  if (!short || short.toLowerCase() === lic.toLowerCase()) return lic
+  if (short.toLowerCase().includes(lic.toLowerCase())) return short
+  return `${lic} · ${short}`
+}
+
 // ---- client-side checks mirroring the server caps (the server decides from magic bytes) --------------------
 
-export type UploadType = 'dxf' | 'image' | 'pdf'
+export type UploadType = 'dxf' | 'ifc' | 'image' | 'pdf'
 
 const MB = 1024 * 1024
 export const UPLOAD_CAPS: Record<UploadType, { bytes: number; label: string; exts: string[]; presenter: boolean }> = {
   dxf: { bytes: 20 * MB, label: 'DXF', exts: ['.dxf'], presenter: false },
-  image: { bytes: 15 * MB, label: 'PNG or JPG', exts: ['.png', '.jpg', '.jpeg'], presenter: true },
-  pdf: { bytes: 20 * MB, label: 'PDF', exts: ['.pdf'], presenter: true },
+  ifc: { bytes: 60 * MB, label: 'IFC', exts: ['.ifc'], presenter: false },
+  pdf: { bytes: 20 * MB, label: 'PDF', exts: ['.pdf'], presenter: false },
+  image: { bytes: 15 * MB, label: 'PNG, JPG or WebP', exts: ['.png', '.jpg', '.jpeg', '.webp'], presenter: true },
 }
-export const ACCEPT = Object.values(UPLOAD_CAPS)
-  .flatMap((c) => c.exts)
-  .join(',')
+export const ACCEPT = [...Object.values(UPLOAD_CAPS).flatMap((c) => c.exts), 'application/pdf'].join(',')
 
 export type FileCheck =
   | { ok: true; type: UploadType }
@@ -115,8 +197,6 @@ export function checkFile(file: { name: string; size: number }, hasPresenter: bo
   const name = file.name.toLowerCase()
   const type = (Object.keys(UPLOAD_CAPS) as UploadType[]).find((k) => UPLOAD_CAPS[k].exts.some((e) => name.endsWith(e)))
   if (!type) return { ok: false, code: 'unsupported_type', message: tu('ue_type') }
-  if (type === 'pdf')
-    return { ok: false, code: 'unsupported_type', message: tu('ue_pdf') }
   const cap = UPLOAD_CAPS[type]
   if (file.size === 0) return { ok: false, code: 'empty', message: tu('ue_empty') }
   if (file.size > cap.bytes)

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CHAT_EVENTS,
   CONTRACT_VERSION,
   isAskResponse,
   isDrawing,
   isDrawingList,
   isDrawingStatusBody,
   isErrorBody,
+  isHealth,
   isRankedCheck,
   isUploadResult,
   majorOf,
@@ -15,9 +17,9 @@ import { bundledDrawing as DRAWING } from '@/data/drawing'
 
 const base = () => ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
 
-describe('contract 1.1 (additive)', () => {
-  it('is version 1.1 and still major 1', () => {
-    expect(CONTRACT_VERSION).toBe('1.1')
+describe('contract 1.2 (additive)', () => {
+  it('is version 1.2 and still major 1', () => {
+    expect(CONTRACT_VERSION).toBe('1.2')
     expect(majorOf(CONTRACT_VERSION)).toBe('1')
   })
 
@@ -61,16 +63,27 @@ describe('contract 1.1 (additive)', () => {
     expect(isAskResponse({ ...r11, trace: [{ ...r11.trace.at(-1)!, tool: { name: 'rm_rf', args: {}, result_id: 'x', ms: 1 } }] })).toBe(false)
   })
 
-  it('accepts the text answer kind', () => {
+  it('accepts the text and 1.2 note/agent_estimate answer kinds', () => {
     const r = { ...base(), answer: { kind: 'text', value: 'EI 30', subject: 'fire_rating' } }
     expect(isAskResponse(r)).toBe(true)
     expect(isAskResponse({ ...r, answer: { kind: 'text', value: 'EI 30', subject: 'colour' } })).toBe(false)
+    expect(
+      isAskResponse({
+        ...base(),
+        method: 'agent_estimate',
+        answer: { kind: 'note', value: 'Room 3.04 has 3 windows', number: 3, unit: 'windows' },
+        trace: [{ id: 'a1', title: 'deep_agent', tag: 'tool', body: 'ok', kind: 'model', tool: { name: 'deep_agent', args: {}, result_id: 'r1', ms: 120 } }],
+      }),
+    ).toBe(true)
+    expect(isAskResponse({ ...base(), answer: { kind: 'note', value: 123 as unknown as string } })).toBe(false)
   })
 
   it('accepts Drawing 1.1 fields and rejects wrong ones', () => {
     expect(isDrawing(DRAWING)).toBe(true)
     const d = { ...DRAWING, kind: 'cad_dxf', status: 'ready', capabilities: ['window', 'door'], source: 'library', facts: { gold_total: 38, correct: 38, measured_at: '2026-11-14' } }
     expect(isDrawing(d)).toBe(true)
+    expect(isDrawing({ ...d, kind: 'raster', source_ext: '.pdf' })).toBe(true)
+    expect(isDrawing({ ...d, source_ext: 42 as unknown as string })).toBe(false)
     expect(isDrawing({ ...d, kind: 'pdf' })).toBe(false)
     expect(isDrawing({ ...d, capabilities: ['toaster'] })).toBe(false)
     expect(isDrawing({ ...d, facts: { correct: 1 } })).toBe(false)
@@ -86,13 +99,16 @@ describe('contract 1.1 (additive)', () => {
       thumbnail: '',
       credit: { text: 'Your upload', license: 'yours' },
     }
-    expect(isDrawingList({ contract_version: '1.1', drawings: [summary] })).toBe(true)
+    expect(isDrawingList({ contract_version: '1.2', drawings: [summary, { ...summary, id: 'up-2', kind: 'raster', source_ext: '.pdf' }] })).toBe(true)
     expect(isDrawingList({ contract_version: '1.1', drawings: [{ ...summary, status: 'done' }] })).toBe(false)
     expect(isDrawingStatusBody({ contract_version: '1.1', id: 'up-1', status: 'failed', error: 'No entities' })).toBe(true)
     expect(isUploadResult({ drawing_id: 'up-1', delete_token: 'tok', status: 'queued' })).toBe(true)
     expect(isUploadResult({ drawing_id: 'up-1', status: 'queued' })).toBe(false)
     expect(isRankedCheck({ method: 'decisions_api', status: 'live', scope: 'drawn_boxes', ranking: [] })).toBe(true)
     expect(isRankedCheck({ method: 'decisions_api', status: 'live' })).toBe(false)
+    expect(CHAT_EVENTS).toContain('progress')
+    expect(isHealth({ ok: true, contract_version: '1.2', answerer: 'hybrid', agent_ok: true })).toBe(true)
+    expect(isHealth({ ok: true, contract_version: '1.2', answerer: 'bogus' })).toBe(false)
   })
 
   it('knows the 1.1 error codes', () => {

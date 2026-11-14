@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createSource } from '@/api/source'
+import { bundledDrawing } from '@/data/drawing'
+import { limitsOf, markLabel, nextLabel, overlayOpen, shouldIgnoreShortcut } from '@/features/plan/shared'
 import { deriveAnswer } from '@/lib/answer'
-import { createAppStore, type AgentTurn, type AppStore } from './appStore'
+import { ZOOM_STEPS, createAppStore, reduceStream, type AgentTurn, type AppStore, type StreamState } from './appStore'
 
 const make = () => createAppStore({ source: createSource({ baseUrl: null }) })
 const agentTurn = (store: AppStore, id: string) => store.getState().turns.find((t) => t.id === id) as AgentTurn
@@ -100,15 +102,123 @@ describe('store', () => {
     expect(s().ui.tool).toBe('select')
   })
 
-  it('zoom steps are clamped; compare opacity clamped', () => {
+  it('zoom steps and continuous zoom are clamped; compare opacity clamped', () => {
     const store = make()
     const s = store.getState
     s().zoomOut()
     expect(s().ui.zoomIndex).toBe(0)
-    for (let i = 0; i < 6; i++) s().zoomIn()
-    expect(s().ui.zoomIndex).toBe(3)
+    expect(s().ui.zoom).toBe(100)
+    for (let i = 0; i < 8; i++) s().zoomIn()
+    expect(s().ui.zoomIndex).toBe(ZOOM_STEPS.length - 1)
+    expect(s().ui.zoom).toBe(450)
+    s().setZoom(215.4)
+    expect(s().ui.zoom).toBe(215)
+    s().zoomIn()
+    expect(s().ui.zoom).toBe(260)
+    s().setZoom(999)
+    expect(s().ui.zoom).toBe(450)
+    s().setZoom(20)
+    expect(s().ui.zoom).toBe(100)
+    s().setZoom(350)
+    s().resetZoom()
+    expect(s().ui.zoom).toBe(100)
+    expect(s().ui.zoomIndex).toBe(0)
     s().setCompare({ on: true, opacity: 140 })
     expect(s().ui.compare).toEqual({ on: true, mode: 'swipe', opacity: 100 })
+  })
+
+  it('stepEvidence cycles forward and backward across the active turn evidence', async () => {
+    const store = make()
+    const s = store.getState
+    expect(s().stepEvidence(1)).toBeNull()
+    const id = await s().ask('How many windows are drawn on this floor plan?')
+    const boxes = agentTurn(store, id).response!.evidence.boxes
+    expect(s().stepEvidence(1)).toBe(boxes[0].id)
+    expect(s().ui.selectedEvidenceId).toBe(boxes[0].id)
+    expect(s().stepEvidence(1)).toBe(boxes[1].id)
+    expect(s().stepEvidence(-1)).toBe(boxes[0].id)
+    expect(s().stepEvidence(-1)).toBe(boxes[boxes.length - 1].id)
+  })
+
+  it('shortcutsOpen and commandOpen are mutually exclusive; answererMode syncs cleanly', () => {
+    const store = make()
+    const s = store.getState
+    expect(s().answererMode).toBe('hybrid')
+    s().setAnswererMode('agent')
+    expect(s().answererMode).toBe('agent')
+    expect(s().session.answererMode).toBe('agent')
+    s().setShortcutsOpen(true)
+    expect(s().ui.shortcutsOpen).toBe(true)
+    s().setCommandOpen(true)
+    expect(s().ui.commandOpen).toBe(true)
+    expect(s().ui.shortcutsOpen).toBe(false)
+  })
+
+  it('reduceStream tracks progress queue_position and clears it once work begins', () => {
+    const init: StreamState = { phase: 'sent', nodes: [], resolved: [], evidence: { boxes: [], rooms: [] } }
+    const queued = reduceStream(init, { event: 'progress', data: { queue_position: 2 } })
+    expect(queued.queuePosition).toBe(2)
+    const active = reduceStream(queued, {
+      event: 'understood',
+      data: { canonical_en: 'How many windows?', detected_lang: 'en', route: 'agent' },
+    })
+    expect(active.queuePosition).toBeUndefined()
+    expect(active.phase).toBe('understood')
+  })
+
+  it('guards toggle and tap on non-count agent_estimate turns while allowing count box toggles', async () => {
+    const store = make()
+    const id = await store.getState().ask('How many windows are drawn on this floor plan?')
+    const baseResp = agentTurn(store, id).response!
+    const boxId = baseResp.evidence.boxes[0].id
+
+    // Mutate turn response to simulate a 1.2 agent_estimate note turn with a box
+    store.setState((st) => ({
+      turns: st.turns.map((x) =>
+        x.id === id && x.role === 'agent'
+          ? {
+              ...x,
+              response: {
+                ...baseResp,
+                method: 'agent_estimate',
+                answer: { kind: 'note', value: 'Approx 4.2 m corridor' },
+              },
+            }
+          : x,
+      ),
+    }))
+    expect(store.getState().tap(id, boxId)).toBe('selected')
+    expect(store.getState().tap(id, boxId)).toBe('selected')
+    store.getState().toggle(id, boxId)
+    expect(agentTurn(store, id).toggles.rejected).toEqual({})
+
+    // Count agent_estimate boxes remain rejectable
+    store.setState((st) => ({
+      turns: st.turns.map((x) =>
+        x.id === id && x.role === 'agent'
+          ? {
+              ...x,
+              response: {
+                ...baseResp,
+                method: 'agent_estimate',
+                answer: { kind: 'count', value: 12, subject: 'window' },
+              },
+            }
+          : x,
+      ),
+    }))
+    expect(store.getState().tap(id, boxId)).toBe('toggled')
+    expect(agentTurn(store, id).toggles.rejected[boxId]).toBe(true)
+  })
+
+  it('newConversation returns a restore callback that undoes clearing before new turns arrive', async () => {
+    const store = make()
+    await store.getState().ask('How many windows are drawn on this floor plan?')
+    expect(store.getState().turns).toHaveLength(2)
+    const restore = store.getState().newConversation()
+    expect(store.getState().turns).toHaveLength(0)
+    restore()
+    expect(store.getState().turns).toHaveLength(2)
   })
 
   it('a failing source puts the turn in error state', async () => {
@@ -120,5 +230,60 @@ describe('store', () => {
     })
     const id = await store.getState().ask('How many windows?')
     expect(agentTurn(store, id)).toMatchObject({ status: 'error', error: { message: 'boom' } })
+  })
+})
+
+describe('plan shared helpers & shortcut guards', () => {
+  it('computes nextLabel, markLabel and limitsOf accurately', () => {
+    expect(nextLabel('Area', [{ label: 'Area 1' }, { label: 'Spot 1' }])).toBe('Area 2')
+    expect(nextLabel('Spot', [{ label: 'Area 1' }, { label: 'Spot 1' }])).toBe('Spot 2')
+    expect(markLabel('Custom note')).toBe('Custom note')
+    const room = bundledDrawing.rooms.find((r) => r.room_id === '3.04')!
+    const lim = limitsOf(room)
+    expect(lim.maxW).toBeGreaterThan(room.rect!.w_m)
+    expect(lim.maxH).toBeGreaterThan(room.rect!.h_m)
+  })
+
+  it('shouldIgnoreShortcut guards IME, inputs, sliders and non-tooltip poppers while allowing tooltips', () => {
+    const div = document.createElement('div')
+    document.body.appendChild(div)
+    expect(shouldIgnoreShortcut({ target: div })).toBe(false)
+    expect(shouldIgnoreShortcut({ target: div, defaultPrevented: true })).toBe(true)
+    expect(shouldIgnoreShortcut({ target: div, isComposing: true })).toBe(true)
+    expect(shouldIgnoreShortcut({ target: div, keyCode: 229 })).toBe(true)
+
+    const input = document.createElement('input')
+    expect(shouldIgnoreShortcut({ target: input })).toBe(true)
+
+    const slider = document.createElement('div')
+    slider.setAttribute('role', 'slider')
+    const thumb = document.createElement('span')
+    slider.appendChild(thumb)
+    document.body.appendChild(slider)
+    expect(shouldIgnoreShortcut({ target: thumb })).toBe(true)
+    slider.remove()
+
+    // Tooltip wrapper must NOT block shortcuts
+    const tipWrap = document.createElement('div')
+    tipWrap.setAttribute('data-radix-popper-content-wrapper', '')
+    const tip = document.createElement('div')
+    tip.setAttribute('data-slot', 'tooltip-content')
+    tipWrap.appendChild(tip)
+    document.body.appendChild(tipWrap)
+    expect(overlayOpen()).toBe(false)
+    expect(shouldIgnoreShortcut({ target: div })).toBe(false)
+    tipWrap.remove()
+
+    // Non-tooltip popover wrapper MUST block shortcuts
+    const popWrap = document.createElement('div')
+    popWrap.setAttribute('data-radix-popper-content-wrapper', '')
+    const pop = document.createElement('div')
+    pop.setAttribute('data-slot', 'popover-content')
+    popWrap.appendChild(pop)
+    document.body.appendChild(popWrap)
+    expect(overlayOpen()).toBe(true)
+    expect(shouldIgnoreShortcut({ target: div })).toBe(true)
+    popWrap.remove()
+    div.remove()
   })
 })

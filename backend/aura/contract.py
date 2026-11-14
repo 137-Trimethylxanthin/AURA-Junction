@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT_VERSION = "1.1"
+CONTRACT_VERSION = "1.2"
 
 Lang = Literal["en", "fr", "fi", "de"]
 LANGS: tuple[str, ...] = ("en", "fr", "fi", "de")
@@ -21,7 +21,7 @@ Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "roo
 TextSubject = Literal["label", "fire_rating"]
 BoxSubject = Subject | TextSubject
 BOX_SUBJECTS: tuple[str, ...] = ("window", "door", "washbasin", "wc", "bathtub", "shower")
-Method = Literal["cad_geometry", "ocr", "detector", "vision", "none"]
+Method = Literal["cad_geometry", "ocr", "detector", "vision", "agent_estimate", "none"]
 TraceKind = Literal["exact", "model", "warn", "info"]
 AbstainReason = Literal["not_on_drawing", "not_supported_yet", "unclear_question",
                         "low_confidence"]  # 1.1: a model estimate below its confidence gate
@@ -48,6 +48,7 @@ ToolName = Literal[
     "check_boxes_with_decisions",
     "what_if",
     "find_text",
+    "deep_agent",
 ]
 Route = Literal["template", "choice", "agent", "cache"]
 
@@ -185,8 +186,17 @@ class AnswerQuantity(_M):
     unit: Literal["m", "m2", "m3"]
 
 
+class AnswerNote(_M):
+    """1.2: open-ended answer from the deep agent (unmapped unit, text/comparison, or open subject)."""
+
+    kind: Literal["note"] = "note"
+    value: str
+    number: float | None = None
+    unit: str | None = None
+
+
 Answer = Annotated[
-    AnswerCount | AnswerArea | AnswerAbstain | AnswerQuantity | AnswerText,
+    AnswerCount | AnswerArea | AnswerAbstain | AnswerQuantity | AnswerText | AnswerNote,
     Field(discriminator="kind"),
 ]
 
@@ -380,6 +390,8 @@ class Drawing(_Open):
     created_at: str | None = None
     expires_at: str | None = None
     facts: Facts | None = None
+    # 1.2
+    source_ext: str | None = None
 
 
 class DrawingSummary(_M):
@@ -396,11 +408,15 @@ class DrawingSummary(_M):
     error: str | None = None
     created_at: str | None = None
     expires_at: str | None = None
+    source_ext: str | None = None
 
 
 class Health(_M):
     ok: bool
     contract_version: str = CONTRACT_VERSION
+    checks: dict[str, Any] | None = None
+    answerer: Literal["hybrid", "agent", "exact"] | None = None
+    agent_ok: bool | None = None
 
 
 # ---- tool results (shared with L1's solvers) --------------------------------------------
@@ -418,7 +434,7 @@ class ToolResult(BaseModel):
     result_id: str
     tool: ToolName
     args: dict[str, Any] = Field(default_factory=dict)
-    kind: Literal["count", "area", "text", "quantity", "rooms", "boxes", "check", "none"]
+    kind: Literal["count", "area", "text", "quantity", "note", "rooms", "boxes", "check", "none"]
     subject: str | None = None
     value: float | None = None
     text: str | None = None

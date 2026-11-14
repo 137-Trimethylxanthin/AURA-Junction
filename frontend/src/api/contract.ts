@@ -3,8 +3,8 @@
  * The prose version with JSON examples lives next to this file in contract.md.
  */
 
-/** 1.1 is additive over 1.0: every new field is optional. The client accepts any major-1 body. */
-export const CONTRACT_VERSION = '1.1'
+/** 1.2 is additive over 1.0/1.1: every new field is optional. The client accepts any major-1 body. */
+export const CONTRACT_VERSION = '1.2'
 
 export type Lang = 'en' | 'fr' | 'fi' | 'de'
 export const LANGS: readonly Lang[] = ['en', 'fr', 'fi', 'de']
@@ -182,6 +182,8 @@ export interface Drawing {
   expires_at?: string
   /** Library drawings only, from the eval. */
   facts?: DrawingFacts
+  /** 1.2: original uploaded file extension (e.g. ".pdf" when kind === "raster"). */
+  source_ext?: string
 }
 
 /** One card of `GET /drawings` (1.1). */
@@ -200,6 +202,8 @@ export interface DrawingSummary {
   error?: string
   created_at?: string
   expires_at?: string
+  /** 1.2: original uploaded file extension (e.g. ".pdf" when kind === "raster"). */
+  source_ext?: string
 }
 
 /** `GET /drawings` body (1.1). */
@@ -263,6 +267,7 @@ export type ToolName =
   | 'check_boxes_with_decisions'
   | 'what_if'
   | 'find_text'
+  | 'deep_agent'
 export const TOOL_NAMES: readonly ToolName[] = [
   'count_objects',
   'room_areas',
@@ -273,6 +278,7 @@ export const TOOL_NAMES: readonly ToolName[] = [
   'check_boxes_with_decisions',
   'what_if',
   'find_text',
+  'deep_agent',
 ]
 
 /** A tool call made while answering (1.1). */
@@ -299,6 +305,14 @@ export interface TraceNode {
 
 export type AbstainReason = 'not_on_drawing' | 'not_supported_yet' | 'unclear_question' | 'low_confidence'
 
+/** 1.2: open-ended answer from the deep agent (unmapped unit, text/comparison, or open subject). */
+export interface AnswerNote {
+  kind: 'note'
+  value: string
+  number?: number
+  unit?: string
+}
+
 export type Answer =
   | { kind: 'count'; value: number; subject: Subject }
   | { kind: 'area'; value: number; unit: 'm2' }
@@ -307,6 +321,7 @@ export type Answer =
   | { kind: 'quantity'; value: number; unit: 'm' | 'm2' | 'm3' }
   /** 1.1: printed text found on the drawing (e.g. a fire rating), with its box in the evidence. */
   | { kind: 'text'; value: string; subject: TextSubject }
+  | AnswerNote
 
 export type TextSubject = 'fire_rating' | 'label'
 
@@ -366,7 +381,8 @@ export interface Gold {
   match: boolean
 }
 
-export type Method = 'cad_geometry' | 'ocr' | 'detector' | 'vision' | 'none'
+export type Method = 'cad_geometry' | 'ocr' | 'detector' | 'vision' | 'agent_estimate' | 'none'
+export const METHODS: readonly Method[] = ['cad_geometry', 'ocr', 'detector', 'vision', 'agent_estimate', 'none']
 
 export interface AskResponse {
   contract_version: string
@@ -412,9 +428,10 @@ export interface ChatRequest {
   lang_hint?: Lang
 }
 
-/** Server-sent events of `POST /chat`, in order: turn, understood, (tool_call, tool_result)*, check?, answer | error, done. */
+/** Server-sent events of `POST /chat`, in order: turn, progress*, understood, (tool_call, tool_result)*, check?, answer | error, done. */
 export type ChatEvent =
   | { event: 'turn'; data: { conversation_id: string; turn_id: string } }
+  | { event: 'progress'; data: { queue_position: number } }
   | { event: 'understood'; data: { detected_lang: Lang; canonical_en: string; route: AskRoute } }
   | { event: 'tool_call'; data: { node: TraceNode } }
   | { event: 'tool_result'; data: { node_id: string; evidence: AskResponse['evidence']; summary: string } }
@@ -425,6 +442,7 @@ export type ChatEvent =
 export type ChatEventName = ChatEvent['event']
 export const CHAT_EVENTS: readonly ChatEventName[] = [
   'turn',
+  'progress',
   'understood',
   'tool_call',
   'tool_result',
@@ -536,12 +554,19 @@ export interface FastApiDetail {
   detail: unknown
 }
 
+export type AnswererMode = 'hybrid' | 'agent' | 'exact'
+export const ANSWERER_MODES: readonly AnswererMode[] = ['hybrid', 'agent', 'exact']
+
 /** 200 with ok:true when the server can answer; 503 with ok:false (same body) when the database or data dir is down. */
 export interface Health {
   ok: true
   contract_version: string
   /** Diagnostics, informational only (not used by the client): db, data_dir, drawings, drawings_skipped, models, budget_left. */
   checks?: Record<string, unknown>
+  /** 1.2: active server answerer mode ('hybrid' | 'agent' | 'exact'). */
+  answerer?: AnswererMode
+  /** 1.2: whether the deep-agent sidecar responded healthy on its last probe. */
+  agent_ok?: boolean
 }
 
 /** Evidence subjects that have boxes in the bundled drawing file (wc/bathtub/shower since the regenerated file). */
@@ -626,6 +651,7 @@ function isAnswer(v: unknown): v is Answer {
   if (v.kind === 'area') return isNum(v.value) && v.unit === 'm2'
   if (v.kind === 'quantity') return isNum(v.value) && isOneOf(v.unit, ['m', 'm2', 'm3'] as const)
   if (v.kind === 'text') return isStr(v.value) && isOneOf(v.subject, ['fire_rating', 'label'] as const)
+  if (v.kind === 'note') return isStr(v.value) && optNum(v.number) && optStr(v.unit)
   if (v.kind === 'abstain')
     return (
       isOneOf(v.reason, ['not_on_drawing', 'not_supported_yet', 'unclear_question', 'low_confidence'] as const) &&
@@ -701,7 +727,7 @@ export function isAskResponse(v: unknown): v is AskResponse {
     isOneOf(v.detected_lang, LANGS) &&
     isStr(v.canonical_en) &&
     isScope(v.scope) &&
-    isOneOf(v.method, ['cad_geometry', 'ocr', 'detector', 'vision', 'none'] as const) &&
+    isOneOf(v.method, METHODS) &&
     Array.isArray(v.trace) &&
     v.trace.every(isTraceNode) &&
     isNum(v.calls) &&
@@ -767,7 +793,8 @@ export function isDrawing(v: unknown): v is Drawing {
     optStr(v.thumbnail) &&
     optStr(v.created_at) &&
     optStr(v.expires_at) &&
-    (v.facts === undefined || isFacts(v.facts))
+    (v.facts === undefined || isFacts(v.facts)) &&
+    optStr(v.source_ext)
   )
 }
 
@@ -798,7 +825,8 @@ export function isDrawingSummary(v: unknown): v is DrawingSummary {
     optStr(v.subtitle) &&
     (v.source === undefined || isOneOf(v.source, ['library', 'upload'] as const)) &&
     optNum(v.progress) &&
-    optStr(v.error)
+    optStr(v.error) &&
+    optStr(v.source_ext)
   )
 }
 
@@ -910,7 +938,13 @@ export function fastApiMessage(v: unknown): string | null {
 }
 
 export function isHealth(v: unknown): v is Health {
-  return isObj(v) && v.ok === true && isStr(v.contract_version)
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    isStr(v.contract_version) &&
+    (v.answerer === undefined || isOneOf(v.answerer, ANSWERER_MODES)) &&
+    (v.agent_ok === undefined || typeof v.agent_ok === 'boolean')
+  )
 }
 
 /** Major part of a "major.minor" version string. */

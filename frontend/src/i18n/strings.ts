@@ -138,6 +138,18 @@ const en = {
   low_conf_body: 'Model estimate only; nothing is stated as a count. Most likely:',
   estimate_sure: 'Model estimate, {pct} % sure. Not measured from geometry; no boxes.',
   estimate_measured: 'At this confidence such answers were right {correct} of {n} times.',
+  // 1.2 agent & card controls
+  method_agent: 'Model estimate · agent',
+  chip_agent_estimate: 'Model estimate · agent',
+  self_confidence: 'Self-reported confidence: {pct} %',
+  cost_upper_bound: '≤ {cost} (upper bound)',
+  stream_queue: 'In queue (#{n})…',
+  stream_agent_step: 'Inspecting drawing (step {n})',
+  expand_all_n: 'Expand all ({n})',
+  collapse: 'Collapse',
+  show_more: 'Show more',
+  stopped_title: 'Stopped',
+  agent_note_found: 'Estimated from the drawing by the blueprint agent.',
 }
 
 export type StringKey = keyof typeof en
@@ -267,6 +279,17 @@ const fr: Dict = {
   low_conf_body: 'Estimation du modèle uniquement ; aucun nombre n’est affirmé. Le plus probable :',
   estimate_sure: 'Estimation du modèle, sûre à {pct} %. Non mesurée sur la géométrie ; pas de zones.',
   estimate_measured: 'À ce niveau de confiance, ces réponses étaient justes {correct} fois sur {n}.',
+  method_agent: 'Estimation modèle · agent',
+  chip_agent_estimate: 'Estimation modèle · agent',
+  self_confidence: 'Confiance auto-évaluée : {pct} %',
+  cost_upper_bound: '≤ {cost} (borne supérieure)',
+  stream_queue: 'En file d’attente (n° {n})…',
+  stream_agent_step: 'Inspection du plan (étape {n})',
+  expand_all_n: 'Tout développer ({n})',
+  collapse: 'Réduire',
+  show_more: 'Afficher plus',
+  stopped_title: 'Arrêté',
+  agent_note_found: 'Estimé à partir du plan par l’agent.',
 }
 
 const fi: Dict = {
@@ -393,6 +416,17 @@ const fi: Dict = {
   low_conf_body: 'Vain mallin arvio; lukua ei väitetä todeksi. Todennäköisimmät:',
   estimate_sure: 'Mallin arvio, {pct} % varma. Ei mitattu geometriasta; ei merkintöjä.',
   estimate_measured: 'Tällä varmuudella tällaiset vastaukset olivat oikein {correct} / {n} kertaa.',
+  method_agent: 'Mallin arvio · agentti',
+  chip_agent_estimate: 'Mallin arvio · agentti',
+  self_confidence: 'Itse arvioitu varmuus: {pct} %',
+  cost_upper_bound: '≤ {cost} (yläraja)',
+  stream_queue: 'Jonossa (#{n})…',
+  stream_agent_step: 'Tutkitaan piirustusta (vaihe {n})',
+  expand_all_n: 'Laajenna kaikki ({n})',
+  collapse: 'Supista',
+  show_more: 'Näytä lisää',
+  stopped_title: 'Pysäytetty',
+  agent_note_found: 'Piirustusagentin arvio pohjapiirroksesta.',
 }
 
 const de: Dict = {
@@ -519,6 +553,17 @@ const de: Dict = {
   low_conf_body: 'Nur eine Modellschätzung; es wird keine Anzahl behauptet. Am wahrscheinlichsten:',
   estimate_sure: 'Modellschätzung, zu {pct} % sicher. Nicht aus der Geometrie gemessen; keine Markierungen.',
   estimate_measured: 'Bei dieser Sicherheit waren solche Antworten {correct} von {n} Mal richtig.',
+  method_agent: 'Modellschätzung · Agent',
+  chip_agent_estimate: 'Modellschätzung · Agent',
+  self_confidence: 'Selbstberichtete Sicherheit: {pct} %',
+  cost_upper_bound: '≤ {cost} (Obergrenze)',
+  stream_queue: 'In Warteschlange (Nr. {n})…',
+  stream_agent_step: 'Plan wird untersucht (Schritt {n})',
+  expand_all_n: 'Alle aufklappen ({n})',
+  collapse: 'Einklappen',
+  show_more: 'Mehr anzeigen',
+  stopped_title: 'Abgebrochen',
+  agent_note_found: 'Vom Plan-Agenten aus der Zeichnung geschätzt.',
 }
 
 export const STRINGS: Record<Lang, Dict> = { en, fr, fi, de }
@@ -617,7 +662,7 @@ const uiEn = {
   dropped_n: '{n} drawings in the list could not be read and are not shown.',
   // upload
   upload_title: 'Upload a drawing',
-  drop_here: 'Drop a DXF file here',
+  drop_here: 'Drop a DXF, IFC or PDF file here',
   for_everyone: 'for everyone · up to {n} at a time',
   choose_file: 'Choose a file',
   your_uploads: 'Your uploads',
@@ -709,7 +754,7 @@ const uiFr: UiDict = {
   dropped_1: '1 plan de la liste n’a pas pu être lu et n’est pas affiché.',
   dropped_n: '{n} plans de la liste n’ont pas pu être lus et ne sont pas affichés.',
   upload_title: 'Téléverser un plan',
-  drop_here: 'Déposez un fichier DXF ici',
+  drop_here: 'Déposez un fichier DXF, IFC ou PDF ici',
   for_everyone: 'pour tous · jusqu’à {n} à la fois',
   choose_file: 'Choisir un fichier',
   your_uploads: 'Vos fichiers',
@@ -798,7 +843,7 @@ const uiFi: UiDict = {
   dropped_1: 'Yhtä luettelon piirustusta ei voitu lukea, eikä sitä näytetä.',
   dropped_n: '{n} luettelon piirustusta ei voitu lukea, eikä niitä näytetä.',
   upload_title: 'Lataa piirustus',
-  drop_here: 'Pudota DXF-tiedosto tähän',
+  drop_here: 'Pudota DXF-, IFC- tai PDF-tiedosto tähän',
   for_everyone: 'kaikille · enintään {n} kerrallaan',
   choose_file: 'Valitse tiedosto',
   your_uploads: 'Omat lataukset',
@@ -887,7 +932,7 @@ const uiDe: UiDict = {
   dropped_1: '1 Plan der Liste konnte nicht gelesen werden und wird nicht angezeigt.',
   dropped_n: '{n} Pläne der Liste konnten nicht gelesen werden und werden nicht angezeigt.',
   upload_title: 'Plan hochladen',
-  drop_here: 'DXF-Datei hier ablegen',
+  drop_here: 'DXF-, IFC- oder PDF-Datei hier ablegen',
   for_everyone: 'für alle · bis zu {n} auf einmal',
   choose_file: 'Datei wählen',
   your_uploads: 'Ihre Uploads',

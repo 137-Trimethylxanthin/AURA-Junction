@@ -78,7 +78,7 @@ def test_conversation_restore_and_follow_up(tmp_path):
         assert c.get("/conversations/c-nope").json()["code"] == "not_found"
         c.portal.call(c.app.state.svc.writer.flush)
         r = c.get(f"/conversations/{conv}").json()
-        assert r["contract_version"] == "1.1" and r["drawing_id"] == SWISS
+        assert r["contract_version"] == "1.2" and r["drawing_id"] == SWISS
         assert [t["message"] for t in r["turns"]] == [
             "How many doors are in apartment A?", "and in apartment B?", "and windows?"]
         assert r["turns"][1]["response"]["answer"] == a2["answer"]

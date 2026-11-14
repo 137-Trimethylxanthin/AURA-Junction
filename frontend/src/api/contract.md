@@ -1,12 +1,12 @@
-# AURA API contract, version 1.1
+# AURA API contract, version 1.2
 
 AURA stands for Automated Understanding of Rooms & Areas.
 
 This file is for the backend team. The source of truth is `contract.ts`, which sits next to this file. If the two ever disagree, `contract.ts` wins; please tell the frontend team when that happens.
 
-**Versioning.** Every body carries `contract_version`. The current version is `"1.1"` (see §1.1); `"1.0"` bodies stay valid.
+**Versioning.** Every body carries `contract_version`. The current version is `"1.2"` (see §1.2); `"1.0"` and `"1.1"` bodies stay valid.
 - The frontend rejects any body whose **major** version differs from its own. It shows an error card and does not fall back.
-- A minor bump, such as `1.1`, may only add optional fields.
+- A minor bump, such as `1.1` or `1.2`, may only add optional fields.
 
 ## Endpoints
 
@@ -581,3 +581,13 @@ interface RewriteResponse {
 | Fire rating of the entrance door | abstain `not_on_drawing` | none |
 
 The table also includes FR, FI and DE phrasings of the window, door and apartment A area questions.
+
+## §1.2 Deep agent sidecar & progress events
+
+1.2 is additive over 1.1:
+- `ToolName` adds `'deep_agent'` for sandboxed deep-agent Python/shell inspection steps.
+- `Method` adds `'agent_estimate'` (always shown with model estimate chip, self-reported confidence, and upper-bound cost; never `"Exact · CAD geometry"`).
+- `Answer` adds `{ kind: 'note'; value: string; number?: number; unit?: string }` for open-ended answers, comparisons, or units outside `'m' | 'm2' | 'm3'`.
+- `ChatEvent` adds `{ event: 'progress'; data: { queue_position: number } }`, plus SSE `: progress` keepalive comment lines.
+- `Drawing` and `DrawingSummary` add optional `source_ext?: string` (e.g. `'.pdf'` when `kind === 'raster'`).
+- `GET /health` may include optional `answerer?: 'hybrid' | 'agent' | 'exact'` and `agent_ok?: boolean`.

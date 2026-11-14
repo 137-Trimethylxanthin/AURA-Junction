@@ -1,15 +1,17 @@
 import { tu } from '@/i18n/uiLang'
 import { createStore, type StoreApi } from 'zustand/vanilla'
-import type { AskResponse, AskRoute, Box, ChatEvent, Check, Drawing, EvidenceRoom, Lang, Override, PctRect, RankedCheck, Scope, TraceNode } from '@/api/contract'
+import type { AnswererMode, AskResponse, AskRoute, Box, ChatEvent, Check, Drawing, EvidenceRoom, Lang, Override, PctRect, RankedCheck, Scope, TraceNode } from '@/api/contract'
 import { ApiError, TransportError, spentOf } from '@/api/client'
 import { createSource, type Source, type SourceStatus } from '@/api/source'
 import { BUNDLED_DRAWING_ID, bundledDrawing } from '@/data/drawing'
-import { emptyToggles, isRoomEvidenceId, roomIdOfEvidence, type Toggles } from '@/lib/answer'
+import { emptyToggles, isRoomEvidenceId, roomEvidenceId, roomIdOfEvidence, type Toggles } from '@/lib/answer'
 import { detect } from '@/lib/detect'
 import { clampRect } from '@/lib/geometry'
 import { t } from '@/i18n/strings'
 
-export const ZOOM_STEPS = [100, 140, 180, 240] as const
+export const ZOOM_MIN = 100
+export const ZOOM_MAX = 450
+export const ZOOM_STEPS = [100, 140, 190, 260, 350, 450] as const
 
 export type Tool = 'select' | 'mark' | 'whatif'
 export type Feedback = 'up' | 'down' | null
@@ -45,6 +47,8 @@ export interface AgentTurn {
 /** What the /chat stream has told us so far about one answer. */
 export interface StreamState {
   phase: 'sent' | 'understood' | 'working' | 'checking'
+  /** 1.2: 1-based queue position while waiting for a deep-agent slot; cleared once execution starts. */
+  queuePosition?: number
   understood?: { canonical_en: string; detected_lang?: Lang; route?: AskRoute }
   /** Tool-call trace nodes in arrival order. */
   nodes: TraceNode[]
@@ -77,15 +81,23 @@ const writeConversation = (drawingId: string, id: string | null) => {
 /** Fold one chat event into the stream state (pure; exported for tests). */
 export function reduceStream(st: StreamState, e: ChatEvent): StreamState {
   switch (e.event) {
+    case 'progress':
+      return { ...st, queuePosition: e.data.queue_position }
     case 'understood':
-      return { ...st, phase: 'understood', understood: e.data }
+      return { ...st, queuePosition: undefined, phase: 'understood', understood: e.data }
     case 'tool_call':
-      return { ...st, phase: 'working', nodes: [...st.nodes.filter((n) => n.id !== e.data.node.id), e.data.node] }
+      return {
+        ...st,
+        queuePosition: undefined,
+        phase: 'working',
+        nodes: [...st.nodes.filter((n) => n.id !== e.data.node.id), e.data.node],
+      }
     case 'tool_result': {
       const ids = new Set(st.evidence.boxes.map((b) => b.id))
       const rooms = new Set(st.evidence.rooms.map((r) => r.room_id))
       return {
         ...st,
+        queuePosition: undefined,
         resolved: st.resolved.includes(e.data.node_id) ? st.resolved : [...st.resolved, e.data.node_id],
         evidence: {
           boxes: [...st.evidence.boxes, ...(e.data.evidence.boxes ?? []).filter((b) => !ids.has(b.id))],
@@ -94,7 +106,7 @@ export function reduceStream(st: StreamState, e: ChatEvent): StreamState {
       }
     }
     case 'check':
-      return { ...st, phase: 'checking', check: e.data.check }
+      return { ...st, queuePosition: undefined, phase: 'checking', check: e.data.check }
     default:
       return st
   }
@@ -136,6 +148,8 @@ export const POLL_DEADLINE_MS = 3 * 60_000
 export interface AppState {
   session: {
     source: SourceStatus
+    /** 1.2: active backend answerer mode reported by /health ('hybrid' by default). */
+    answererMode: AnswererMode
     drawing: Drawing
     lang: Lang
     load: DrawingLoad
@@ -143,18 +157,25 @@ export interface AppState {
     /** Model use outside answers (e.g. /rewrite), counted in the session total. */
     spend: { calls: number; cost_usd: number }
   }
+  /** Top-level alias mirrored with `session.answererMode` for ergonomic selector access. */
+  answererMode: AnswererMode
   turns: Turn[]
   ui: {
     activeTurnId: string | null
     selectedEvidenceId: string | null
     hoveredEvidenceIds: string[]
     tool: Tool
+    /** Continuous zoom percentage in `[ZOOM_MIN, ZOOM_MAX]` (`100..450`). */
+    zoom: number
+    /** Nearest step index in `ZOOM_STEPS`, kept synchronized with `zoom`. */
     zoomIndex: number
     compare: { on: boolean; mode: 'swipe' | 'blend'; opacity: number }
     marks: Mark[]
     attachedMarkId: string | null
     traceOpen: boolean
     pluginsOpen: boolean
+    shortcutsOpen: boolean
+    commandOpen: boolean
     whatIf: { roomId: string | null; w: number; h: number }
   }
   undoStack: UndoEntry[]
@@ -162,6 +183,7 @@ export interface AppState {
   // session
   initSource(): Promise<void>
   retrySource(): Promise<void>
+  setAnswererMode(mode: AnswererMode): void
   /** Show drawing `id`: the bundled one instantly, others from the API (polling while processing). */
   loadDrawing(id: string): Promise<void>
   /** Stop polling (route left). */
@@ -172,8 +194,10 @@ export interface AppState {
   cancel(): void
   /** Restore the drawing's last conversation from the API (after a reload); no-op when there are turns. */
   restoreConversation(): Promise<void>
-  /** Forget the conversation: a fresh start on the same drawing. */
-  newConversation(): void
+  /** Forget the conversation: a fresh start on the same drawing. Returns a 1-click restore callback. */
+  newConversation(): () => void
+  /** Restore the last cleared conversation on the current drawing, if no new turns were added. */
+  undoNewConversation(): boolean
   /** Record model use that is not part of an answer (a rewrite), so the session total stays honest. */
   addSpend(calls: number, cost_usd: number): void
   setActive(turnId: string | null): void
@@ -182,6 +206,8 @@ export interface AppState {
   setFeedback(turnId: string, feedback: Feedback): void
   // evidence
   select(turnId: string, evidenceId: string | null): void
+  /** Cycle through evidence items (`+1` next, `-1` previous) on the active or latest answered turn. */
+  stepEvidence(delta: number): string | null
   toggle(turnId: string, evidenceId: string): void
   /** First tap selects/locates; a second tap on the selected evidence toggles it. */
   tap(turnId: string, evidenceId: string): 'selected' | 'toggled'
@@ -190,6 +216,8 @@ export interface AppState {
   resetTurn(turnId: string): void
   // tools and view
   setTool(tool: Tool): void
+  setZoom(zoom: number): void
+  resetZoom(): void
   setZoomIndex(i: number): void
   zoomIn(): void
   zoomOut(): void
@@ -199,6 +227,8 @@ export interface AppState {
   attachMark(id: string | null): void
   setTraceOpen(open: boolean): void
   setPluginsOpen(open: boolean): void
+  setShortcutsOpen(open: boolean): void
+  setCommandOpen(open: boolean): void
   // what-if
   startWhatIf(roomId: string): void
   setWhatIfDraft(w: number, h: number): void
@@ -220,6 +250,20 @@ let seq = 0
 const nextId = (p: string) => `${p}-${++seq}`
 
 const clampZoom = (i: number) => Math.min(ZOOM_STEPS.length - 1, Math.max(0, Math.round(i)))
+const clampZoomPct = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z)))
+const nearestZoomIndex = (z: number) =>
+  ZOOM_STEPS.reduce((best, step, i) => (Math.abs(step - z) < Math.abs(ZOOM_STEPS[best] - z) ? i : best), 0)
+
+function canToggleEvidence(x: AgentTurn | undefined, evidenceId: string): boolean {
+  if (!x?.response) return false
+  if (x.response.method === 'agent_estimate' && (x.response.answer.kind !== 'count' || isRoomEvidenceId(evidenceId))) {
+    return false
+  }
+  if (isRoomEvidenceId(evidenceId)) {
+    return x.response.evidence.rooms.some((r) => r.room_id === roomIdOfEvidence(evidenceId))
+  }
+  return x.response.evidence.boxes.some((b) => b.id === evidenceId)
+}
 
 export function createAppStore(deps: StoreDeps = {}): AppStore {
   const source = deps.source ?? createSource()
@@ -248,19 +292,27 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
         return { toggles: { ...x.toggles, [key]: map } }
       })
 
-    source.subscribe((st) => set((s) => ({ session: { ...s.session, source: st } })))
+    source.subscribe((st) =>
+      set((s) => {
+        const mode = (st as { answerer?: AnswererMode }).answerer ?? s.session.answererMode
+        return { answererMode: mode, session: { ...s.session, source: st, answererMode: mode } }
+      }),
+    )
 
     const freshUi = (): AppState['ui'] => ({
         activeTurnId: null,
         selectedEvidenceId: null,
         hoveredEvidenceIds: [],
         tool: 'select',
+        zoom: ZOOM_MIN,
         zoomIndex: 0,
         compare: { on: false, mode: 'swipe', opacity: 55 },
         marks: [],
         attachedMarkId: null,
         traceOpen: false,
         pluginsOpen: false,
+        shortcutsOpen: false,
+        commandOpen: false,
         whatIf: { roomId: null, w: 0, h: 0 },
       })
 
@@ -269,6 +321,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
     /** The answer currently streaming; a new question or Stop aborts it. */
     let inflight: AbortController | null = null
     let pollTimer: ReturnType<typeof setTimeout> | undefined
+    let lastClearedRestore: (() => boolean) | null = null
     const setLoad = (load: DrawingLoad) => set((s) => ({ session: { ...s.session, load } }))
     /** Swap in a ready drawing; a different drawing starts a clean conversation. */
     const showDrawing = (d: Drawing) => {
@@ -278,6 +331,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       // belongs to the old drawing; the next question would be rejected).
       inflight?.abort()
       inflight = null
+      lastClearedRestore = null
       set({ session: { ...session, conversationId: null }, turns: [], undoStack: [], ui: freshUi() })
     }
     const loadError = (id: string, e: unknown): DrawingLoad => {
@@ -290,15 +344,20 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       return { id, state: 'error', message: e instanceof Error ? e.message : tu('load_error') }
     }
 
+    const initialSource = source.status()
+    const initialMode: AnswererMode = (initialSource as { answerer?: AnswererMode }).answerer ?? 'hybrid'
+
     return {
       session: {
-        source: source.status(),
+        source: initialSource,
+        answererMode: initialMode,
         drawing: initial,
         lang: 'en',
         load: { id: initial.id, state: 'ready' },
         conversationId: null,
         spend: { calls: 0, cost_usd: 0 },
       },
+      answererMode: initialMode,
       turns: [],
       ui: freshUi(),
       undoStack: [],
@@ -308,6 +367,9 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
       async retrySource() {
         await source.retry()
+      },
+      setAnswererMode(mode) {
+        set((s) => ({ answererMode: mode, session: { ...s.session, answererMode: mode } }))
       },
 
       async loadDrawing(id) {
@@ -506,10 +568,42 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
 
       newConversation() {
+        const cur = get()
+        const snap =
+          cur.turns.length > 0 || cur.ui.marks.length > 0
+            ? {
+                drawingId: cur.session.drawing.id,
+                turns: cur.turns.filter((x) => !(x.role === 'agent' && x.status === 'pending')),
+                undoStack: cur.undoStack,
+                conversationId: cur.session.conversationId,
+                ui: cur.ui,
+              }
+            : null
         inflight?.abort()
         inflight = null
-        writeConversation(get().session.drawing.id, null)
+        writeConversation(cur.session.drawing.id, null)
         set((st) => ({ turns: [], undoStack: [], session: { ...st.session, conversationId: null }, ui: freshUi() }))
+        const restore = (): boolean => {
+          if (!snap) return false
+          const now = get()
+          if (now.session.drawing.id !== snap.drawingId || now.turns.length > 0) return false
+          lastClearedRestore = null
+          writeConversation(snap.drawingId, snap.conversationId)
+          set((st) => ({
+            turns: snap.turns,
+            undoStack: snap.undoStack,
+            session: { ...st.session, conversationId: snap.conversationId },
+            ui: { ...snap.ui, shortcutsOpen: false, commandOpen: false },
+          }))
+          return true
+        }
+        lastClearedRestore = snap ? restore : null
+        return () => {
+          restore()
+        }
+      },
+      undoNewConversation() {
+        return lastClearedRestore ? lastClearedRestore() : false
       },
 
       setActive(turnId) {
@@ -528,9 +622,40 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       select(turnId, evidenceId) {
         ui({ activeTurnId: turnId, selectedEvidenceId: evidenceId })
       },
+      stepEvidence(delta) {
+        const s = get()
+        const candidates: AgentTurn[] = []
+        if (s.ui.activeTurnId) {
+          const act = agent(s.ui.activeTurnId)
+          if (act) candidates.push(act)
+        }
+        for (let i = s.turns.length - 1; i >= 0; i--) {
+          const t = s.turns[i]
+          if (t.role === 'agent' && !candidates.some((c) => c.id === t.id)) candidates.push(t)
+        }
+        const target = candidates.find((t) => {
+          const ev = t.response?.evidence ?? t.stream?.evidence
+          return !!ev && (ev.boxes.length > 0 || ev.rooms.length > 0)
+        })
+        if (!target) return null
+        const ev = (target.response?.evidence ?? target.stream?.evidence)!
+        const ids = [...ev.boxes.map((b) => b.id), ...ev.rooms.map((r) => roomEvidenceId(r.room_id))]
+        if (ids.length === 0) return null
+        const cur = s.ui.activeTurnId === target.id ? s.ui.selectedEvidenceId : null
+        const curIdx = cur ? ids.indexOf(cur) : -1
+        const nextIdx =
+          curIdx === -1
+            ? delta < 0
+              ? ids.length - 1
+              : 0
+            : (((curIdx + delta) % ids.length) + ids.length) % ids.length
+        const chosen = ids[nextIdx]
+        get().select(target.id, chosen)
+        return chosen
+      },
       toggle(turnId, evidenceId) {
         const x = agent(turnId)
-        if (!x || !x.response) return
+        if (!x || !x.response || !canToggleEvidence(x, evidenceId)) return
         let prev: boolean | undefined
         let next: boolean | undefined
         if (isRoomEvidenceId(evidenceId)) {
@@ -550,6 +675,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       tap(turnId, evidenceId) {
         const { ui: u } = get()
         if (u.activeTurnId === turnId && u.selectedEvidenceId === evidenceId) {
+          if (!canToggleEvidence(agent(turnId), evidenceId)) return 'selected'
           get().toggle(turnId, evidenceId)
           return 'toggled'
         }
@@ -575,14 +701,33 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       setTool(tool) {
         ui({ tool })
       },
+      setZoom(zoom) {
+        const z = clampZoomPct(zoom)
+        ui({ zoom: z, zoomIndex: nearestZoomIndex(z) })
+      },
+      resetZoom() {
+        ui({ zoom: ZOOM_MIN, zoomIndex: 0 })
+      },
       setZoomIndex(i) {
-        ui({ zoomIndex: clampZoom(i) })
+        const idx = clampZoom(i)
+        ui({ zoomIndex: idx, zoom: ZOOM_STEPS[idx] })
       },
       zoomIn() {
-        ui({ zoomIndex: clampZoom(get().ui.zoomIndex + 1) })
+        const cur = get().ui.zoom
+        const nextIdx = ZOOM_STEPS.findIndex((step) => step > cur)
+        const idx = nextIdx === -1 ? ZOOM_STEPS.length - 1 : nextIdx
+        ui({ zoomIndex: idx, zoom: ZOOM_STEPS[idx] })
       },
       zoomOut() {
-        ui({ zoomIndex: clampZoom(get().ui.zoomIndex - 1) })
+        const cur = get().ui.zoom
+        let idx = 0
+        for (let i = ZOOM_STEPS.length - 1; i >= 0; i--) {
+          if (ZOOM_STEPS[i] < cur) {
+            idx = i
+            break
+          }
+        }
+        ui({ zoomIndex: idx, zoom: ZOOM_STEPS[idx] })
       },
       setCompare(patch) {
         const c = { ...get().ui.compare, ...patch }
@@ -610,6 +755,12 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
       },
       setPluginsOpen(open) {
         ui({ pluginsOpen: open })
+      },
+      setShortcutsOpen(open) {
+        ui(open ? { shortcutsOpen: true, commandOpen: false } : { shortcutsOpen: false })
+      },
+      setCommandOpen(open) {
+        ui(open ? { commandOpen: true, shortcutsOpen: false } : { commandOpen: false })
       },
 
       startWhatIf(roomId) {

@@ -90,17 +90,17 @@
   --accent: #00000008;
   --accent-foreground: #1a1a1a;
   --border: #e7e7e7;
-  --input: #a1a1a1;
+  --input: #767676;
   --ring: #7d7d7d;
 
-  --destructive: #ca482a;
+  --destructive: #b3391e;
   --destructive-foreground: #ffffff;
   --destructive-surface: #f9e5e2;
   --success: #367c48;
   --success-surface: #e3f9ea;
-  --warning: #a55e29;
+  --warning: #965422;
   --warning-surface: #f9f3d4;
-  --info: #166ed1;
+  --info: #1260b8;
   --info-surface: #ddeaf7;
   /* ours: user input (marked areas, scope, what-if sizes) */
   --user: #0f766e;
@@ -169,14 +169,25 @@
   }
 }
 
+@keyframes aura-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
     scroll-behavior: auto !important;
+  }
+  [data-slot="spinner"] {
+    animation: aura-pulse 1.6s ease-in-out infinite !important;
+    transform: none !important;
   }
 }
 
