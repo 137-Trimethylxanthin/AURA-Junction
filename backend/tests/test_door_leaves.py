@@ -23,12 +23,14 @@ class LeafClient(FakeClient):
         super().__init__(turns)
         self.verdict = verdict  # door box -> (choice, confidence)
         self.decision_calls: list[int] = []
+        self.purposes: list[str] = []
         self.fail = fail
 
     async def decisions(self, parts, questions, purpose, *, meter=None, **kw):
         if meter is not None:
             meter.add(SimpleNamespace(cost_usd=0.001, input_tokens=1000, output_tokens=0))
         self.decision_calls.append(len(questions))
+        self.purposes.append(purpose)
         if self.fail:
             raise GeminiError(503, "unavailable")
         boxes = self.batch_boxes.pop(0)
@@ -46,6 +48,7 @@ def d(tmp_path, monkeypatch):
     base = tools.load_file(FRONTEND_DRAWING)
     Image.new("RGB", (1200, 900), "white").save(tmp_path / "original.png")
     door_leaves._MEM.clear()
+    door_leaves._FAILED.clear()
     return dataclasses.replace(base, dir=tmp_path)
 
 
@@ -156,6 +159,7 @@ async def test_failed_request_falls_back_to_the_width_rule(d):
 async def test_call_cap_leaves_the_rest_unclear(d, monkeypatch):
     monkeypatch.setattr(door_leaves, "BATCH", 2)
     monkeypatch.setattr(door_leaves, "MAX_CALLS", 2)
+    monkeypatch.setattr(door_leaves, "MAX_BATCH", 2)
     client = LeafClient(turns(), lambda b: ("double", 0.9))
     built, _stats = await ask(d, client, "How many double doors?")
     assert len(client.decision_calls) == 2
@@ -199,3 +203,81 @@ async def test_cached_verdicts_show_a_cache_node(d):
     built, _stats = await ask(d, LeafClient(turns(), lambda b: pytest.fail("cached")), "How many double doors?")
     node = next(n for n in built.body["trace"] if n["id"].endswith("-cache"))
     assert "0 calls" in node["body"]
+
+
+
+# ---- security review: bounded crops, metered calls, per-IP purpose, one attempt, failure cache ----
+
+
+@pytest.mark.parametrize("box", [
+    SimpleNamespace(x=-50.0, y=-50.0, w=1e9, h=1e9),
+    SimpleNamespace(x=99.9, y=99.9, w=1e6, h=3.0),
+    SimpleNamespace(x=10.0, y=10.0, w=0.0, h=0.0),
+])
+def test_crop_size_is_bounded_whatever_the_box_says(box, monkeypatch):
+    made = []
+    real = Image.new
+    monkeypatch.setattr(door_leaves.Image, "new", lambda mode, size, *a: made.append(size) or real(mode, size, *a))
+    png = door_leaves.make_crop(Image.new("RGB", (5000, 4000), "white"), box)
+    side = made[-1][0]
+    assert side <= min(door_leaves.MAX_CROP_PX, int(1.2 * 5000))
+    assert Image.open(__import__("io").BytesIO(png)).size == (door_leaves.TILE_PX, door_leaves.TILE_PX)
+
+
+async def test_non_finite_boxes_are_unclear_and_never_cropped(d):
+    bad = SimpleNamespace(id="door-x", x=float("nan"), y=1.0, w=1.0, h=1.0)
+    ok = doors(d)[0]
+    client = LeafClient([], lambda b: ("double", 0.9))
+    client.batch_boxes = []
+    res = await door_leaves.classify(SimpleNamespace(client=client), d, [bad, ok], None, Meter())
+    assert res["door-x"]["verdict"] == "unclear" and res["door-x"]["source"] == "invalid"
+    assert res[ok.id]["verdict"] == "double"
+
+
+async def test_calls_count_on_the_question_meter_with_their_own_purpose(d):
+    client = LeafClient(turns(), lambda b: ("double", 0.9))
+    _built, stats = await ask(d, client, "How many double doors?")
+    assert stats["meter"].calls == 1 + len(client.decision_calls)  # planner + door crops
+    assert client.purposes and set(client.purposes) == {door_leaves.PURPOSE}
+    from aura.budget import AGENT_PURPOSES
+    assert door_leaves.PURPOSE in AGENT_PURPOSES  # the per-IP hourly limit covers it
+
+
+def test_door_leaves_purpose_is_rate_limited_per_ip():
+    from aura.budget import Budget, BudgetError
+    b = Budget(Settings(AURA_IP_AGENT_PER_HOUR=1, AURA_UNLIMITED=False))
+    b.reserve(door_leaves.PURPOSE, ip_hash="ip1")
+    with pytest.raises(BudgetError):
+        b.reserve(door_leaves.PURPOSE, ip_hash="ip1")
+    b2 = Budget(Settings(AURA_IP_AGENT_PER_HOUR=1, AURA_UNLIMITED=True))  # dev mode stays unlimited
+    for _ in range(3):
+        b2.reserve(door_leaves.PURPOSE, ip_hash="ip1")
+
+
+async def test_few_calls_left_means_bigger_batches_never_more_calls(d, monkeypatch):
+    monkeypatch.setattr(door_leaves, "BATCH", 5)
+    client = LeafClient([], lambda b: ("single", 0.9))
+    client.batch_boxes = []
+    m = Meter()
+    res = await door_leaves.classify(SimpleNamespace(client=client), d, doors(d), None, m, max_calls=1)
+    assert len(client.decision_calls) == 1 == m.calls
+    assert client.decision_calls[0] == len(door_leaves.groups_of(doors(d))) <= door_leaves.MAX_BATCH
+    assert "_why" not in res
+
+
+async def test_one_attempt_per_drawing_per_question(d):
+    twice = [[("list_openings", {"kind": "door", "double": True}),
+              ("list_openings", {"kind": "door", "double": True, "finish_as": "count"})]]
+    client = LeafClient(twice, lambda b: ("double", 0.9), fail=True)
+    built, _stats = await ask(d, client, "How many double doors?")
+    assert len(client.decision_calls) == 1  # the second call in the same question did not retry
+    assert built is None or "width rule" in built.body["explanation"]
+
+
+async def test_a_failure_is_not_retried_for_a_while(d):
+    await ask(d, LeafClient(turns(), lambda b: ("double", 0.9), fail=True), "How many double doors?")
+    client = LeafClient(turns(), lambda b: pytest.fail("no retry within the TTL"))
+    built, _stats = await ask(d, client, "How many double doors?")
+    assert client.decision_calls == []
+    node = next(n for n in built.body["trace"] if n["id"].endswith("-fallback"))
+    assert "not retried" in node["body"]

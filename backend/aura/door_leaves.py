@@ -21,9 +21,11 @@ import hashlib
 import io
 import json
 import logging
+import math
 import re
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from PIL import Image, ImageDraw
@@ -34,8 +36,12 @@ from aura.gemini.client import GeminiError, Meter, image_part, text_part
 
 log = logging.getLogger("aura.door_leaves")
 
-BATCH = 20  # crops per request
-MAX_CALLS = 4  # requests per drawing (80 doors); beyond that doors stay unclear
+BATCH = 20  # preferred crops per request ...
+MAX_BATCH = 40  # ... grown up to this when the question has fewer calls left; beyond that doors stay unclear
+MAX_CALLS = 4  # requests per classification, also bounded by the question's remaining call budget
+PURPOSE = "door_leaves"  # budget purpose: counted against the per-IP model-question limit
+FAIL_TTL_S = 120.0  # a failed classification of a drawing is not retried for this long
+MAX_CROP_PX = 1024  # absolute cap on the crop cut from the page (it is downscaled to TILE_PX anyway)
 TIMEOUT_S = 40.0
 TILE_PX = 384
 CROP_SCALE = 2.6  # crop half-size = this × half the box's long side (the swing arc reaches one door width out) ...
@@ -69,6 +75,7 @@ SINGLE_WORDS = re.compile(
 _MEM: dict[str, dict] = {}  # per-door cache key -> verdict row
 _LOCKS: dict[str, asyncio.Lock] = {}
 _SHA: dict[tuple[str, float], str] = {}
+_FAILED: dict[str, float] = {}  # drawing id + image sha -> time of the last failed classification
 
 
 def wanted(args: dict, question: str) -> str | None:
@@ -96,11 +103,14 @@ def door_key(drawing_id: str, box: Any, sha: str) -> str:
 def make_crop(im: Image.Image, box: Any) -> bytes:
     """Square crop around the door (pixels, not percent), the door marked, resized to TILE_PX."""
     W, H = im.size
-    bx, by, bw, bh = box.x / 100 * W, box.y / 100 * H, box.w / 100 * W, box.h / 100 * H
+    x, y, w, h = _clamped(box)
+    bx, by, bw, bh = x / 100 * W, y / 100 * H, w / 100 * W, h / 100 * H
     cx, cy = bx + bw / 2, by + bh / 2
+    # Box geometry comes from uploaded drawings: the crop side is bounded whatever the box says.
     half = max(bw, bh) / 2 * CROP_SCALE + CROP_MARGIN * max(W, H)
+    side = max(8, min(int(2 * half), int(1.2 * max(W, H)), MAX_CROP_PX))
+    half = side / 2
     x0, y0 = int(cx - half), int(cy - half)
-    side = int(2 * half)
     tile = Image.new("RGB", (side, side), "white")  # pad at the image border instead of squashing
     tile.paste(im.crop((max(0, x0), max(0, y0), min(W, x0 + side), min(H, y0 + side))),
                (max(0, -x0), max(0, -y0)))
@@ -111,6 +121,24 @@ def make_crop(im: Image.Image, box: Any) -> bytes:
     buf = io.BytesIO()
     tile.save(buf, format="PNG", compress_level=6)
     return buf.getvalue()
+
+
+def _clamped(box: Any) -> tuple[float, float, float, float]:
+    """x, y, w, h in percent, finite and inside the page (ValueError for non-finite values)."""
+    vals = [float(v) for v in (box.x, box.y, box.w, box.h)]
+    if not all(math.isfinite(v) for v in vals):
+        raise ValueError("non-finite door box")
+    x, y = (min(100.0, max(0.0, v)) for v in vals[:2])
+    w, h = min(100.0 - x, max(0.0, vals[2])), min(100.0 - y, max(0.0, vals[3]))
+    return x, y, w, h
+
+
+def _finite(box: Any) -> bool:
+    try:
+        _clamped(box)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def groups_of(boxes: list) -> list[tuple[Any, list[str]]]:
@@ -160,7 +188,7 @@ async def _ask_batch(client, im: Image.Image, batch: list[tuple[Any, list[str]]]
 
     parts, qs = await asyncio.to_thread(build)
     async with asyncio.timeout(TIMEOUT_S):
-        res = await client.decisions(parts, qs, "check", ip_hash=getattr(caller, "ip_hash", None),
+        res = await client.decisions(parts, qs, PURPOSE, ip_hash=getattr(caller, "ip_hash", None),
                                      presenter=bool(getattr(caller, "presenter", False)), meter=meter)
     out = {}
     for n, (box, ids) in enumerate(batch, 1):
@@ -183,13 +211,17 @@ def usable(svc) -> bool:
     return bool(ok()) if callable(ok) else True
 
 
-async def classify(svc, d, boxes: list, caller=None, meter: Meter | None = None) -> dict:
+async def classify(svc, d, boxes: list, caller=None, meter: Meter | None = None,
+                   max_calls: int = MAX_CALLS) -> dict:
     """Verdicts for every door box: {door_id: {verdict, confidence, probabilities, model, source}}, plus
-    `_batches` (one entry per request sent) and `_why` when the model could not be used at all."""
+    `_batches` (one entry per request sent) and `_why` when the model could not be used at all.
+    At most `max_calls` requests, metered on `meter` (the question's own meter)."""
     image = d.image_path()
     if image is None:
         return {"_why": "no page image for this drawing", "_batches": []}
     sha = image_sha(image)
+    bad = [b.id for b in boxes if not _finite(b)]
+    boxes = [b for b in boxes if _finite(b)]
     lock = _LOCKS.setdefault(f"{d.id}:{sha}", asyncio.Lock())
     async with lock:  # two questions at once share one classification
         disk = _load_file(d)
@@ -205,15 +237,26 @@ async def classify(svc, d, boxes: list, caller=None, meter: Meter | None = None)
         out: dict[str, Any] = {**rows, "_batches": []}
         if not todo:
             return out
+        for i in bad:
+            out[i] = {"verdict": "unclear", "confidence": 0.0, "source": "invalid", "note": "invalid door box"}
         if not usable(svc):
             return {**out, "_why": "the decision model is not available"}
+        failed = _FAILED.get(f"{d.id}:{sha}")
+        if failed is not None and time.time() - failed < FAIL_TTL_S:
+            return {**out, "_why": f"the decision model failed on this drawing {time.time() - failed:.0f} s ago; "
+                                   f"not retried for {FAIL_TTL_S:.0f} s"}
+        calls = max(0, min(max_calls, MAX_CALLS))
+        if calls == 0:
+            return {**out, "_why": "no model calls left for this question"}
         groups = groups_of(todo)
-        capped = groups[BATCH * MAX_CALLS:]
-        groups = groups[:BATCH * MAX_CALLS]
+        n_batches = min(calls, -(-len(groups) // BATCH))
+        size = min(MAX_BATCH, -(-len(groups) // n_batches))
+        capped = groups[size * n_batches:]
+        groups = groups[:size * n_batches]
         with Image.open(image) as src:
             im = src.convert("RGB")
         dm = meter if meter is not None else Meter()
-        batches = [groups[i:i + BATCH] for i in range(0, len(groups), BATCH)]
+        batches = [groups[i:i + size] for i in range(0, len(groups), size)]
         results = await asyncio.gather(*(_ask_batch(svc.client, im, bt, dm, caller) for bt in batches),
                                        return_exceptions=True)
         fresh = {}
@@ -243,7 +286,9 @@ async def classify(svc, d, boxes: list, caller=None, meter: Meter | None = None)
         for _box, ids in capped:
             for i in ids:
                 out[i] = {"verdict": "unclear", "confidence": 0.0, "source": "cap",
-                          "note": f"not checked: more than {BATCH * MAX_CALLS} doors"}
+                          "note": f"not checked: more than {size * n_batches} doors for the calls left"}
+        if not fresh:
+            _FAILED[f"{d.id}:{sha}"] = time.time()
         if not fresh and not rows:
             out["_why"] = "the decision model request failed: " + "; ".join(
                 b.get("error", "") for b in out["_batches"])[:200]
@@ -251,7 +296,7 @@ async def classify(svc, d, boxes: list, caller=None, meter: Meter | None = None)
 
 
 async def list_openings(svc, d, sess, ref: str, a: dict, caller, meter: Meter, trace: list[dict],
-                        parent: str):
+                        parent: str, calls_left: int = MAX_CALLS):
     """list_openings for 'double doors' / 'single doors', membership decided per door by the model."""
     from aura import steps  # steps imports this module lazily; no cycle at import time
 
@@ -262,10 +307,14 @@ async def list_openings(svc, d, sess, ref: str, a: dict, caller, meter: Meter, t
     for side in ("min_width_m", "max_width_m"):  # the old width proxy for the leaf count
         if steps._num(base_args.get(side)) is not None and abs(steps._num(base_args[side]) - steps.DOUBLE_DOOR_M) < 0.011:
             base_args.pop(side)
-    dm = Meter()
-    res = await classify(svc, d, tb.boxes.get("door", []), caller, dm)
-    meter.cost_usd += dm.cost_usd  # the planner's call limit counts planning calls only
-    meter.tokens += dm.tokens
+    # One classification attempt per drawing per question; a repeat reads the cache only.
+    tried: set = sess.__dict__.setdefault("leaves_tried", set())
+    calls0 = meter.calls
+    res = await classify(svc, d, tb.boxes.get("door", []), caller, meter,
+                         max_calls=0 if d.id in tried else calls_left)
+    tried.add(d.id)
+    dm = SimpleNamespace(calls=meter.calls - calls0,
+                         cost_usd=sum(b.get("cost_usd") or 0.0 for b in res.get("_batches", [])))
     batches = res.pop("_batches", [])
     why = res.pop("_why", None)
     for k, b in enumerate(batches, 1):

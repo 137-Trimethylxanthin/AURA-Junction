@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 9  # 7: measurements not room ids; 8: tried-and-empty = not_answerable; 9: metadata of objects to tools
+ROUTER_VERSION = 10  # 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
@@ -299,8 +299,9 @@ _UNIT_RE = re.compile(
 _UNIT_APOS_RE = re.compile(r"(?:l['’]|dell['’])appartement?o?\s*([A-Z])(?![^\W_])", re.IGNORECASE)
 _UNIT_FI_RE = re.compile(rf"(?<!{_L})([A-Z])-(?:asunno|asunto){_L}*")
 # A room id like 3.05; never a measurement ("0.92 m", "15.5 m²", "2.5 metres").
-_ROOM_ID_RE = re.compile(r"(?<![\w.])([A-Z]{0,2}\d{1,3}\.\d{1,3})(?![\d])"
-                         r"(?!\s*(?:m\b|m²|m2\b|m\^2|cm|mm|sqm|qm|%|met(?:er|re)s?\b|neliö|quadrat))")
+_ROOM_ID_RE = re.compile(r"(?<![\w.$€£])([A-Z]{0,2}\d{1,3}\.\d{1,3})(?![\d])"
+                         r"(?!\s*(?:m\b|m²|m2\b|m\^2|cm|mm|sqm|qm|%|met(?:er|re)s?\b|neliö|quadrat"
+                         r"|\$|€|£|chf|eur\w*|usd|dollars?|fr\b|francs?|franken))", re.IGNORECASE)
 # ... nor a threshold ("larger than 15.5", "over 0.9", ">= 12.5").
 _COMPARE_BEFORE = re.compile(r"(?:than|over|under|above|below|least|most|[<>]=?|≥|≤|als|que|kuin|di)\s*$",
                              re.IGNORECASE)
@@ -378,7 +379,9 @@ def room_of(text: str, ctx: DrawingCtx | None) -> str | None:
         rid = m2.group(1)
         if not known or rid in known:
             return rid
-    return ids[0].group(1) if ids else None
+    # A bare number the drawing has no room for ("for 2.5", "costs 3.50") is not a room; an unknown
+    # id counts only after a room word ("room 9.99" above), so it can abstain as unclear.
+    return None if known else (ids[0].group(1) if ids else None)
 
 
 def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]:
@@ -499,6 +502,11 @@ WHICH_ARE_THERE = re.compile(
     re.IGNORECASE)
 
 
+PRICE = re.compile(
+    r"\b(?:price|prices|cost|costs|costing|pay|budget|quote|per (?:m²|m2|square)|"
+    r"prix|coût\w*|coute\w*|payer|preis\w*|kosten?|kostet|bezahl\w*|hinta\w*|maksa\w*|"
+    r"prezz\w*|cost[oai]|pagar\w*)\b|[$€£]|\b(?:chf|eur|usd)\b",
+    re.IGNORECASE)
 # Metadata of drawn objects (EN/FR/DE/FI/IT). Not "named"/"called" (that is a room label).
 METADATA = re.compile(
     r"\b(?:property|properties|property ?sets?|psets?|attributes?|ifc ?class(?:es)?|classes|"
@@ -580,6 +588,11 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
         return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["deictic_similarity"])
 
     box_subject = next((subj for subj, rx in SUBJECTS if rx.search(s)), None)
+    # A calculation on top of the drawing ("price of wood floor for the kitchens at 2.5 $/m²"):
+    # the area alone is not the answer; tool steps and their reasoning step compute it.
+    if PRICE.search(s):
+        return Routed("unknown", lang, signal, scope=_scope(s, ctx), subject=box_subject,
+                      matched=["calculation"])
     # "how many distinct property sets are recorded for the doors", "which layers contain the
     # windows": the thing counted is metadata OF the objects, not the objects. Tool steps (sql).
     if METADATA.search(s) and (box_subject or ROOM_WORD.search(s) or LAYER_WORD.search(s)):

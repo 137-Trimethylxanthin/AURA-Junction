@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -31,7 +32,7 @@ from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from aura import tools, uploads
+from aura import ingest_cost, tools, uploads
 from aura.agent_client import AgentClient
 from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, Ledger, RequestRecord
 from aura.cache import AnswerCache, CheckCache
@@ -275,6 +276,27 @@ def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -
     return None
 
 
+def _visible_projects(s: Services, request: Request) -> list[ProjectBundle]:
+    """The bundles this caller may see (same rule as GET /projects)."""
+    hashes = {r["id"]: r.get("token_hash") for r in (s.store.project_rows() if s.store else [])}
+    return [p for p in _synthesize_projects(s)
+            if not any(f.drawing_id.startswith("up-") for f in p.floors)
+            or _project_access(s, request, [f.drawing_id for f in p.floors], hashes.get(p.id))]
+
+
+def _building_run(s: Services, request: Request, drawing_id: str, question: str, body: Any):
+    """A whole-building `run` for a drawing that is a sheet of a multi-plan project, else None."""
+    from aura import building
+
+    scope = body.scope.model_dump(exclude_none=True) if body.scope else None
+    plan = building.plan_for(_visible_projects(s, request), drawing_id, question,
+                             project_id=body.project_id, sheet_ids=body.sheet_ids, scope=scope)
+    if plan is None:
+        return None
+    from aura import pipeline
+    return functools.partial(building.run, plan=plan, base_run=pipeline.run, persist=pipeline._persist)
+
+
 def _same_project(s: Services, did_a: str, did_b: str) -> bool:
     """A conversation may switch floors only within one server-side project (persisted bundle,
     server-set `project_id`, or an auto-detected IFC storey group). Never from client input."""
@@ -481,6 +503,8 @@ def create_app(
                 "budget_left": (budget["event"]["cap"] - budget["event"]["used"]
                                 if budget["event"]["cap"] > 0 else None),
                 **(s.store.spend_totals() if s.store else {}),
+                # the drawing store's ingestion (Gemini detection/reading of uploads), priced per model
+                **(ingest_cost.totals() if request.app.state.drawing_store.available() else {}),
             },
         }
         body["store"] = "on" if request.app.state.drawing_store.available() else "off"
@@ -883,7 +907,9 @@ def create_app(
         meters = {"answer": Meter(), "check": Meter()}
         try:
             async with asyncio.timeout(settings.turn_deadline_s):
-                return JSONResponse(await ask(svc(request), body, caller_of(request), meters))
+                s = svc(request)
+                run_fn = _building_run(s, request, body.drawing_id, body.question, body)
+                return JSONResponse(await ask(s, body, caller_of(request), meters, run_fn))
         except TimeoutError:
             return _err("timeout", "The answer took too long.", 504, **_spent(*meters.values()))
 
@@ -900,7 +926,8 @@ def create_app(
             conv = s.store.conversation(body.conversation_id) if s.store else None
             if conv is not None and not _same_project(s, conv["drawing_id"], body.drawing_id):
                 return _err("bad_request", "That conversation belongs to another drawing.", 400)
-        gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s)
+        gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s,
+                          _building_run(s, request, body.drawing_id, body.message, body))
         return StreamingResponse(_sse(gen), media_type="text/event-stream",
                                  headers={"cache-control": NO_STORE, "x-accel-buffering": "no"})
 
@@ -1137,6 +1164,7 @@ async def _store_status(s: Services, ds: DrawingStore, row: dict) -> dict:
         rows += sorted(sibs, key=lambda r: int(r["id"].rsplit("-p", 1)[1] or 0))
     now = time.time()
     pages, counts, calls, stages = [], {}, 0, []
+    cost, tok_in, tok_out = 0.0, 0, 0  # Gemini spend of the store's ingestion (aura/ingest_cost.py)
     for i, r in enumerate(rows, 1):
         try:
             meta = json.loads(r.get("meta") or "{}")
@@ -1157,6 +1185,9 @@ async def _store_status(s: Services, ds: DrawingStore, row: dict) -> dict:
         for k, v in (st.get("counts") or {}).items():
             counts[k] = counts.get(k, 0) + v
         calls += int(st.get("calls") or 0)
+        cost += float(st.get("cost_usd") or 0)
+        tok_in += int((st.get("tokens") or {}).get("input") or 0)
+        tok_out += int((st.get("tokens") or {}).get("output") or 0)
         pages.append(page)
     live = [x for x in stages if x[0] in _STAGE_RANK]
     if live:
@@ -1180,6 +1211,8 @@ async def _store_status(s: Services, ds: DrawingStore, row: dict) -> dict:
         out["note"] = note
     if ds.available() or calls:
         out["ingest_calls"] = calls
+        out["ingest_cost_usd"] = round(cost, 6)
+        out["ingest_tokens"] = {"input": tok_in, "output": tok_out}
     return out
 
 

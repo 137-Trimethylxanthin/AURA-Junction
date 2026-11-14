@@ -51,7 +51,7 @@ def svc_for(client):
     return SimpleNamespace(client=client, settings=Settings())
 
 
-async def ask(d, turns, question="q", **kw):
+async def ask(d, turns, question="show the doors", **kw):
     client = FakeClient(turns, **kw)
     stats = {"meter": Meter(), "route": "template"}
     built = await steps.answer_with_tools(svc_for(client), d, question, "en",
@@ -106,7 +106,7 @@ async def test_selected_scope_limits_the_room_pool(d):
     client = FakeClient([[("list_rooms", {"room_type": "bedroom", "finish_as": "list"})]])
     stats = {"meter": Meter(), "route": "template"}
     scope = {"kind": "unit", "unit": "A"}
-    built = await steps.answer_with_tools(svc_for(client), d, "q", "en",
+    built = await steps.answer_with_tools(svc_for(client), d, "list the bedrooms", "en",
                                           SimpleNamespace(ip_hash=None, presenter=False), stats,
                                           None, scope)
     body = validated(built, stats)
@@ -146,7 +146,7 @@ async def test_unrelated_judge_does_not_taint_an_exact_answer(d):
     assert validated(built, stats)["method"] == "cad_geometry"
 
 
-async def ask_with_history(d, turns, history, question="q"):
+async def ask_with_history(d, turns, history, question="show the doors"):
     client = FakeClient(turns)
     stats = {"meter": Meter(), "route": "template"}
     built = await steps.answer_with_tools(svc_for(client), d, question, "en",
@@ -451,7 +451,8 @@ async def test_reasoning_step_answers_what_the_tools_cannot(d):
     assert nodes["working"]["detail"]["rule"].startswith("kitchens")
     assert any("kitchen" in t for t in nodes["handed"]["detail"]["tables"])  # the tool's set was handed over
     assert nodes["answer"]["detail"]["source"] == "reasoned"
-    handed = json.loads(client.sent[-1]["contents"][-1]["parts"][0]["text"].removeprefix("Plan data: "))
+    handed = json.loads(next(p["text"] for c in client.sent[-1]["contents"] for p in c["parts"]
+                             if p.get("text", "").startswith("Plan data: ")).removeprefix("Plan data: "))
     assert handed["tool_results"][0]["ids"] == [r["room_id"] for r in kitchens]
     assert stats["meter"].calls == 2
 
@@ -486,3 +487,77 @@ def test_unused_numbers(d):
     assert steps.unused_numbers("rooms larger than 12 m² at 30 € le m²", sess, rs) == ["30"]
     assert steps.unused_numbers("area of room 3.04", sess, rs) == []
     assert steps.unused_numbers("paint the living rooms at 4 €/m²", sess, rs) == ["4"]  # not inside '3.04'
+
+
+BATTERY_OPEN = [  # the five battery questions the tool tier used to finish with a bare count/area
+    ("How many people could comfortably live in apartment A, and why?",
+     [("list_rooms", {"unit": "A", "finish_as": "count"})]),
+    ("Compare apartment A and B: which is better for a family of four?",
+     [("list_rooms", {"finish_as": "list", "group_by": "unit"})]),
+    ("What share of the floor area is circulation (corridors and halls)?",
+     [("list_rooms", {"room_type": "corridor", "finish_as": "area"})]),
+    ("Where would you put a washing machine in apartment B?",
+     [("list_rooms", {"unit": "B", "room_type": "storage", "finish_as": "count"})]),
+    ("and if we merge the two smallest bedrooms of apartment B, how big is the new room?",
+     [("list_rooms", {"unit": "B", "room_type": "bedroom", "finish_as": "list"})]),
+]
+
+
+@pytest.mark.parametrize(("question", "turn"), BATTERY_OPEN)
+async def test_open_questions_reach_the_reasoning_step(d, question, turn):
+    assert not steps.plain_question(question, d)
+    reply = reasoning_reply(answer="reasoned", working="from the totals")
+    built, stats, _ = await ask(d, [turn, reply], question=question)
+    body = validated(built, stats)
+    assert body["method"] == "agent_estimate" and body["answer"]["value"] == "reasoned"
+    assert stats["meter"].calls == 2  # one planning call, one reasoning call
+
+
+@pytest.mark.parametrize("question", [
+    "how many bedrooms are larger than 12 m²", "which rooms have no window", "show all rooms with toilets",
+    "which of them are wider than 0.95 m", "how many doors are there", "Is there a room without a window?",
+    "How many double doors are there?"])
+def test_plain_lookups_stay_with_the_tools(d, question):
+    assert steps.plain_question(question, d)
+
+
+def test_summary_has_per_room_objects_connections_and_totals(d):
+    sm = steps._plan_summary(d, None)
+    bath = next(r for r in sm["rooms"] if r["type"] == "bathroom")
+    assert bath.get("fixtures") and bath.get("doors") and bath.get("door_widths_m") and bath.get("connects_to")
+    indoor = round(sum(r["area_m2"] for r in d.drawing["rooms"] if not r.get("outdoor")), 2)
+    assert sm["totals"]["area_m2"]["indoor"] == indoor
+    assert len(json.dumps(sm, ensure_ascii=False)) <= steps.SUMMARY_CHARS
+
+
+async def test_wrong_plan_values_are_reasked_then_flagged(d):
+    total = steps._totals(d, d.drawing["rooms"], None)["area_m2"]["indoor"]
+    bad = reasoning_reply(answer="x", working="w", plan_values=[{"what": "indoor area", "value": total - 2}])
+    fixed = reasoning_reply(answer="fixed", working="w", plan_values=[{"what": "indoor area", "value": total}])
+    built, stats, _ = await ask(d, [[("list_rooms", {"finish_as": "reason"})], bad, fixed],
+                                question="how long to vacuum the floor at 20 m² per 10 minutes")
+    body = validated(built, stats)
+    assert body["answer"]["value"] == "fixed" and stats["meter"].calls == 3
+    still, st2, _ = await ask(d, [[("list_rooms", {"finish_as": "reason"})], bad, bad],
+                              question="how long to vacuum the floor at 20 m² per 10 minutes")
+    body2 = validated(still, st2)
+    assert "do not match the drawing data" in body2["explanation"]
+    assert any(n["id"] == "check" and n["kind"] == "warn" for n in body2["trace"])
+
+
+async def test_reasoning_timeout_is_an_honest_abstain(d, monkeypatch):
+    monkeypatch.setattr(steps, "REASON_TIMEOUT_S", 0.05)
+    built, stats, _ = await ask(d, [[("list_rooms", {"finish_as": "reason"})]], question="why is it so?",
+                                delay=0.2)
+    body = validated(built, stats)
+    assert body["answer"]["kind"] == "abstain" and "took longer" in json.dumps(body["trace"])
+
+
+def test_answer_text_must_agree_with_the_working():
+    out = {"can_answer": True, "answer": "You need 33 tiles.", "working": "11.44 × 1.1 / 0.36 = 34.96 → 35",
+           "number": 35}
+    assert [b["value"] for b in steps.check_answer_numbers(out, {11.44}, "tiles with 10 % waste")] == [33.0, 35.0]
+    working_says_33 = dict(out, working="… = 34.96, rounded up to 33")
+    assert steps.check_answer_numbers(working_says_33, {11.44}, "tiles")  # text 33 vs result 35
+    ok = dict(out, answer="You need 35 tiles.")
+    assert steps.check_answer_numbers(ok, {11.44}, "tiles with 10 % waste") == []

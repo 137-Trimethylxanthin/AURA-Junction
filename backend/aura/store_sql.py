@@ -91,6 +91,10 @@ def scope_for(d) -> StoreScope | None:
         return None
     keys = ref.get("drawing_keys") or ([ref["drawing_key"]] if ref.get("drawing_key") else [])
     files = ref.get("file_ids") or ([ref["file_id"]] if ref.get("file_id") else [])
+    if not files and isinstance(ref.get("files"), list):  # store-map.json: {files: [{sha256_16, drawing_key}]}
+        files = [f["sha256_16"] for f in ref["files"] if isinstance(f, dict) and f.get("sha256_16")]
+        keys = keys or list(dict.fromkeys(f["drawing_key"] for f in ref["files"]
+                                          if isinstance(f, dict) and f.get("drawing_key")))
     if not keys and not files:
         return None
     if not store_owns_things(d):

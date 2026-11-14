@@ -37,7 +37,7 @@ Bucket = Literal["public", "dev", "measurement"]
 # What a request is for. The per-IP kind is derived from this.
 Purpose = str
 
-AGENT_PURPOSES = {"choice", "abstain_gate", "agent", "rewrite"}
+AGENT_PURPOSES = {"choice", "abstain_gate", "agent", "rewrite", "door_leaves"}  # per-IP hourly limit
 RASTER_PURPOSES = {"raster_detect", "raster_score"}
 
 _DEFAULT_PRICE: tuple[float, float] = (2.00, 10.00)

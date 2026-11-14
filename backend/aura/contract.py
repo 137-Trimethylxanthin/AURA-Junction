@@ -154,6 +154,10 @@ class AskRequest(_Open):
     drawing_id: str = Field(min_length=1, max_length=200)
     question: str = Field(max_length=2000)
     scope: Scope | None = None
+    # 1.2 additive: a sheet of a multi-plan building is answered for the WHOLE building unless the
+    # question names a floor or `sheet_ids` selects some sheets (default: every sheet).
+    project_id: str | None = Field(default=None, max_length=200)
+    sheet_ids: list[str] | None = Field(default=None, max_length=50)
     overrides: list[Override] | None = Field(default=None, max_length=50)
     lang_hint: Lang | None = None
 
@@ -163,6 +167,8 @@ class ChatRequest(_Open):
     drawing_id: str = Field(min_length=1, max_length=200)
     message: str = Field(min_length=1, max_length=2000)
     scope: Scope | None = None
+    project_id: str | None = Field(default=None, max_length=200)  # see AskRequest
+    sheet_ids: list[str] | None = Field(default=None, max_length=50)
     overrides: list[Override] | None = Field(default=None, max_length=50)
     lang_hint: Lang | None = None
 
@@ -339,8 +345,18 @@ class TraceNode(_M):
     # its detail: {decider, model?, question?, options?, chosen, confidence?, runner_up?,
     # runner_up_confidence?, matched, route}. 'resources': {tables, grabbed, ms}.
     # 'filter': {rule, kept, dropped[{id, reason}]}. 'answer': {source, calls, cost_usd}.
-    stage: Literal["resources", "decision", "filter", "answer"] | None = None
+    stage: Literal["resources", "decision", "filter", "answer", "scope"] | None = None
     detail: dict[str, Any] | None = None
+
+
+class BreakdownItem(_M):
+    """1.2 additive: one sheet's share of a whole-building answer ("ground floor 14")."""
+
+    drawing_id: str
+    label: str
+    status: Literal["ok", "abstain", "error"]
+    value: float | None = None  # the sheet's count / area / quantity when it is summable
+    unit: str | None = None
 
 
 class AskResponse(_M):
@@ -368,6 +384,9 @@ class AskResponse(_M):
     route: Route | None = None
     explanation: str | None = None
     estimate: Estimate | None = None  # 1.1: a model estimate (image-only plans), never a fact
+    # 1.2 additive: per-sheet shares of a whole-building answer; evidence items carry their sheet's
+    # `drawing_id`, `scope` is the project scope of the sheets that were asked.
+    breakdown: list[BreakdownItem] | None = None
 
 
 class ErrorBody(_M):

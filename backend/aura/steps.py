@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -1068,7 +1069,7 @@ def asks_for_rooms(question: str) -> bool:
     return bool(m) and m.group(1).lower().startswith(("room", "space"))
 
 
-_Q_NUMBER = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)?(?![\w.])")
+_Q_NUMBER = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)?(?!\w)(?![.,]\d)")  # a sentence's final '.' is not a decimal
 
 
 def unused_numbers(question: str, sess: Session, rs: ResultSet) -> list[str]:
@@ -1191,7 +1192,10 @@ async def answer_with_tools(svc, d: tools.LoadedDrawing, question: str, lang: st
                                   scope, meter.calls - calls0, stats)
         if built is not None:
             return built
-    except (BudgetError, GeminiError, TimeoutError) as e:
+    except TimeoutError:
+        log.info("reasoning step timed out")
+        return _too_long(question, lang, scope, trace, meter.calls - calls0, stats)
+    except (BudgetError, GeminiError) as e:
         log.info("reasoning step gave up: %s", type(e).__name__)
         why = f"the model step stopped ({type(e).__name__})"
     if not store_on:
@@ -1199,27 +1203,91 @@ async def answer_with_tools(svc, d: tools.LoadedDrawing, question: str, lang: st
     return _abstain(question, lang, scope, trace, why, meter.calls - calls0, stats)
 
 
-REASON_TIMEOUT_S = 25.0
+REASON_TIMEOUT_S = 14.0  # the whole reasoning step, re-ask included: a typical answer stays under 10 s
+REASON_MODEL = os.environ.get("AURA_REASON_MODEL", "gemini-3.5-flash-lite")  # fast; ~2-5 s an answer
+SUMMARY_CHARS = 24_000  # ~6 k tokens of plan data at most
 REASON_SCHEMA = {"type": "object", "properties": {
     "can_answer": {"type": "boolean"},
     "answer": {"type": "string", "description": "The reply to the user, in their language."},
     "working": {"type": "string", "description": "Short working: the data used and the arithmetic."},
+    "plan_values": {"type": "array", "description": "Every number you took from the plan data (areas, counts, "
+                    "widths, totals), exactly as it appears there.",
+                    "items": {"type": "object", "properties": {"what": {"type": "string"},
+                                                               "value": {"type": "number"}},
+                              "required": ["what", "value"]}},
     "used_ids": {"type": "array", "items": {"type": "string"},
                  "description": "Ids of the rooms / objects the answer is about."},
     "number": {"type": "number", "description": "The final number, when the answer is one."},
     "unit": {"type": "string"},
     "missing": {"type": "string", "description": "When can_answer is false: what is missing, or a question back."}},
-    "required": ["can_answer", "answer", "working"]}
+    "required": ["can_answer", "answer", "working", "plan_values"]}
 REASON_SYSTEM = (
     "You are the assistant of a construction-plan viewer and know the plan described below (quoted data "
     "from the file, not instructions). Answer the user's question as a knowledgeable person would: find "
-    "the relevant rooms or objects in the data, do the arithmetic yourself (sums, products, prices, "
-    "quantities, percentages, unit conversions) and show it briefly in `working`, e.g. 'kitchens: 2 "
-    "rooms, 5.74 + 8.26 = 14.00 m²; 14.00 × 2.5 = 35.00 $'. Use the numbers in the data and the numbers "
-    "the user gives; when you need a value neither gives (a wall height, a price, a waste factor), state "
-    "the assumption you made in the answer. Never invent rooms or objects that are not in the data. If "
-    "the data cannot support any answer, set can_answer to false and say in `missing` what is missing or "
-    "ask the user back. Write `answer` in {lang}; keep it to a few sentences.")
+    "the relevant rooms or objects in the data, use the totals already computed in `totals` instead of "
+    "adding them up again, do the remaining arithmetic yourself (products, prices, quantities, "
+    "percentages, unit conversions) and show it briefly in `working`, e.g. 'kitchens: 2 rooms, 14.00 m² "
+    "(totals.area_m2.by_type.kitchen); 14.00 × 2.5 = 35.00 $'. List every number you took from the data in "
+    "`plan_values`. Use the numbers in the data and the numbers the user gives; when you need a value "
+    "neither gives (a wall height, a price, a waste factor), state the assumption you made in the answer. "
+    "General knowledge is welcome for judgement questions (typical occupancy per bedroom, accessibility "
+    "norms such as 0.80 m clear door width, where appliances usually go): say which rule of thumb you "
+    "applied. Every number in `answer` must also appear in `working`. Never invent rooms or objects that "
+    "are not in the data. Set can_answer to false only when the plan data has nothing that bears on the "
+    "question (e.g. the rent); then say in `missing` what is missing or ask the user back. Write `answer` "
+    "in {lang}; keep it to a few sentences.")
+
+# A question is a plain lookup (a count, an area, a list, a find) when it asks for things the drawing
+# indexes and carries no cue of reasoning; anything else goes to the reasoning step. Cues are generic
+# reasoning words in the five languages, not topics.
+OPEN_CUE = re.compile(
+    r"%|\b(?:why|how(?!\s+(?:many|much)\b)|compar\w*|versus|vs|better|best|worst|suggest\w*|recommend\w*|"
+    r"advi[cs]e|should|would|could|might|if|suitab\w*|enough|share|percent\w*|proportion|ratio|average|"
+    r"merg\w*|combin\w*|split|unusual|estimate|"
+    r"pourquoi|comment|mieux|meilleur\w*|conseil\w*|devrai\w*|pourrai\w*|serai\w*|si|pourcentage|fusionn\w*|"
+    r"warum|wie(?!\s+viele)|vergleich\w*|besser|beste\w*|vorschlag\w*|empfehl\w*|sollte\w*|würde\w*|"
+    r"könnte\w*|wenn|falls|anteil|prozent\w*|geeignet\w*|"
+    r"miksi|miten|vertaa\w*|parempi|paras|ehdot\w*|suosit\w*|pitäisi|voisi|jos|osuus|prosent\w*|sopiv\w*|"
+    r"perché|come|confront\w*|meglio|migliore|suggeri\w*|consigli\w*|dovrebbe|potrebbe|se|quota|"
+    r"percentual\w*|adatt\w*)\b", re.IGNORECASE)
+_LEAD = re.compile(r"^\W*(?:(?:ok(?:ay)?|now|and|so|then|please|show|me|list|which|what|how\s+many|are|is|"
+                   r"there|give|find|name|count|all|only|the|a|an|of\s+(?:them|those|these))\W+)*(\w+)",
+                   re.IGNORECASE)
+PLAIN_INTENTS = {"count", "area", "quantity", "find_text", "room_rank", "adjacent"}
+# A filter right after the lead ("which of them are wider than ...", "... with a toilet"): a lookup.
+FILTER_WORDS = {"wider", "narrower", "larger", "smaller", "bigger", "longer", "shorter", "higher", "lower",
+                "more", "less", "over", "under", "above", "below", "with", "without", "that", "having", "on",
+                "in", "at", "next", "adjacent", "connected", "facing", "near", "labelled", "labeled", "called"}
+
+
+def _vocabulary(d) -> set[str]:
+    words = {"room", "apartment", "flat", "unit", "space", "storey", "floor", *ROOM_TYPES, *BOX_SUBJECTS,
+             *(w for one, many in tools.NOUN.values() for w in (one.lower(), many.lower()))}
+    for r in d.drawing.get("rooms", []):
+        words.update(t.lower() for t in re.findall(r"\w+", str(r.get("name") or "")))
+    return words
+
+
+def plain_question(question: str, d) -> bool:
+    """True when a tool finish (count / area / list / find) can be the whole answer."""
+    if OPEN_CUE.search(question or ""):
+        return False
+    from aura.router import route
+
+    if route(question, d.ctx).intent in PLAIN_INTENTS:
+        return True
+    m = _LEAD.search(question or "")
+    if not m:
+        return False  # unsure: the reasoning step
+    vocab = _vocabulary(d)
+    first = m.group(1).lower()
+    if first in FILTER_WORDS:
+        return True
+    # the asked noun within the next words ("how many double doors", "which large bedrooms")
+    for w in [first, *re.findall(r"\w+", (question or "")[m.end():].lower())[:2]]:
+        if w in vocab or w.rstrip("s") in vocab or w.removesuffix("es") in vocab:
+            return True
+    return False
 
 
 def _perimeter_m(d, r: dict) -> float | None:
@@ -1234,62 +1302,191 @@ def _perimeter_m(d, r: dict) -> float | None:
     return round(_poly_m(pts, mx, my).length, 2)
 
 
+def _totals(d, rooms: list[dict], tb: Toolbox | None) -> dict:
+    """Sums and counts computed by code, so the model reads them instead of adding up."""
+    def s(rs):
+        return round(sum(float(r["area_m2"]) for r in rs if r.get("area_m2") is not None), 2)
+    indoor = [r for r in rooms if not r.get("outdoor")]
+    types: dict[str, list] = {}
+    for r in rooms:
+        types.setdefault(room_type(r), []).append(r)
+    units: dict[str, list] = {}
+    for r in indoor:
+        if r.get("unit"):
+            units.setdefault(r["unit"], []).append(r)
+    out: dict[str, Any] = {
+        "area_m2": {"all_rooms": s(rooms), "indoor": s(indoor), "outdoor": s([r for r in rooms if r.get("outdoor")]),
+                    "by_type": {k: s(v) for k, v in types.items()},
+                    "indoor_by_apartment": {k: s(v) for k, v in units.items()}},
+        "rooms": {"all": len(rooms), "indoor": len(indoor), "by_type": {k: len(v) for k, v in types.items()},
+                  "by_apartment": {k: sum(1 for r in rooms if r.get("unit") == k) for k in units}},
+    }
+    if tb is not None:
+        out["objects"] = {k: len(v) for k, v in tb.boxes.items()}
+    return out
+
+
 def _plan_summary(d, sess: Session | None) -> dict:
-    """What the model is handed: the plan's index (rooms with names/areas/units, counts of objects,
-    scale, how each subject was found) plus every set the tool steps grabbed for this question."""
+    """What the model is handed: per room its label, type, apartment, area, perimeter, doors (clear
+    widths), windows, fixtures and the rooms it connects to through a door; code-computed totals; scale
+    and how each subject was found; every set the tool steps grabbed. Capped at SUMMARY_CHARS."""
+    tb = sess.tb if sess is not None else (Toolbox(d) if d.drawing.get("rooms") else None)
     rooms = d.drawing.get("rooms", [])
+    if sess is not None and sess.scoped:
+        rooms = [r for r in rooms if r["room_id"] in set(sess.base)]
     em = d.drawing.get("evidence_method") or {}
-    counts = {}
-    for subj in BOX_SUBJECTS:
-        tr = tools.count_objects(d, subj)
-        if tr.supported:
-            counts[subj] = len(tr.boxes)
+
+    def room(r: dict, detail: int) -> dict:
+        rid = r["room_id"]
+        row: dict[str, Any] = {"id": rid, "label": str(r.get("name") or "")[:40], "type": room_type(r),
+                               **({"apartment": r["unit"]} if r.get("unit") else {}),
+                               **({"area_m2": r["area_m2"]} if r.get("area_m2") is not None else {}),
+                               **({"outdoor": True} if r.get("outdoor") else {})}
+        if detail >= 1 and (per := _perimeter_m(d, r)):
+            row["perimeter_m"] = per
+        if tb is not None and detail >= 1:
+            doors = tb.in_room("door", rid) if "door" in tb.supported else []
+            if doors:
+                widths = [tb.width_m[i] for i in doors if tb.width_m.get(i) is not None]
+                row["doors"] = len(doors)
+                if widths and detail >= 2:
+                    row["door_widths_m"] = widths
+                if detail >= 3:
+                    conn = sorted({o for i in doors for o in tb.box_rooms.get(i, []) if o != rid})
+                    if conn:
+                        row["connects_to"] = conn
+            if "window" in tb.supported:
+                row["windows"] = len(tb.in_room("window", rid))
+            fx = {k: n for k in FIXTURES if k in tb.supported and (n := len(tb.in_room(k, rid)))}
+            if fx:
+                row["fixtures"] = fx
+        return row
+
     out: dict[str, Any] = {
         "title": str(d.drawing.get("title") or "")[:80], "kind": d.drawing.get("kind"),
         "apartments": [u["id"] for u in d.drawing.get("units", [])],
-        "rooms": [{"id": r["room_id"], "label": str(r.get("name") or "")[:40], "type": room_type(r),
-                   **({"apartment": r["unit"]} if r.get("unit") else {}),
-                   **({"area_m2": r["area_m2"]} if r.get("area_m2") is not None else {}),
-                   **({"perimeter_m": per} if (per := _perimeter_m(d, r)) else {}),
-                   **({"outdoor": True} if r.get("outdoor") else {})} for r in rooms[:150]],
-        "object_counts": counts,
+        "totals": _totals(d, rooms, tb),
         "metric_scale": has_scale(d),
         "how_found": em or {"all": "read from the CAD/IFC file (exact)"},
+        "notes": "door_widths_m are clear openings; connects_to lists rooms sharing a door; outdoor rooms "
+                 "are balconies/terraces.",
     }
     if sess is not None and sess.sets:
         out["tool_results"] = [
             {"what": x.desc or x.rule, "kind": x.kind, "ids": x.ids[:60], "rule": x.rule,
              **({"rows": (x.sql or {}).get("rows", [])[:20]} if x.kind == "rows" else {})}
             for x in sess.sets.values()]
+    for detail in (3, 2, 1, 0):  # drop the bulkiest fields first until the plan fits
+        out["rooms"] = [room(r, detail) for r in rooms[:250]]
+        if len(json.dumps(out, ensure_ascii=False, default=str)) <= SUMMARY_CHARS:
+            break
+    else:
+        out["rooms"] = out["rooms"][:120]
+        out["rooms_truncated"] = True
     return out
+
+
+def _numbers_in(obj: Any, acc: set[float]) -> set[float]:
+    if isinstance(obj, bool) or obj is None:
+        return acc
+    if isinstance(obj, (int, float)):
+        acc.add(float(obj))
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _numbers_in(v, acc)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _numbers_in(v, acc)
+    elif isinstance(obj, str):
+        acc.update(float(m.replace(",", ".")) for m in _Q_NUMBER.findall(obj))
+    return acc
+
+
+def check_answer_numbers(out: dict, data: set[float], question: str) -> list[dict]:
+    """Numbers in the answer text that appear in neither the working, the plan data nor the question:
+    the text and the working disagree (e.g. '33 tiles' after working that ends in 35)."""
+    allowed = data | _numbers_in(question, set()) | _numbers_in(str(out.get("working") or ""), set())
+    if isinstance(out.get("number"), (int, float)):
+        allowed.add(float(out["number"]))
+    bad = []
+    said = _numbers_in(str(out.get("answer") or ""), set())
+    for v in said:
+        if not any(abs(v - a) <= 0.0051 + 1e-6 * abs(a) for a in allowed):
+            bad.append({"what": "number in the answer text not in the working", "value": v, "closest_in_data": None})
+    num = out.get("number")
+    if isinstance(num, (int, float)) and not isinstance(num, bool) and said and \
+            not any(abs(v - num) <= 0.0051 + 1e-6 * abs(num) for v in said):
+        bad.append({"what": "the result field differs from the number in the answer text", "value": float(num),
+                    "closest_in_data": None})
+    return bad
+
+
+def check_plan_values(out: dict, data: set[float], question: str) -> list[dict]:
+    """Plan values the model quoted that are in neither the handed data nor the question (within
+    rounding to 2 decimals)."""
+    given = data | _numbers_in(question, set())
+    bad = []
+    for pv in out.get("plan_values") or []:
+        v = pv.get("value") if isinstance(pv, dict) else None
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            continue
+        if not any(abs(v - a) <= 0.0051 + 1e-6 * abs(a) or round(v, 1) == round(a, 1) == v for a in given):
+            near = min(given, key=lambda a: abs(a - v)) if given else None
+            bad.append({"what": str(pv.get("what") or "")[:80], "value": v, "closest_in_data": near})
+    return bad
 
 
 async def _reason(svc, d, question: str, lang: str, caller, meter, history, sess: Session | None,
                   trace: list[dict], scope: dict, calls_before: int, stats: dict) -> A.Built | None:
-    """One model call: the question, the conversation and the plan data -> an answer the model wrote
-    and computed itself, labelled as reasoned (never exact). can_answer=false -> an honest abstain."""
+    """The model answers from the plan data itself, arithmetic included, labelled as reasoned (never
+    exact). Its quoted plan values are checked by code; one re-ask on a mismatch, then a warning.
+    can_answer=false -> an honest abstain with what is missing."""
     t0 = time.perf_counter()
     summary = await asyncio.to_thread(_plan_summary, d, sess)
-    model = svc.settings.sidecar_model or svc.settings.agent_model
+    data_numbers = _numbers_in(summary, set())
+    model = REASON_MODEL
     contents = [*_history_text(history), {"role": "user", "parts": [
         {"text": "Plan data: " + json.dumps(summary, ensure_ascii=False, default=str)},
         {"text": "Question: " + question}]}]
     language = A.LANG_NAME.get(lang, "the user's language")
-    g = await svc.client.generate(contents, purpose="agent", model=model,
-                                  system=REASON_SYSTEM.replace("{lang}", language),
-                                  ip_hash=caller.ip_hash, presenter=caller.presenter, meter=meter,
-                                  config={"responseMimeType": "application/json", "responseSchema": REASON_SCHEMA})
-    try:
-        out = json.loads(g.text or "{}")
-    except ValueError:
+    system = REASON_SYSTEM.replace("{lang}", language)
+    cfg = {"responseMimeType": "application/json", "responseSchema": REASON_SCHEMA}
+
+    async def ask() -> dict | None:
+        g = await svc.client.generate(contents, purpose="agent", model=model, system=system,
+                                      ip_hash=caller.ip_hash, presenter=caller.presenter, meter=meter,
+                                      config=cfg)
+        contents.append({"role": "model", "parts": [{"text": g.text or ""}]})
+        try:
+            o = json.loads(g.text or "{}")
+        except ValueError:
+            return None
+        return o if isinstance(o, dict) and o.get("answer") else None
+
+    out = await ask()
+    if out is None:
         return None
-    if not isinstance(out, dict) or not out.get("answer"):
-        return None
+    def problems(o: dict) -> list[dict]:
+        return (check_plan_values(o, data_numbers, question) + check_answer_numbers(o, data_numbers, question)
+                if o.get("can_answer") else [])
+
+    bad = problems(out)
+    reasked = False
+    if bad:
+        reasked = True
+        contents.append({"role": "user", "parts": [{"text": (
+            "These numbers do not match the plan data or your working: " + json.dumps(bad, ensure_ascii=False)
+            + ". Use the values exactly as the data gives them (see totals), make the answer text agree with "
+              "the working, and answer again.")}]})
+        again = await ask()
+        if again is not None:
+            out = again
+            bad = problems(out)
     ms = int((time.perf_counter() - t0) * 1000)
     stats["route"] = "choice"
-    calls = calls_before + 1
-    handed = ["plan index (rooms, areas, object counts, scale)"] + \
-        [x.desc or x.rule for x in (sess.sets.values() if sess else [])]
+    calls = calls_before + (2 if reasked else 1)
+    handed = ["plan index (rooms with areas, perimeters, doors and widths, windows, fixtures, connections)",
+              "totals computed by code"] + [x.desc or x.rule for x in (sess.sets.values() if sess else [])]
     nodes = [A.stage_node(
         "resources", "handed", "Handed to the model", "plan data · " + model,
         "Gave the model the question, the conversation and: " + "; ".join(handed[:8]) + ".",
@@ -1316,14 +1513,25 @@ async def _reason(svc, d, question: str, lang: str, caller, meter, history, sess
     ev_ids = [A.room_eid(r["room_id"]) for r in rooms_ev] + [b["id"] for b in boxes_ev]
     working = str(out.get("working") or "")[:1200]
     text = str(out["answer"])[:2000]
-    nodes += [
-        A.stage_node("filter", "working", "The model's working", "reasoned · " + model, working or "(none given)",
-                     parent="handed", kind="model",
-                     detail={"rule": working, "kept": [r["room_id"] for r in rooms_ev] + [b["id"] for b in boxes_ev],
-                             "dropped": []}, evidence_ids=ev_ids or None),
-        A.stage_node("answer", "answer", "Answer", "reasoned by the model · not exact", text, kind="model",
-                     detail={"source": "reasoned", "method": "agent_estimate", "calls": calls, "cost_usd": 0.0,
-                             "model": model}, evidence_ids=ev_ids or None)]
+    warn = ("Check: these numbers do not match the drawing data or the working: "
+            + "; ".join(f"{b['what']} {b['value']:g} (data: {b['closest_in_data']})" for b in bad[:5])) if bad else ""
+    nodes.append(A.stage_node(
+        "filter", "working", "The model's working", "reasoned · " + model, working or "(none given)",
+        parent="handed", kind="model",
+        detail={"rule": working, "kept": [r["room_id"] for r in rooms_ev] + [b["id"] for b in boxes_ev],
+                "dropped": [], "checked_values": len(out.get("plan_values") or []), "mismatches": bad,
+                "reasked": reasked}, evidence_ids=ev_ids or None))
+    if warn or reasked:
+        nodes.append(A.stage_node(
+            "filter", "check", "Check the quoted plan values", "code · against the handed data",
+            warn or "A quoted value did not match the data; the model was asked once more and now matches.",
+            parent="working", kind="warn" if warn else "info",
+            detail={"rule": "every plan value the model quotes must be in the handed data (± rounding)",
+                    "kept": [], "dropped": bad}))
+    nodes.append(A.stage_node(
+        "answer", "answer", "Answer", "reasoned by the model · not exact", text, kind="warn" if warn else "model",
+        detail={"source": "reasoned", "method": "agent_estimate", "calls": calls, "cost_usd": 0.0,
+                "model": model}, evidence_ids=ev_ids or None))
     ans: dict[str, Any] = {"kind": "note", "value": text}
     num = out.get("number")
     if isinstance(num, (int, float)) and not isinstance(num, bool) and math.isfinite(num):
@@ -1336,9 +1544,19 @@ async def _reason(svc, d, question: str, lang: str, caller, meter, history, sess
         "trace": [A.question_node(question, lang),
                   A.intent_node(f"reasoned · {model} answers from the plan data", "reasoned"),
                   *tried, *nodes],
-        "explanation": f"Reasoned by the model from the plan data (not an exact answer). {working}"[:2000],
+        "explanation": (f"Reasoned by the model from the plan data (not an exact answer). {working}"
+                        + (f" {warn}." if warn else ""))[:2000],
     }
     return A.Built(body, [], [], None)
+
+
+def _too_long(question: str, lang: str, scope: dict, trace: list[dict], calls: int, stats: dict) -> A.Built:
+    """The reasoning step ran out of time: say so, never an empty result."""
+    built = _abstain(question, lang, scope, trace,
+                     f"the reasoning step took longer than {REASON_TIMEOUT_S:.0f} s; ask again or narrow the "
+                     "question", calls, stats)
+    built.body["answer"]["reason"] = "not_answerable"
+    return built
 
 
 def _abstain(question: str, lang: str, scope: dict, trace: list[dict], why: str, calls: int,
@@ -1362,6 +1580,8 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
                 ctx: dict | None = None) -> A.Built | None:
     tb = await asyncio.to_thread(Toolbox, d)
     sess = Session(tb, base)
+    plain = plain_question(question, d)
+    open_cue = bool(OPEN_CUE.search(question or ""))  # sql answers are read by code: only a cue hands them on
     if ctx is not None:
         ctx["sess"] = sess  # what the steps grabbed is handed to the reasoning step
     sess.question = question
@@ -1427,7 +1647,8 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
             if fc.name == "finish":
                 ref = str(fc.args.get("set") or "none")
                 rs = sess.sets.get(ref)
-                if rs is not None and unused_numbers(question, sess, rs):
+                if rs is not None and ((open_cue if rs.kind == "rows" else not plain)
+                                       or unused_numbers(question, sess, rs)):
                     return None  # the user's own numbers are still to be used: the reasoning step
                 if rs is not None and rs.kind == "boxes" and asks_for_rooms(question):
                     rs = sess.as_rooms(rs)
@@ -1457,7 +1678,8 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
                         raise StepError("unknown tool 'sql'")
                     rs = await _run_sql(sess, sess._ref(), fc.args, sql_scope)
                 elif fc.name == "list_openings" and door_leaves.wanted(fc.args, question):  # leaf count by model
-                    rs = await door_leaves.list_openings(svc, d, sess, sess._ref(), fc.args, caller, meter, trace, dec_id)
+                    rs = await door_leaves.list_openings(svc, d, sess, sess._ref(), fc.args, caller, meter, trace,
+                                                         dec_id, calls_left=MAX_CALLS - (meter.calls - calls0) - 1)
                 else:
                     rs = await asyncio.to_thread(sess.run, fc.name, fc.args)
             except StepError as e:
@@ -1480,8 +1702,9 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
                 done = (rs, {"answer": "reason"})
             elif fc.args.get("finish_as") in ("count", "area", "list"):
                 done = (rs, {"answer": fc.args["finish_as"], "group_by": fc.args.get("group_by")})
-        if done is not None and not erred and (done[1].get("answer") == "reason"
-                                               or unused_numbers(question, sess, done[0])):
+        if done is not None and not erred and (
+                done[1].get("answer") == "reason" or (open_cue if done[0].kind == "rows" else not plain)
+                or unused_numbers(question, sess, done[0])):
             return None  # sets grabbed; the reasoning step answers (and uses the user's numbers)
         if done is not None and done[0].kind == "boxes" and asks_for_rooms(question):
             done = (sess.as_rooms(done[0]), done[1])

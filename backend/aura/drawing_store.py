@@ -91,8 +91,17 @@ def init_worker(env: dict[str, str]) -> None:
 def make_pool(workers: int):
     import concurrent.futures as cf
     import multiprocessing
-    return cf.ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"),
-                                  initializer=init_worker, initargs=(worker_env(),))
+
+    from aura.ingest_cost import metered_call
+
+    class MeteredPool(cf.ProcessPoolExecutor):
+        """Every store job runs through ingest_cost.metered_call: its Gemini tokens land in usage/<key>.json."""
+
+        def submit(self, fn, /, *args, **kwargs):
+            return super().submit(metered_call, fn, args, kwargs)
+
+    return MeteredPool(workers, mp_context=multiprocessing.get_context("spawn"),
+                       initializer=init_worker, initargs=(worker_env(),))
 
 
 def interpret_job(drawing_key: str) -> dict:
@@ -436,6 +445,8 @@ class DrawingStore:
             else:
                 log.warning("store ingest %s: no job started (status %s)", file_id, status)
             status, _ = await self._db_status(file_id)
+            if not self._gone(drawing_id):  # spent even when the store fails: record it now
+                await self._set_store_meta(drawing_id, **_spent(file_id, key))
             if self._gone(drawing_id):  # deleted during ingestion: nothing of it may stay
                 await self.forget([file_id])
                 return
@@ -489,7 +500,7 @@ class DrawingStore:
                 tmp = path.with_suffix(".json.tmp")
                 tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
                 os.replace(tmp, path)
-            await self._set_store_meta(drawing_id, state="materialised", owner="ours")
+            await self._set_store_meta(drawing_id, state="materialised", owner="ours", **_spent(file_id, key))
             if self.on_materialised:
                 self.on_materialised(drawing_id)
             return True
@@ -519,7 +530,7 @@ class DrawingStore:
         if raster.is_file():
             os.replace(raster, out_dir / "raster.ours.json")
         await self._set_store_meta(drawing_id, state="materialised", owner="store", calls=built["calls"],
-                                   counts=_counts(doc), methods=_methods(doc))
+                                   counts=_counts(doc), methods=_methods(doc), **_spent(file_id, key))
         if meta.get("kind") == "svg":  # the row waited for this (no parse of ours)
             await self.writer.execute("UPDATE drawings SET status='ready', progress=NULL WHERE id=?",
                                       (drawing_id,))
@@ -617,6 +628,16 @@ class DrawingStore:
             if fut is not None:
                 fut.cancel()
         await asyncio.to_thread(run)
+
+
+def _spent(file_id: str, key: str) -> dict:
+    """Store meta fields for what the ingest jobs of this file spent on Gemini (ingest_cost ledgers)."""
+    from aura.ingest_cost import spent_for
+
+    p = spent_for(file_id, key)
+    return {"cost_usd": p["cost_usd"], "metered_calls": p["calls"],
+            "tokens": {"input": p["input_tokens"], "output": p["output_tokens"]},
+            "by_model": p["by_model"]}
 
 
 def _page_images(page: Path, out_dir: Path) -> tuple[int, int]:

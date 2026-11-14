@@ -1070,7 +1070,10 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                     async for ev in _finalize_and_emit(svc, d, req, exact_built, caller, stats, meters, t0, key, allow_cache=True):
                         yield ev
                     return
-            elif dkind == "cad_dxf" and r.intent == "abstain" and r.topic in ("height", "material"):
+            elif (dkind == "cad_dxf" and r.intent == "abstain" and r.topic in ("height", "material")
+                  and not (svc.models_usable() and d.drawing.get("rooms"))):
+                # 0-call topic abstain only when the tool steps cannot run; otherwise their reasoning
+                # step gets the question first and can say what is missing or compute around it.
                 abs_built = A.abstain_topic(question, lang, r.topic, intent_tag="router")
                 yield "understood", {"detected_lang": abs_built.body["detected_lang"],
                                      "canonical_en": abs_built.body["canonical_en"], "route": "template"}
@@ -1231,7 +1234,12 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 log.exception("tool-step answerer failed; escalating to sidecar agent")
             if tools_built is not None:
                 ans = tools_built.body.get("answer") or {}
-                if ans.get("kind") == "abstain" and ans.get("reason") == "not_on_drawing":
+                if ans.get("kind") == "abstain" and r.intent == "abstain" and r.topic:
+                    # a known off-plan topic (ceiling height, material): the tools and their reasoning
+                    # step tried; the answer keeps the topic's reason and where to find it
+                    tools_built.body["answer"] = A.abstain_topic(question, lang, r.topic).body["answer"]
+                    ans = tools_built.body["answer"]
+                elif ans.get("kind") == "abstain" and ans.get("reason") == "not_on_drawing":
                     # The rule: not_on_drawing only when the tools were NOT tried (router topic or
                     # a confident gate on a drawing without an index); tried and empty = not_answerable.
                     ans["reason"] = "not_answerable"
@@ -1252,6 +1260,17 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 yield ev
             return
 
+        if svc.agent is None and r.intent == "abstain" and r.topic:
+            # the router knew the topic (height, material): tools tried, the topic's own abstain
+            # with where to find it is the honest last word
+            stats["no_cache"] = True
+            topic_built = A.abstain_topic(question, lang, r.topic, intent_tag=intent_tag)
+            yield "understood", {"detected_lang": topic_built.body["detected_lang"],
+                                 "canonical_en": topic_built.body["canonical_en"], "route": stats["route"]}
+            async for ev in _finalize_and_emit(svc, d, req, topic_built, caller, stats, meters, t0, key,
+                                               allow_cache=False):
+                yield ev
+            return
         if svc.agent is None:  # no sidecar: what the drawing's data cannot answer is said plainly
             stats["no_cache"] = True
             nothing = A.abstain(
@@ -1337,15 +1356,17 @@ def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: d
 
 
 async def ask(svc: Services, req: AskRequest, caller: Caller,
-              meters: dict[str, Meter] | None = None) -> dict:
-    async for event, data in run(svc, req, caller, meters=meters, deadline_s=float(svc.settings.turn_deadline_s)):
+              meters: dict[str, Meter] | None = None, run_fn=None) -> dict:
+    # `run_fn`: a drop-in for `run` (whole-building answers, aura/building.py); default `run`.
+    async for event, data in (run_fn or run)(svc, req, caller, meters=meters,
+                                             deadline_s=float(svc.settings.turn_deadline_s)):
         if event == "answer":
             return data["response"]
     raise PipelineError("internal", "The pipeline ended without an answer.", 500)
 
 
 async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
-                      deadline_s: float) -> AsyncIterator[tuple[str, dict]]:
+                      deadline_s: float, run_fn=None) -> AsyncIterator[tuple[str, dict]]:
     """/chat: turn, progress*, understood, (tool_call, tool_result)*, check?, answer | error, done.
 
     The pipeline runs in its own task so the turn deadline is exact; on timeout the task is
@@ -1374,8 +1395,9 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
 
     async def produce() -> None:
         try:
-            async for item in run(svc, req, caller, context, history, meters, deadline_s=deadline_s,
-                                  agent_deadline_s=svc.settings.agent_deadline_s):
+            async for item in (run_fn or run)(svc, req, caller, context, history, meters,
+                                              deadline_s=deadline_s,
+                                              agent_deadline_s=svc.settings.agent_deadline_s):
                 await queue.put(item)
         except PipelineError as e:
             await queue.put(("error", {"error": str(e), "code": e.code}))

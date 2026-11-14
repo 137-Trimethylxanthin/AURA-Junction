@@ -1,0 +1,465 @@
+"""Whole-building answers for multi-plan projects.
+
+A drawing that belongs to a project (several sheets / floors of one building) is asked about the
+WHOLE building by default. The question is limited to one floor only when it says so ("this floor",
+"on the ground floor", "level 2", "EG", "rez-de-chaussée", "kerros 2" ...), when the request selects
+sheets (`sheet_ids`) or when the scope is drawn on one sheet (room / region).
+
+Answering reuses the existing per-drawing path: every sheet in scope is answered by the normal
+pipeline run (concurrently, bounded), then the results are combined in code. Counts, areas and
+quantities are summed; text and lists are concatenated with the sheet label; evidence items keep
+their sheet in `drawing_id`; the method is the weakest of the sheets. Nothing here calls a model.
+
+Hook: `pipeline.ask()` / `pipeline.chat_events()` take an optional `run_fn`; `main.py` passes
+`functools.partial(building.run, plan=plan, base_run=pipeline.run)` when `plan_for()` found a plan.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+import time
+import uuid
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from aura.contract import CONTRACT_VERSION, AskRequest, ProjectBundle
+
+log = logging.getLogger("aura.building")
+
+MAX_PARALLEL = 3
+
+DECIDER_WORDS = "explicit words"
+DECIDER_SELECTION = "user selection"
+DECIDER_DEFAULT = "default whole building"
+
+# Weakest method wins; exact-style methods rank 0.
+_STRENGTH = {"cad_geometry": 0, "pdf_vector": 0, "store_sql": 0, "ocr": 1, "detector": 2,
+             "vision": 3, "agent_estimate": 4}
+
+
+@dataclass(frozen=True)
+class Sheet:
+    id: str
+    label: str
+    order: float
+
+
+@dataclass
+class Plan:
+    project_id: str
+    title: str
+    all_sheets: list[Sheet]
+    sheets: list[Sheet]  # in scope
+    active: str
+    decider: str
+    note: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def whole(self) -> bool:
+        return len(self.sheets) == len(self.all_sheets)
+
+
+# ---- scope resolution -------------------------------------------------------------------
+
+_W = r"(?<![\w])"
+_E = r"(?![\w])"
+
+# "this floor", "the current sheet", "diese Etage", "cet étage", "tällä kerroksella" ...
+THIS_FLOOR = re.compile(
+    _W + r"(?:this|the\s+current|current|diese[rsmn]?|dieses|aktuelle[rnms]?|cette|cet|ce|le\s+présent|tämä|tässä|tällä|nykyi\w+)"
+    r"\s+(?:floor|sheet|plan|level|storey|story|drawing|geschoss|etage|stockwerk|grundriss|blatt|"
+    r"[ée]tage|niveau|feuille|kerros\w*|piirustu\w*|taso\w*)" + _E,
+    re.IGNORECASE,
+)
+
+_BASEMENT = re.compile(
+    _W + r"(?:basement|cellar|lower\s+ground|untergeschoss|kellergeschoss|keller|sous-sol|cave|kellari\w*)" + _E,
+    re.IGNORECASE,
+)
+# Upper-case abbreviations only ("kg" is a weight, "eg" is a Latin abbreviation).
+_ABBR = {"EG": 0, "UG": -1, "KG": -1, "DG": 99}
+_ABBR_RE = re.compile(_W + r"(EG|UG|KG|DG)" + _E)
+_GROUND = re.compile(
+    _W + r"(?:ground\s+(?:floor|level)|erdgeschoss|rez-de-chauss[ée]e|rdc|pohjakerros\w*|maantaso\w*)" + _E,
+    re.IGNORECASE,
+)
+_TOP = re.compile(
+    _W + r"(?:top\s+floor|attic|roof\s+floor|dachgeschoss|combles|ullakko\w*|ylin\s+kerros)" + _E,
+    re.IGNORECASE,
+)
+_ORD_EN = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fourth": 4, "4th": 4,
+           "fifth": 5, "5th": 5, "sixth": 6, "6th": 6, "seventh": 7, "7th": 7, "eighth": 8, "8th": 8}
+_ORD_EN_RE = re.compile(
+    _W + r"(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th)"
+    r"\s+(?:floor|storey|story|level)" + _E, re.IGNORECASE)
+_ORD_FR_RE = re.compile(
+    _W + r"(?:(premier|1er|deuxi[eè]me|second|2e|troisi[eè]me|3e|quatri[eè]me|4e|cinqui[eè]me|5e)\s+[ée]tage)" + _E,
+    re.IGNORECASE)
+_ORD_FR = {"premier": 1, "1er": 1, "deuxième": 2, "deuxieme": 2, "second": 2, "2e": 2, "troisième": 3,
+           "troisieme": 3, "3e": 3, "quatrième": 4, "quatrieme": 4, "4e": 4, "cinquième": 5, "cinquieme": 5, "5e": 5}
+# German "1. OG", "1.OG", "OG 1", "erstes Obergeschoss", "2. Stock"
+_OG_RE = re.compile(_W + r"(?:(\d)\s*\.?\s*(?:OG|obergeschoss|stock|stockwerk)|(?:OG)\s*(\d))" + _E, re.IGNORECASE)
+_ORD_DE_RE = re.compile(
+    _W + r"(erste[sn]?|zweite[sn]?|dritte[sn]?|vierte[sn]?|f[üu]nfte[sn]?)\s+(?:obergeschoss|stock|stockwerk|etage)" + _E,
+    re.IGNORECASE)
+_ORD_DE = (("erst", 1), ("zweit", 2), ("dritt", 3), ("viert", 4), ("fünf", 5), ("funf", 5))
+# "level 2", "floor 2", "storey 2", "étage 2", "Etage 2"
+_LEVEL_RE = re.compile(_W + r"(?:level|floor|storey|story|[ée]tage|niveau|stockwerk)\s*(-?\d{1,2})" + _E, re.IGNORECASE)
+# Finnish: "2. kerros" / "kerros 2" (1. kerros is the ground floor)
+_FI_RE = re.compile(_W + r"(?:(\d{1,2})\s*\.?\s*kerro\w*|kerros\w*\s+(\d{1,2}))" + _E, re.IGNORECASE)
+
+
+def _orders_named(q: str) -> set[float]:
+    out: set[float] = set()
+    for m in _ORD_EN_RE.finditer(q):
+        out.add(float(_ORD_EN[m.group(1).lower()]))
+    for m in _ORD_FR_RE.finditer(q):
+        out.add(float(_ORD_FR[m.group(1).lower()]))
+    for m in _ORD_DE_RE.finditer(q):
+        word = m.group(1).lower()
+        out.update(float(n) for stem, n in _ORD_DE if word.startswith(stem))
+    for m in _OG_RE.finditer(q):
+        out.add(float(m.group(1) or m.group(2)))
+    for m in _LEVEL_RE.finditer(q):
+        out.add(float(m.group(1)))
+    for m in _FI_RE.finditer(q):
+        out.add(float(int(m.group(1) or m.group(2)) - 1))
+    return out
+
+
+def named_sheets(question: str, sheets: list[Sheet]) -> list[Sheet]:
+    """Sheets the question names by floor words or by their own label ("EG", "1. OG")."""
+    hit: dict[str, Sheet] = {}
+    orders = _orders_named(question)
+    top = max((s.order for s in sheets), default=None)
+    for s in sheets:
+        if s.order in orders:
+            hit[s.id] = s
+        if _GROUND.search(question) and s.order == 0:
+            hit[s.id] = s
+        if _BASEMENT.search(question) and s.order < 0:
+            hit[s.id] = s
+        if _TOP.search(question) and s.order == top:
+            hit[s.id] = s
+        for ab in _ABBR_RE.findall(question):
+            if s.order == _ABBR[ab] or (ab == "DG" and s.order == top):
+                hit[s.id] = s
+        lbl = s.label.strip()
+        flags = 0 if len(lbl) <= 3 else re.IGNORECASE  # short labels ("EG", "B1") match upper-case only
+        if len(lbl) >= 2 and re.search(_W + re.escape(lbl) + _E, question, flags):
+            hit[s.id] = s
+    return [s for s in sheets if s.id in hit]
+
+
+def plan_for(
+    bundles: list[ProjectBundle],
+    drawing_id: str,
+    question: str,
+    *,
+    project_id: str | None = None,
+    sheet_ids: list[str] | None = None,
+    scope: dict | None = None,
+) -> Plan | None:
+    """The plan for this question, or None when the drawing is not a floor of a multi-sheet project."""
+    if (scope or {}).get("kind") == "project":
+        return None  # an explicit project scope keeps the deep-agent multi-plan path (pipeline.run)
+    proj = None
+    if project_id:
+        proj = next((p for p in bundles if p.id == project_id), None)
+        if proj is not None and drawing_id not in {f.drawing_id for f in proj.floors}:
+            proj = None
+    if proj is None:
+        proj = next((p for p in bundles if len(p.floors) >= 2
+                     and drawing_id in {f.drawing_id for f in p.floors}), None)
+    if proj is None or len(proj.floors) < 2:
+        return None
+    all_sheets = [Sheet(f.drawing_id, f.label, float(f.order)) for f in
+                  sorted(proj.floors, key=lambda f: (float(f.order), f.label, f.drawing_id))]
+    by_id = {s.id: s for s in all_sheets}
+    active = by_id[drawing_id]
+    kind = (scope or {}).get("kind")
+
+    def plan(sheets: list[Sheet], decider: str, note: str | None = None) -> Plan:
+        return Plan(proj.id, proj.title, all_sheets, sheets, drawing_id, decider, note)
+
+    if THIS_FLOOR.search(question):
+        return plan([active], DECIDER_WORDS, "this floor")
+    named = named_sheets(question, all_sheets)
+    if named:
+        return plan(named, DECIDER_WORDS, ", ".join(s.label for s in named))
+    if sheet_ids:
+        picked = [by_id[i] for i in dict.fromkeys(sheet_ids) if i in by_id]
+        if picked:
+            return plan(picked, DECIDER_SELECTION if len(picked) < len(all_sheets) else DECIDER_DEFAULT)
+    if kind in ("room", "region"):
+        return plan([active], DECIDER_SELECTION, f"{kind} drawn on this sheet")
+    return plan(list(all_sheets), DECIDER_DEFAULT)
+
+
+# ---- combining --------------------------------------------------------------------------
+
+
+def _weakest(methods: list[str]) -> str:
+    return max(methods, key=lambda m: _STRENGTH.get(m, 5)) if methods else "none"
+
+
+def _round(v: float) -> float:
+    return round(v, 2)
+
+
+def _num(v: float) -> float | int:
+    return int(v) if float(v).is_integer() else _round(v)
+
+
+def _text_of(a: dict) -> str:
+    k = a.get("kind")
+    if k == "count":
+        return f"{a['value']} {a.get('subject', '')}".strip()
+    if k == "area":
+        return f"{_num(a['value'])} m²"
+    if k == "quantity":
+        return f"{_num(a['value'])} {a.get('unit', '')}".strip()
+    return str(a.get("value", ""))
+
+
+def _scope_body(plan: Plan) -> dict:
+    return {"kind": "project", "project_id": plan.project_id, "drawing_ids": [s.id for s in plan.sheets]}
+
+
+def _scope_node(plan: Plan) -> dict:
+    labels = ", ".join(s.label for s in plan.sheets)
+    body = (f"Whole building: {len(plan.sheets)} sheets ({labels})." if plan.whole
+            else f"{len(plan.sheets)} of {len(plan.all_sheets)} sheets: {labels}.")
+    if plan.note and plan.decider == DECIDER_WORDS:
+        body += f" The question says: {plan.note}."
+    return {"id": "scope", "parent": "q", "title": "Scope", "tag": plan.decider, "body": body, "kind": "info",
+            "stage": "scope",
+            "detail": {"decider": plan.decider, "project_id": plan.project_id,
+                       "sheets": [{"id": s.id, "label": s.label} for s in plan.sheets]}}
+
+
+def _remap_ids(resp: dict, sheet: Sheet, seen_boxes: set[str], seen_rooms: set[str]) -> dict[str, str]:
+    """Items of a later sheet whose ids collide with an earlier sheet get `<sheet>:<id>`; returns old -> new."""
+    mapping: dict[str, str] = {}
+    ev = resp.get("evidence") or {}
+    for b in ev.get("boxes") or []:
+        b["drawing_id"] = b.get("drawing_id") or sheet.id
+        old = b["id"]
+        if old in seen_boxes:
+            b["id"] = f"{sheet.id}:{old}"
+            mapping[old] = b["id"]
+        seen_boxes.add(b["id"])
+    for r in ev.get("rooms") or []:
+        r["drawing_id"] = r.get("drawing_id") or sheet.id
+        old = r["room_id"]
+        if old in seen_rooms:
+            r["room_id"] = f"{sheet.id}:{old}"
+            mapping[f"room-{old}"] = f"room-{r['room_id']}"
+        seen_rooms.add(r["room_id"])
+    for ln in ev.get("links") or []:
+        ln["drawing_id"] = ln.get("drawing_id") or sheet.id
+    return mapping
+
+
+def _branch(i: int, sheet: Sheet, resp: dict | None, status: str, mapping: dict[str, str], why: str = "") -> list[dict]:
+    a = (resp or {}).get("answer") or {}
+    if status == "ok":
+        body = _text_of(a)
+    elif status == "abstain":
+        body = "Could not answer from this sheet's data."
+    else:
+        body = f"Failed: {why}" if why else "Failed."
+    nodes = [{"id": f"sheet-{i}", "parent": "scope", "title": sheet.label, "tag": sheet.id, "body": body,
+              "kind": "info" if status == "ok" else "warn"}]
+    for n in (resp or {}).get("trace") or []:
+        n = dict(n)
+        n["id"] = f"{i}:{n['id']}"
+        n["parent"] = f"{i}:{n['parent']}" if n.get("parent") else f"sheet-{i}"
+        if n.get("evidence_ids"):
+            n["evidence_ids"] = [mapping.get(e, e) for e in n["evidence_ids"]]
+        nodes.append(n)
+    return nodes
+
+
+def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseException]], elapsed_ms: int) -> dict:
+    """One whole-building response from the per-sheet results (never calls a model)."""
+    oks: list[tuple[int, Sheet, dict]] = []
+    others: list[tuple[int, Sheet, dict | BaseException]] = []
+    for i, (sh, r) in enumerate(results):
+        if isinstance(r, BaseException) or (r.get("answer") or {}).get("kind") == "abstain":
+            others.append((i, sh, r))
+        else:
+            oks.append((i, sh, r))
+    responses = [r for _, r in results if isinstance(r, dict)]
+    if not responses:
+        first = next(r for _, r in results if isinstance(r, BaseException))
+        raise first
+    template = (oks[0][2] if oks else next(r for _, _, r in others if isinstance(r, dict)))
+
+    seen_boxes: set[str] = set()
+    seen_rooms: set[str] = set()
+    maps: dict[int, dict[str, str]] = {}
+    for i, sh, r in sorted(oks + [(i, s, r) for i, s, r in others if isinstance(r, dict)], key=lambda t: t[0]):
+        maps[i] = _remap_ids(r, sh, seen_boxes, seen_rooms)
+
+    boxes, rooms, rows, groups, links = [], [], [], {}, []
+    for i, sh, r in sorted(oks, key=lambda t: t[0]):
+        ev = r.get("evidence") or {}
+        boxes += ev.get("boxes") or []
+        rooms += ev.get("rooms") or []
+        rows += ev.get("rows") or []
+        for g in ev.get("groups") or []:
+            groups.setdefault(g["id"], g)
+        links += ev.get("links") or []
+    evidence: dict[str, Any] = {"boxes": boxes, "rooms": rooms}
+    if rows:
+        evidence["rows"] = rows
+    if groups:
+        evidence["groups"] = list(groups.values())
+    if links:
+        evidence["links"] = links
+
+    breakdown: list[dict] = []
+    for i, sh, r in sorted(oks, key=lambda t: t[0]):
+        a = r["answer"]
+        item: dict[str, Any] = {"drawing_id": sh.id, "label": sh.label, "status": "ok"}
+        if a["kind"] in ("count", "area", "quantity"):
+            item["value"] = a["value"]
+            item["unit"] = {"count": a.get("subject"), "area": "m2"}.get(a["kind"], a.get("unit"))
+        breakdown.append(item)
+    for i, sh, r in others:
+        breakdown.append({"drawing_id": sh.id, "label": sh.label,
+                          "status": "error" if isinstance(r, BaseException) else "abstain"})
+    order = {s.id: n for n, s in enumerate(plan.sheets)}
+    breakdown.sort(key=lambda b: order.get(b["drawing_id"], 0))
+
+    failed = [sh.label for _, sh, _ in others]
+    method = _weakest([r["method"] for _, _, r in oks]) if oks else "none"
+    kinds = {r["answer"]["kind"] for _, _, r in oks}
+    subjects = {r["answer"].get("subject") for _, _, r in oks}
+    units = {r["answer"].get("unit") for _, _, r in oks}
+    if not oks:
+        answer = dict(template["answer"])
+        where = f" Sheets that could not answer: {', '.join(failed)}." if failed else ""
+        if answer.get("where_to_find"):
+            answer["where_to_find"] = answer["where_to_find"] + where
+        elif where:
+            answer["where_to_find"] = where.strip()
+    elif kinds == {"count"} and len(subjects) == 1:
+        answer = {"kind": "count", "value": sum(r["answer"]["value"] for _, _, r in oks),
+                  "subject": subjects.pop()}
+    elif kinds == {"area"}:
+        answer = {"kind": "area", "value": _round(sum(r["answer"]["value"] for _, _, r in oks)), "unit": "m2"}
+    elif kinds == {"quantity"} and len(units) == 1:
+        answer = {"kind": "quantity", "value": _round(sum(r["answer"]["value"] for _, _, r in oks)),
+                  "unit": units.pop()}
+    else:
+        answer = {"kind": "note",
+                  "value": "\n".join(f"{sh.label}: {_text_of(r['answer'])}" for _, sh, r in sorted(oks, key=lambda t: t[0]))}
+    parts = [f"{b['label']} {_num(b['value'])}" for b in breakdown if b["status"] == "ok" and b.get("value") is not None]
+    total_txt = _text_of(answer) if answer["kind"] != "abstain" else "no answer"
+    sentence = f"{total_txt}: " + ", ".join(parts) if parts else total_txt
+    if failed:
+        sentence += f". Could not answer: {', '.join(failed)}"
+    lang = template.get("detected_lang", "en")
+    trace: list[dict] = [
+        {"id": "q", "title": "Question", "tag": f"{lang} · detected", "body": f"“{question}”", "kind": "info"},
+        _scope_node(plan),
+    ]
+    for i, sh, r in sorted(
+        [(i, sh, r) for i, (sh, r) in enumerate(results)], key=lambda t: t[0]
+    ):
+        status = ("error" if isinstance(r, BaseException)
+                  else "abstain" if (r.get("answer") or {}).get("kind") == "abstain" else "ok")
+        if isinstance(r, BaseException):  # the reason stays in the server log, never in the response
+            log.warning("building: sheet %s failed: %s: %s", getattr(sh, "id", "?"), type(r).__name__, r)
+        trace += _branch(i, sh, r if isinstance(r, dict) else None, status, maps.get(i, {}),
+                         "this sheet could not be answered" if isinstance(r, BaseException) else "")
+    calls = sum(r.get("calls", 0) for r in responses)
+    cost = round(sum(r.get("cost_usd", 0.0) for r in responses), 8)
+    exact = method in ("cad_geometry", "pdf_vector", "store_sql")
+    trace.append({"id": "answer", "parent": "q", "title": "Answer",
+                  "tag": "sum over sheets" if answer["kind"] in ("count", "area", "quantity") else "by sheet",
+                  "body": sentence, "kind": ("warn" if not oks else "exact" if exact else "model"),
+                  "stage": "answer", "detail": {"source": "building", "calls": calls, "cost_usd": cost}})
+    routes = [r.get("route") for r in responses]
+    body: dict[str, Any] = {
+        "contract_version": CONTRACT_VERSION,
+        "answer": answer,
+        "evidence": evidence,
+        "detected_lang": lang,
+        "canonical_en": template.get("canonical_en", question),
+        "scope": _scope_body(plan),
+        "method": method,
+        "trace": trace,
+        "calls": calls,
+        "cost_usd": cost,
+        "latency_ms": elapsed_ms,
+        "source": "api",
+        "answer_id": "a-" + uuid.uuid4().hex,
+        "route": "agent" if "agent" in routes else (template.get("route") or "template"),
+        "breakdown": breakdown,
+    }
+    return body
+
+
+# ---- running ----------------------------------------------------------------------------
+
+BaseRun = Callable[..., AsyncIterator[tuple[str, dict]]]
+
+
+def _sub_request(req: AskRequest, sheet: Sheet, plan: Plan) -> AskRequest:
+    scope = req.scope if req.scope is not None and req.scope.kind != "project" else None
+    own = sheet.id == req.drawing_id
+    return AskRequest(drawing_id=sheet.id, question=req.question, scope=scope,
+                      overrides=req.overrides if own else None, lang_hint=req.lang_hint)
+
+
+async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = None,
+              history: list[dict] | None = None, meters: dict | None = None,
+              deadline_s: float | None = None, agent_deadline_s: float | None = None, *,
+              plan: Plan, base_run: BaseRun,
+              persist: Callable[[Any, str, str, dict, dict], None] | None = None) -> AsyncIterator[tuple[str, dict]]:
+    """Drop-in for `pipeline.run`: the same events, answered for the sheets of `plan`."""
+    t0 = time.perf_counter()
+    scope_node = _scope_node(plan)
+
+    if len(plan.sheets) == 1:
+        # One sheet: the normal answer, with the scope node added to its trace.
+        only = plan.sheets[0]
+        sub = _sub_request(req, only, plan) if only.id != req.drawing_id else req
+        async for ev, data in base_run(svc, sub, caller, context, history, meters, deadline_s, agent_deadline_s):
+            if ev == "answer":
+                resp = dict(data["response"])
+                trace = list(resp.get("trace") or [])
+                resp["trace"] = [*trace[:1], scope_node | {"parent": (trace[0]["id"] if trace else "q")}, *trace[1:]]
+                data = {"response": resp}
+            yield ev, data
+        return
+
+    sem = asyncio.Semaphore(MAX_PARALLEL)
+
+    async def one(sheet: Sheet) -> dict:
+        sub = _sub_request(req, sheet, plan)
+        async with sem:
+            async for ev, data in base_run(svc, sub, caller, context, history, meters, deadline_s, agent_deadline_s):
+                if ev == "answer":
+                    return dict(data["response"])
+        raise RuntimeError("the pipeline ended without an answer")
+
+    raw = await asyncio.gather(*(one(s) for s in plan.sheets), return_exceptions=True)
+    results: list[tuple[Sheet, dict | BaseException]] = []
+    for s, r in zip(plan.sheets, raw):
+        if isinstance(r, asyncio.CancelledError):
+            raise r
+        results.append((s, r))
+    body = combine(plan, req.question, results, int((time.perf_counter() - t0) * 1000))
+    yield "understood", {"detected_lang": body["detected_lang"], "canonical_en": body["canonical_en"],
+                         "route": body["route"] if body["route"] in ("template", "agent", "cache", "choice") else "template"}
+    if persist is not None:
+        persist(svc, req.drawing_id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
+    yield "answer", {"response": body}

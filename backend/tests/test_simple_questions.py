@@ -288,3 +288,45 @@ def test_metadata_of_objects_is_never_an_object_count(q):
 def test_plain_counts_stay_exact(q, subject):
     r = route(q)
     assert (r.intent, r.subject) == ("count", subject)
+
+
+@pytest.mark.parametrize("q", [
+    "i will install wood floor on the kitchens, get the price of the whole plan if i get 1m² of wood floor for 2.5$",
+    "what does it cost to paint the bedrooms at 12 CHF per m²",
+    "combien coûte un parquet pour la cuisine à 30 € le m²",
+])
+def test_prices_are_calculations_for_the_tools_and_money_is_never_a_room(q):
+    ctx = DrawingCtx(labels=["Cuisine", "Chambre à coucher"], room_ids=["2.16"], units=["A"])
+    r = route(q, ctx)
+    assert r.intent == "unknown" and "calculation" in r.matched
+    assert (r.scope or {}).get("kind") != "room"
+
+
+def test_topic_questions_reach_the_tool_tier_before_the_topic_abstain(tmp_path, monkeypatch):
+    """Ceiling height: the tools (and their reasoning step) get it first; their decline ends in
+    the topic's own abstain with where to find it."""
+    import aura.pipeline as P
+
+    seen = []
+
+    async def declines(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        seen.append(question)
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=MockSidecarState())) as c:
+        c.app.state.svc.agent = None
+        c.app.state.drawing_store.ok = True
+        monkeypatch.setattr(P, "answer_with_tools", declines)
+        h = c.post("/ask", json={"drawing_id": SWISS, "question": "what is the ceiling height in the kitchen"}).json()
+        assert seen == ["what is the ceiling height in the kitchen"]
+        assert h["answer"]["reason"] == "not_on_drawing" and h["answer"].get("where_to_find")
+
+
+def test_store_map_entries_give_bundled_drawings_a_sql_scope(tmp_path, monkeypatch):
+    from aura import store_sql
+    from aura.tools import BundleEngine, LoadedDrawing
+
+    d = LoadedDrawing(id="ifc-x", dir=None, drawing={"rooms": []}, engine=BundleEngine({"rooms": []}))
+    entry = {"files": [{"sha256_16": "70cc8ff245fc0894", "drawing_key": "kit"}], "project": "p"}
+    monkeypatch.setattr(store_sql, "_store_map", lambda base: {"ifc-x": entry})
+    sc = store_sql.scope_for(d)
+    assert sc is not None and sc.files == ("70cc8ff245fc0894",)
