@@ -5,4 +5,5 @@ export const ISSUES_URL = `${REPO_URL}/issues`
 export const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`
 export const THIRD_PARTY_URL = `${REPO_URL}/blob/main/THIRD_PARTY.md`
 export const APP_ROUTE = "/app"
-export const DEMO_ROUTE = "/d/swiss-46639"
+/** The sample drawing: the /demo route opens one the server has (the bundled one without a backend). */
+export const DEMO_ROUTE = "/demo"

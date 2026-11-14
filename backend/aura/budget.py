@@ -20,6 +20,8 @@ Every cap is "0 = unlimited" (the default); counting and cost booking happen reg
 
 from __future__ import annotations
 
+import contextvars
+
 import hashlib
 import logging
 import threading
@@ -72,12 +74,30 @@ def cost_usd(model: str, input_tokens: int, output_tokens: int = 0) -> float:
     return round((input_tokens * pin + output_tokens * pout) / 1_000_000, 8)
 
 
+# The refusals raised while one question is answered (see `watch_refusals`). Tasks started inside the
+# turn copy the context and so share the same list.
+_turn_refusals: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "aura_turn_refusals", default=None)
+
+
+def watch_refusals() -> list[str]:
+    """Start collecting the codes of every BudgetError raised from here on in this context. An
+    answer shaped by such a refusal is temporary (the budget refills, the rate window passes, a
+    presenter asks) and must never be stored for replay, wherever the error was swallowed."""
+    seen: list[str] = []
+    _turn_refusals.set(seen)
+    return seen
+
+
 class BudgetError(Exception):
     """Refused before sending. `code` is an ErrorCode of contract 1.1."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code  # budget_exhausted | rate_limited | presenter_required | models_off
+        seen = _turn_refusals.get()
+        if seen is not None:
+            seen.append(code)
 
 
 @dataclass

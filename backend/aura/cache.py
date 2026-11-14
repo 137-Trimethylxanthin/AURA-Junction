@@ -13,11 +13,16 @@ from aura.store import Store
 from aura.writer import Writer
 
 
+# Bumped when stored answers would be wrong under the current code (2: replayed budget refusals and
+# scan answers stored as exact); older entries are then never hit and expire with their TTL.
+KEY_VERSION = 2
+
+
 def answer_key(drawing_id: str, question: str, scope: dict | None, overrides: list | None,
                lang_hint: str | None, models_on: bool) -> str:
     q = " ".join(unicodedata.normalize("NFC", question).casefold().split())
-    return json.dumps([drawing_id, q, scope, overrides, lang_hint, models_on], sort_keys=True,
-                      ensure_ascii=False)
+    return json.dumps([drawing_id, q, scope, overrides, lang_hint, models_on, KEY_VERSION],
+                      sort_keys=True, ensure_ascii=False)
 
 
 class AnswerCache:

@@ -1,4 +1,4 @@
-import { ApiError, TransportError } from './client'
+import { ApiError, TransportError, setScopeHeaderProvider } from './client'
 import { tu } from '@/i18n/uiLang'
 import {
   fastApiMessage,
@@ -29,7 +29,11 @@ export function apiBase(): string | null {
 export function apiUrl(url: string, base = apiBase()): string | null {
   const safe = safeUrl(url)
   if (!safe || !base || !safe.startsWith('/')) return safe
-  return base.replace(/\/+$/, '') + safe
+  const root = base.replace(/\/+$/, '')
+  // Already resolved (a drawing taken from the app's cache carries resolved image URLs): with a
+  // root-relative base such as "/api", prefixing again would ask for /api/api/... and 404.
+  if (root.startsWith('/') && safe.startsWith(root + '/')) return safe
+  return root + safe
 }
 
 // ---- storage (localStorage can throw in private mode; every access is guarded) -----------------------------
@@ -892,3 +896,19 @@ export function uploadFile(
     xhr.send(form)
   })
 }
+
+// A question across a project carries the proof the server asks for: the project's own token and the
+// delete token of each upload floor (also when the project lives only in this browser).
+setScopeHeaderProvider((scope) => {
+  const sc = scope as { kind?: unknown; project_id?: unknown; drawing_ids?: unknown } | null | undefined
+  if (!sc || sc.kind !== 'project' || typeof sc.project_id !== 'string') return {}
+  const ids = Array.isArray(sc.drawing_ids) ? sc.drawing_ids.filter((d): d is string => typeof d === 'string') : []
+  const stored = myProjects.get(sc.project_id)
+  return myProjects.authHeaders({
+    ...(stored ?? { id: sc.project_id, title: '', auto_matched: false }),
+    floors: [
+      ...(stored?.floors ?? []),
+      ...ids.map((drawing_id, i) => ({ drawing_id, label: '', order: i })),
+    ],
+  } as ProjectBundle)
+})

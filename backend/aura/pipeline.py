@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from aura import answer as A
 from aura import tools
 from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agent
-from aura.budget import Budget, BudgetError
+from aura.budget import Budget, BudgetError, watch_refusals
 from aura.cache import AnswerCache, CheckCache, answer_key
 from aura.config import Settings, models_enabled
 from aura.contract import (
@@ -877,6 +877,7 @@ async def _finalize_and_emit(
     *,
     allow_cache: bool,
 ) -> AsyncIterator[tuple[str, dict]]:
+    A.honest_method(built.body, d, built.subject)  # a scan's geometry is never presented as CAD
     check = await _check(svc, d, built, caller, stats)
     body = built.body
     if check is not None and "ranking" not in check:  # sent, but no usable result
@@ -924,7 +925,10 @@ async def _finalize_and_emit(
     resp = AskResponse.model_validate(body)  # contract gate: fails loudly on a bad body
     out = with_unknown_areas(resp.model_dump(exclude_none=True))
     _persist(svc, d.id, req.question, out, stats)
-    if allow_cache and not stats.get("no_cache"):
+    # An abstention reached after a budget / rate-limit / presenter / models-off refusal is
+    # temporary: it is never stored for replay, whichever step swallowed the refusal.
+    refused = bool(stats.get("refusals")) and (out.get("answer") or {}).get("kind") == "abstain"
+    if allow_cache and not stats.get("no_cache") and not refused:
         cached_body = out
         if check is not None and "ranking" in check and stats["check_calls"]:
             node = _check_node(check, True, stats, built.subject or "")
@@ -1004,7 +1008,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             yield ev
         return
 
-    stats = {"route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
+    stats = {"refusals": watch_refusals(),
+             "route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
              "meter": meters["answer"], "check_meter": meters["check"]}
 
     # ---- Sidecar-enabled `hybrid` / `agent` modes ----

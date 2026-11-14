@@ -36,6 +36,7 @@ import {
 } from "@/features/shortcuts/useWorkspaceShortcuts"
 import { useTitle } from "@/hooks/use-title"
 import { BUNDLED_DRAWING_ID } from "@/data/ids"
+import { SAMPLE_ROUTE } from "@/api/sample"
 import {
   actions,
   POLL_DEADLINE_MS,
@@ -297,7 +298,7 @@ function LoadState({ load }: { load: DrawingLoad }) {
               <Link to="/app">{tu('all_drawings')}</Link>
             </Button>
             <Button variant="outline" asChild>
-              <Link to={`/d/${BUNDLED_DRAWING_ID}`}>
+              <Link to={SAMPLE_ROUTE}>
                 {tu('open_sample')}
               </Link>
             </Button>
