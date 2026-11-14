@@ -34,6 +34,18 @@ export default function Workspace() {
 
   useEffect(() => {
     void actions().initSource()
+    // Warm the code-split tools once the plan has painted, so the first use does not wait on the network.
+    const warm = () => {
+      void import('@/features/plan/CompareLayer')
+      void import('@/features/plan/WhatIf')
+      void import('@/features/trace/TracePanel')
+      void import('@/features/plugins/PluginsSheet')
+    }
+    const id = 'requestIdleCallback' in window ? window.requestIdleCallback(warm, { timeout: 2000 }) : setTimeout(warm, 800)
+    return () => {
+      if ('cancelIdleCallback' in window) window.cancelIdleCallback(id as number)
+      else clearTimeout(id)
+    }
   }, [])
   useEffect(() => {
     void actions().loadDrawing(drawingId)

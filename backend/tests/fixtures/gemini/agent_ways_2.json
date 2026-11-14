@@ -1,0 +1,177 @@
+{
+ "source": "synthetic",
+ "note": "SYNTHETIC (not recorded), shaped like the recorded fc_turn1/fc_turn2 exchange: count_objects then final_answer.",
+ "path": "/models/gemini-3.1-flash-lite:generateContent",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "how many ways in and out are there for flat B"
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "count_objects",
+       "args": {
+        "subject": "door",
+        "scope": "unit:B"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "count_objects",
+       "response": {
+        "result_id": "r-90f67fb0c166",
+        "summary": "22 doors on the DXF door layer. 2 double doors are drawn as two leaves each, and each leaf counts. 9 in apartment B.",
+        "supported": true,
+        "value": 9.0
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "You answer questions about one construction floor plan by calling tools. Never write a number yourself: every number must come from a tool result. Scopes are 'floor', 'unit:<letter>', 'room:<id>' or 'label:<printed room label>'. Finish with final_answer, naming the result_id that answers the question, and a one- or two-sentence explanation in the user's language. If no tool can answer, call final_answer with result_id 'none'. This drawing has apartments [A, B] and room labels [, Bain, Chambre à coucher, Couloir, Cuisine, Réduit, Séjour/repas, Terrasse]."
+    }
+   ]
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "count_objects",
+      "description": "Count drawn objects of one kind in a scope, from the CAD layers.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "subject": {
+         "type": "string",
+         "enum": [
+          "window",
+          "door",
+          "washbasin",
+          "wc",
+          "bathtub",
+          "shower",
+          "room",
+          "apartment"
+         ]
+        },
+        "scope": {
+         "type": "string",
+         "description": "floor | unit:<letter> | room:<id> | label:<printed label>"
+        }
+       },
+       "required": [
+        "subject"
+       ]
+      }
+     },
+     {
+      "name": "room_areas",
+      "description": "Net floor area (m²) of a scope, summed room by room from printed areas.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "scope": {
+         "type": "string",
+         "description": "floor | unit:<letter> | room:<id> | label:<label>"
+        }
+       }
+      }
+     },
+     {
+      "name": "list_rooms",
+      "description": "List rooms (id, printed label, apartment, area) in a scope.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "scope": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "find_text",
+      "description": "Find printed text on the drawing (e.g. fire ratings like EI30) by regex.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "pattern": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "pattern"
+       ]
+      }
+     },
+     {
+      "name": "final_answer",
+      "description": "Finish: name the tool result that answers the question and explain briefly. Never write a number that is not in a tool result.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "result_id": {
+         "type": "string"
+        },
+        "explanation": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "result_id",
+        "explanation"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "temperature": 0
+  }
+ },
+ "status": 200,
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "role": "model",
+     "parts": [
+      {
+       "functionCall": {
+        "name": "final_answer",
+        "args": {
+         "result_id": "r-90f67fb0c166",
+         "explanation": "Apartment B has 9 doors. That is 40 percent of the floor."
+        }
+       }
+      }
+     ]
+    },
+    "finishReason": "STOP"
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 450,
+   "candidatesTokenCount": 30
+  }
+ }
+}

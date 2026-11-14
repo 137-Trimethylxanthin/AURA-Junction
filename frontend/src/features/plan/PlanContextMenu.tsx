@@ -18,7 +18,7 @@ import { fmtArea } from '@/lib/format'
 import { nearestRoom } from '@/lib/geometry'
 import { actions, useAppStore } from '@/store'
 import { nextLabel } from './MarkTool'
-import { swipeSplit } from './CompareLayer'
+import { swipeSplit } from './shared'
 import { roomTitle } from './shared'
 
 const SPOT = 4

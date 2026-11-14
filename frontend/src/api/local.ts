@@ -22,7 +22,7 @@ import { boxCentreInRect, pointInRect } from '@/lib/geometry'
 import { route, type NotOnDrawingTopic } from '@/lib/route'
 import { t, type StringKey } from '@/i18n/strings'
 
-const BOX_SUBJECTS: readonly BoxSubject[] = ['window', 'door', 'washbasin']
+const BOX_SUBJECTS: readonly BoxSubject[] = ['window', 'door', 'washbasin', 'wc', 'bathtub', 'shower']
 const isBoxSubject = (s: Subject): s is BoxSubject => (BOX_SUBJECTS as readonly string[]).includes(s)
 
 const LANG_NAME: Record<Lang, string> = { en: 'English', fr: 'French', fi: 'Finnish', de: 'German' }
@@ -242,7 +242,8 @@ export function ask(req: AskRequest, drawing: DrawingFile = bundledDrawing): Ask
   // ---- counts ------------------------------------------------------------
   if (r.intent === 'count') {
     const subject = r.subject
-    if (subject === 'wc' || subject === 'bathtub' || subject === 'shower') {
+    // Fixture layers exist only in drawing files that carry them; otherwise nothing is guessed.
+    if ((subject === 'wc' || subject === 'bathtub' || subject === 'shower') && !drawing.evidence[subject]) {
       const plural = noun(subject, 2, 'en')
       return abstain(
         'not_supported_yet',
@@ -252,14 +253,14 @@ export function ask(req: AskRequest, drawing: DrawingFile = bundledDrawing): Ask
     }
 
     if (isBoxSubject(subject)) {
-      const layer = drawing.evidence[subject]
+      const layer = drawing.evidence[subject] ?? []
       const boxes = boxesInScope(drawing, layer, scope)
       const plural = noun(subject, 2, 'en')
       const doubles = layer.filter((b) => b.note).length / 2
       const readBody =
         `${layer.length} ${noun(subject, layer.length, 'en')} on the DXF ${subject} layer.` +
         (subject === 'door' && doubles > 0
-          ? ` ${doubles} double doors are drawn as two leaves each, and each leaf counts.`
+          ? ` ${doubles} doors are drawn twice at the same spot in the CAD file; the dataset counts both copies, so both are counted.`
           : '')
       const trace: TraceNode[] = [
         questionNode(question, lang),

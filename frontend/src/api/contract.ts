@@ -436,8 +436,10 @@ export interface Health {
   contract_version: string
 }
 
-/** Evidence subjects that have boxes in the bundled drawing file. */
-export type BoxSubject = 'window' | 'door' | 'washbasin'
+/** Evidence subjects that have boxes in the bundled drawing file (wc/bathtub/shower since the regenerated file). */
+export type BoxSubject = 'window' | 'door' | 'washbasin' | 'wc' | 'bathtub' | 'shower'
+/** Layers every drawing file carries; the fixture layers are optional (older files lack them). */
+export type RequiredBoxSubject = 'window' | 'door' | 'washbasin'
 
 /** One row of the dataset gold table bundled with a drawing. */
 export interface GoldEntry {
@@ -458,7 +460,7 @@ export interface GoldEntry {
  * GET /drawings/:id may serve it unchanged; clients ignore the extra sections.
  */
 export interface DrawingFile extends Drawing {
-  evidence: Record<BoxSubject, Box[]>
+  evidence: Record<RequiredBoxSubject, Box[]> & Partial<Record<Exclude<BoxSubject, RequiredBoxSubject>, Box[]>>
   gold: GoldEntry[]
 }
 
@@ -718,6 +720,7 @@ export function isDrawingFile(v: unknown): v is DrawingFile {
   return (
     isObj(ev) &&
     (['window', 'door', 'washbasin'] as const).every((k) => Array.isArray(ev[k]) && (ev[k] as unknown[]).every(isBox)) &&
+    (['wc', 'bathtub', 'shower'] as const).every((k) => ev[k] === undefined || (Array.isArray(ev[k]) && (ev[k] as unknown[]).every(isBox))) &&
     Array.isArray(o.gold)
   )
 }

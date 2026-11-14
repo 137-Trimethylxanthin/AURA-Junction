@@ -12,7 +12,7 @@
    },
    {
     "type": "image",
-    "data": "sha256:ae54295b10a24586",
+    "data": "sha256:74c7f7ac8d156765",
     "mime_type": "image/png",
     "resolution": "low"
    }
@@ -57,7 +57,8 @@
      "label_03": "the rooms labelled 'Chambre à coucher'",
      "label_04": "the rooms labelled 'Bain'",
      "label_05": "the rooms labelled 'Couloir'",
-     "label_06": "the rooms labelled 'Réduit'"
+     "label_06": "the rooms labelled 'Réduit'",
+     "label_07": "the rooms labelled ''"
     }
    },
    "on_drawing": {

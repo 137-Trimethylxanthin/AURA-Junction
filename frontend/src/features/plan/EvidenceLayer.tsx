@@ -102,7 +102,7 @@ const BoxLayer = memo(function BoxLayer(p: BoxLayerProps) {
     <div className={cn('absolute inset-0', !p.interactive && 'pointer-events-none')} data-layer="boxes">
       {items.map(({ b, i, n, rejected, isSel, hot, leaf2 }) => {
         const room = b.room_id ? roomById.get(b.room_id) : undefined
-        const what = `${subjectLabel(b.subject, p.lang)} ${n}${leaf2 ? ' (second leaf of a double door)' : ''}`
+        const what = `${subjectLabel(b.subject, p.lang)} ${n}${leaf2 ? ' (second copy in the CAD file; the dataset counts both)' : ''}`
         const where = room ? ` in ${roomTitle(room)}` : ''
         const state = rejected ? 'rejected' : 'counted'
         const next = isSel ? (rejected ? 'Press again to count it' : 'Press again to reject it') : 'Press to select'

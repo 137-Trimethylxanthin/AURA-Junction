@@ -46,7 +46,7 @@ For any other drawing id, every failure shows an error card.
 3. **Evidence ids** are `win-01…`, `door-01…`, `basin-01…`, `wc-01…` and `room-<room_id>`.
    - They are stable across calls.
    - They are numbered in reading order: top to bottom by the box's top edge, then left to right.
-   - Two pairs of door boxes have identical coordinates. They are double doors, each leaf counts, and both boxes carry a `note`.
+   - Two pairs of door boxes have identical coordinates: the same door is drawn twice at the same spot in the CAD file, and the dataset counts both. Both boxes carry the `note` "Drawn twice at the same spot in the CAD file; the dataset counts both."
 4. **`room_id`** is the only key used for rooms: in polygons, scopes, overrides and evidence. For `swiss-46639` it equals the room number, e.g. `"3.04"`.
 5. **Honesty rules.**
    - Never return a number you did not derive.
@@ -168,7 +168,7 @@ For any other drawing id, every failure shows an error card.
 | `reason` | When to use it |
 |---|---|
 | `not_on_drawing` | The drawing cannot answer this kind of question, such as a fire rating, a height or a material. Put a short hint in `where_to_find`, written in the question's language. |
-| `not_supported_yet` | The drawing has the information but we don't extract it yet. Locally this covers WC, bathtub and shower. |
+| `not_supported_yet` | The drawing has the information but we don't extract it yet (e.g. WC, bathtub or shower on a drawing whose file has no such layer). The bundled swiss-46639 now answers all three. |
 | `unclear_question` | Nothing in the question can be matched, or it names a room or apartment that doesn't exist. |
 
 **How the UI derives the number it displays.** It recomputes the value from the evidence and the user's toggles, so the evidence must add up to `answer.value`.
@@ -527,9 +527,9 @@ All of these except `timeout` are 4xx, so the frontend shows an error card and n
 | Net floor area of apartment A | 139.34 | 139.34, match |
 | Net floor area of apartment B | 90.55 | 90.54, match (within 2 %) |
 | Total area of rooms labelled Chambre à coucher | 88.09 | 88.09, match |
-| Net floor area of all numbered indoor rooms | 229.89 | 258.0, **match: false** |
+| Net floor area of all numbered indoor rooms | 261.96 (24 rooms, incl. 3.23 and 3.24 from their outlines) | 258.0, match (within 2 %) |
 | Net floor area of room 3.04 | 17.04 | 17.04, match |
-| How many WCs / bathtubs / showers? | abstain `not_supported_yet` | (gold exists: 5 / 2 / 2) |
+| How many WCs / bathtubs / showers? | 5 / 2 / 2 (`wc-*`, `tub-*`, `shower-*` evidence) | 5 / 2 / 2, match |
 | Fire rating of the entrance door | abstain `not_on_drawing` | none |
 
 The table also includes FR, FI and DE phrasings of the window, door and apartment A area questions.

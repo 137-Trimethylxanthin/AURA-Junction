@@ -42,7 +42,7 @@ BOX_SUBJECTS = ('window', 'door') + FIXTURE_SUBJECTS
 PREFIX = {'window': 'win', 'door': 'door', 'washbasin': 'basin', 'wc': 'wc', 'bathtub': 'tub',
           'shower': 'shower', 'text': 'text'}
 FAMILIES = BOX_SUBJECTS + ('room', 'apartment', 'area')
-DOUBLE_DOOR_NOTE = 'Double door: two leaves drawn at the same spot, each counted.'
+DOUBLE_DOOR_NOTE = 'Drawn twice at the same spot in the CAD file; the dataset counts both.'
 
 
 @dataclass
@@ -420,9 +420,9 @@ def _simplify_ring(ring):
 
 
 def room_rect(model: SwissModel, r: dict, tol: float = 0.02) -> dict | None:
-    """{x,y,w,h (Pct), w_m, h_m} for an indoor room whose outline is an axis-aligned rectangle
+    """{x,y,w,h (Pct), w_m, h_m} for an indoor apartment room whose outline is an axis-aligned rectangle
     within `tol` metres (some outlines are skewed by ~1 cm), else None. The rect is the bbox."""
-    if r['polygon'] is None or r['outdoor']:
+    if r['polygon'] is None or r['outdoor'] or not r['unit']:  # what-if is for apartment rooms only
         return None
     p = _simplify_ring(r['polygon'])
     if len(p) != 4:

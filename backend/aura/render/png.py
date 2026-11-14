@@ -1,5 +1,4 @@
-"""Pillow renders against the dataset PNG: page alignment, original.png, thumbnail, 384 px evidence tiles,
-numbered overlays. Alignment is approximate (generalised tools/align.py): the drawing's dark-pixel bbox on
+"""Pillow renders against the dataset PNG: page alignment, original.png, thumbnail, numbered overlays. Alignment is approximate (generalised tools/align.py): the drawing's dark-pixel bbox on
 the page, above the legend/title block, is matched to the DXF extents."""
 
 from __future__ import annotations
@@ -11,7 +10,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 from aura.solvers.swiss import MARGIN, SCALE, SwissModel
 
-TILE = 384
 INSET = 90  # page frame border inset in px (align.py)
 COLORS = {'window': (37, 99, 235), 'door': (234, 88, 12), 'washbasin': (22, 163, 74), 'wc': (147, 51, 234),
           'bathtub': (8, 145, 178), 'shower': (219, 39, 119), 'label': (100, 100, 100)}
@@ -73,24 +71,6 @@ def thumbnail(img: Image.Image, width: int = 480) -> Image.Image:
     t = img.copy()
     t.thumbnail((width, width * 4))
     return t
-
-
-def tiles(png_path, model: SwissModel, al: dict, boxes: list[dict]) -> tuple[dict, list[dict]]:
-    """384 px tiles from the full-resolution page, centred on each box. Returns ({id: Image}, index rows)."""
-    page = Image.open(png_path).convert('RGB')
-    out, index = {}, []
-    for b in boxes:
-        cx, cy = pct_to_page(model, al, b['x'] + b['w'] / 2, b['y'] + b['h'] / 2)
-        x0, y0 = round(cx - TILE / 2), round(cy - TILE / 2)
-        tile = Image.new('RGB', (TILE, TILE), (255, 255, 255))  # white outside the page
-        tile.paste(page.crop((max(x0, 0), max(y0, 0), min(x0 + TILE, page.width), min(y0 + TILE, page.height))),
-                   (max(-x0, 0), max(-y0, 0)))
-        out[b['id']] = tile
-        bx0, by0 = pct_to_page(model, al, b['x'], b['y'])
-        bx1, by1 = pct_to_page(model, al, b['x'] + b['w'], b['y'] + b['h'])
-        index.append({'id': b['id'], 'subject': b['subject'], 'file': f"{b['id']}.png",
-                          'box_in_tile': [round(bx0 - x0, 1), round(by0 - y0, 1), round(bx1 - x0, 1), round(by1 - y0, 1)]})
-    return out, index
 
 
 def _font(size: int):

@@ -34,6 +34,7 @@ from aura.csvout import evidence_csv
 from aura.gemini.client import GeminiClient, Transport
 from aura.jobs import Jobs
 from aura.logging import AccessLogMiddleware, RequestLogFile, setup_logging
+from aura.mcp import build_mcp
 from aura.netutil import client_ip_hash, is_presenter
 from aura.pipeline import Caller, PipelineError, Services, ask, chat_events
 from aura.store import Store, init_db
@@ -41,7 +42,9 @@ from aura.writer import Writer
 
 log = logging.getLogger("aura.main")
 
-SERVED_FILES = {"plan.svg", "original.png", "original-crop.png", "thumb.png"}
+SERVED_FILES = {"plan.svg", "original.png", "thumb.png"}  # allow-list: no other names
+LIBRARY_CACHE = "public, max-age=3600"
+NO_STORE = "private, no-store"
 
 
 def _err(code: str, message: str, status: int) -> JSONResponse:
@@ -75,6 +78,9 @@ def create_app(
     settings = settings or get_settings()
     setup_logging()
     on_modal = _on_modal()
+    holder: dict[str, Services] = {}
+    mcp_app = build_mcp(lambda: holder["svc"]).http_app(path="/", stateless_http=True,
+                                                        json_response=True)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -116,9 +122,11 @@ def create_app(
         app.state.svc = Services(settings=settings, budget=budget, client=client,
                                  registry=registry, store=store, writer=writer,
                                  answers=AnswerCache(), checks=CheckCache(store, writer))
+        holder["svc"] = app.state.svc
         cleanup = asyncio.create_task(_cleanup_loop(app.state.svc), name="aura-cleanup")
         try:
-            yield
+            async with mcp_app.router.lifespan_context(mcp_app):
+                yield
         finally:
             cleanup.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -139,7 +147,9 @@ def create_app(
         allow_headers=["content-type", "x-aura-presenter", "x-delete-token"],
         max_age=600,
     )
+    app.mount("/mcp", mcp_app)
     app.add_middleware(BodyCapMiddleware, cap=uploads.BODY_CAP)
+    app.add_middleware(DefaultNoStoreMiddleware)
     app.add_middleware(AccessLogMiddleware, salt=settings.ip_salt.get_secret_value())
 
     @app.exception_handler(PipelineError)
@@ -164,7 +174,7 @@ def create_app(
         db_ok = s.store is not None and s.store.ok()
         data_ok = settings.data_dir.is_dir()
         budget = s.budget.snapshot()
-        drawings = len(s.registry.ids())
+        drawings = len(s.registry.library_ids())
         ok = db_ok and data_ok
         body = {"ok": ok, "contract_version": CONTRACT_VERSION,
                 "checks": {"db": db_ok, "data_dir": data_ok, "drawings": drawings,
@@ -176,7 +186,7 @@ def create_app(
     async def list_drawings(request: Request) -> dict:
         s = svc(request)
         out = []
-        for did in s.registry.ids():
+        for did in s.registry.library_ids():
             d = s.registry.get(did)
             if d is None:
                 continue
@@ -284,11 +294,22 @@ def create_app(
 
     @app.get("/drawings/{drawing_id}/{name}")
     async def drawing_file(drawing_id: str, name: str, request: Request):
+        if name not in SERVED_FILES:
+            return _err("bad_request", "No such file.", 404)
+        is_upload = drawing_id.startswith("up-")
+        if is_upload:
+            row = upload_row(request, drawing_id)
+            if row is None:
+                svc(request).registry.evict(drawing_id)
+                return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
+            if row["status"] != "ready":
+                return _err("processing", f"Drawing '{drawing_id}' is {row['status']}.", 409)
         d = svc(request).registry.get(drawing_id)
-        p = d.file(name) if d is not None and name in SERVED_FILES else None
+        p = d.file(name) if d is not None else None
         if p is None:
             return _err("bad_request", "No such file.", 404)
-        return FileResponse(p, headers={"cache-control": "public, max-age=3600"})
+        cache = NO_STORE if is_upload or d.source == "upload" else LIBRARY_CACHE
+        return FileResponse(p, headers={"cache-control": cache})
 
     def not_ready(request: Request, drawing_id: str) -> JSONResponse | None:
         row = upload_row(request, drawing_id)
@@ -323,7 +344,7 @@ def create_app(
                 return _err("bad_request", "That conversation belongs to another drawing.", 400)
         gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s)
         return StreamingResponse(_sse(gen), media_type="text/event-stream",
-                                 headers={"cache-control": "no-cache", "x-accel-buffering": "no"})
+                                 headers={"cache-control": NO_STORE, "x-accel-buffering": "no"})
 
     @app.get("/conversations/{conv_id}")
     async def get_conversation(conv_id: str, request: Request):
@@ -401,7 +422,15 @@ async def _remove_upload(s: Services, drawing_id: str) -> None:
     d = s.settings.uploads_dir / drawing_id
     if d.is_dir() and d.parent == s.settings.uploads_dir:
         await asyncio.to_thread(shutil.rmtree, d, True)
-    await s.writer.execute("DELETE FROM drawings WHERE id=?", (drawing_id,))  # type: ignore[union-attr]
+    w = s.writer
+    await w.execute("DELETE FROM drawings WHERE id=?", (drawing_id,))  # type: ignore[union-attr]
+    # Everything derived from the upload goes with it: answers, conversations, turns.
+    await w.execute("DELETE FROM answers WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
+    await w.execute(  # type: ignore[union-attr]
+        "DELETE FROM turns WHERE conversation_id IN "
+        "(SELECT id FROM conversations WHERE drawing_id=?)", (drawing_id,))
+    await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
+    s.answers.drop_drawing(drawing_id)
 
 
 async def cleanup_once(s: Services) -> int:
@@ -427,6 +456,30 @@ async def _cleanup_loop(s: Services) -> None:
             await cleanup_once(s)
         except Exception:
             log.exception("cleanup failed")
+
+
+class DefaultNoStoreMiddleware:
+    """Every response that does not choose its own caching gets `cache-control: private,
+    no-store`: answers, uploads, conversations and CSVs must not outlive their deletion in a
+    browser or shared cache. Only library files opt in to public caching."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def _send(msg: dict) -> None:
+            if msg["type"] == "http.response.start":
+                headers = list(msg.get("headers") or [])
+                if not any(k.lower() == b"cache-control" for k, _ in headers):
+                    headers.append((b"cache-control", NO_STORE.encode()))
+                    msg = {**msg, "headers": headers}
+            await send(msg)
+
+        await self.app(scope, receive, _send)
 
 
 class BodyCapMiddleware:

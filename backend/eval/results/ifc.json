@@ -1,0 +1,173 @@
+{
+ "dataset": "ifc_models",
+ "solver": "aura.solvers.ifc",
+ "calls": 0,
+ "cost_usd": 0,
+ "files": 29,
+ "questions": 1699,
+ "correct": 1691,
+ "pct": 99.53,
+ "languages": [
+  "en"
+ ],
+ "coverage": "English (How/What) ifc_models questions only; the dataset also has 1363 Estonian/Danish lines (not all are exact twins), not scored here",
+ "probe_reference": {
+  "correct": 1691,
+  "questions": 1699,
+  "pct": 99.53
+ },
+ "runtime_s": 6.0,
+ "jobs": 12,
+ "per_model_s": {
+  "bimspeed-barlad_ro-arc-m3-e-pth-0000.ifc": 5.9,
+  "bimspeed-frigento_modello-palazzo-testa-cipriano.ifc": 0.6,
+  "bimspeed-gdynia_ruchu-oporu-18.ifc": 0.9,
+  "bimspeed-vitoria_ald26-before.ifc": 1.6,
+  "bimspeed-vitoria_ald26-project.ifc": 1.4,
+  "bimspeed-warmond_ar.ifc": 1.4,
+  "bsc-chesapeake-bay-bridge-tunnel_chesapeake-bay-bridge-tunnel-4x3.ifc": 2.2,
+  "bsc-clinic_clinic-architectural.ifc": 2.5,
+  "bsc-clinic_clinic-electrical.ifc": 2.8,
+  "bsc-clinic_clinic-hvac.ifc": 2.9,
+  "bsc-clinic_clinic-plumbing.ifc": 3.2,
+  "bsc-clinic_clinic-structural.ifc": 1.1,
+  "bsc-duplex_duplex-a-20110907.ifc": 0.2,
+  "bsc-duplex_duplex-electrical-20121207.ifc": 0.1,
+  "bsc-duplex_duplex-m-20111024-rooms-and-spaces.ifc": 0.9,
+  "bsc-duplex_duplex-mep-20110907.ifc": 0.9,
+  "bsc-duplex_duplex-plumbing-20121113.ifc": 1.9,
+  "bsc-esplanades_1807-ep-ar-v18.ifc": 3.9,
+  "bsc-gymzaal-amersfoort_example-project-location.ifc": 0.3,
+  "bsc-molio_molio-with-uris.ifc": 3.2,
+  "kit-fzk-haus_ac20-fzk-haus.ifc": 0.1,
+  "kit-institute_ac20-institute-var-2.ifc": 0.8,
+  "kit-smiley-west_ac-20-smiley-west-10-bldg.ifc": 0.6,
+  "rwth-digitalhub_digitalhub-fm-arc-v2.ifc": 1.0,
+  "rwth-digitalhub_digitalhub-fm-san-v2.ifc": 1.3,
+  "rwth-digitalhub_fm-arc-digitalhub-v1.ifc": 1.0,
+  "rwth-digitalhub_fm-arc-digitalhub-with-sb-v1.ifc": 1.0,
+  "rwth-digitalhub_fm-san-digitalhub-v1.ifc": 0.7,
+  "tuwien-escape-route_real-world-escape-route-test-model-zdb.ifc": 1.0
+ },
+ "measured_at": "2026-11-14T00:20:18+00:00",
+ "families": {
+  "model_count": {
+   "correct": 131,
+   "n": 136
+  },
+  "room_area": {
+   "correct": 1181,
+   "n": 1183
+  },
+  "slab_vol": {
+   "correct": 36,
+   "n": 36
+  },
+  "storey_area": {
+   "correct": 39,
+   "n": 40
+  },
+  "storey_count_IfcColumn": {
+   "correct": 22,
+   "n": 22
+  },
+  "storey_count_IfcDoor": {
+   "correct": 47,
+   "n": 47
+  },
+  "storey_count_IfcSpace": {
+   "correct": 52,
+   "n": 52
+  },
+  "storey_count_IfcStair": {
+   "correct": 34,
+   "n": 34
+  },
+  "storey_count_IfcWall": {
+   "correct": 31,
+   "n": 31
+  },
+  "storey_count_IfcWindow": {
+   "correct": 21,
+   "n": 21
+  },
+  "wall_len": {
+   "correct": 32,
+   "n": 32
+  },
+  "wall_side": {
+   "correct": 32,
+   "n": 32
+  },
+  "wall_vol": {
+   "correct": 33,
+   "n": 33
+  }
+ },
+ "misses": [
+  {
+   "line": 89303,
+   "file": "bimspeed-barlad_ro-arc-m3-e-pth-0000.ifc",
+   "family": "model_count",
+   "gold": 494,
+   "pred": null,
+   "q": "How many light fixtures are there in the model 'BIM-Speed Barlad apartment block (architec"
+  },
+  {
+   "line": 87822,
+   "file": "bsc-chesapeake-bay-bridge-tunnel_chesapeake-bay-bridge-tunnel-4x3.ifc",
+   "family": "model_count",
+   "gold": 783,
+   "pred": null,
+   "q": "How many light fixtures are there in the model 'Chesapeake Bay Bridge-Tunnel IFC 4.3 test "
+  },
+  {
+   "line": 86666,
+   "file": "bsc-clinic_clinic-electrical.ifc",
+   "family": "model_count",
+   "gold": 1120,
+   "pred": null,
+   "q": "How many light fixtures are there in the model 'Medical-Dental Clinic - electrical'?"
+  },
+  {
+   "line": 86357,
+   "file": "bsc-duplex_duplex-a-20110907.ifc",
+   "family": "room_area",
+   "gold": 6.89,
+   "pred": 0,
+   "q": "What is the net floor area of the room 'Hallway (A201)' on 'Level 2', in m²?"
+  },
+  {
+   "line": 86361,
+   "file": "bsc-duplex_duplex-a-20110907.ifc",
+   "family": "room_area",
+   "gold": 6.89,
+   "pred": 0,
+   "q": "What is the net floor area of the room 'Hallway (B201)' on 'Level 2', in m²?"
+  },
+  {
+   "line": 86367,
+   "file": "bsc-duplex_duplex-a-20110907.ifc",
+   "family": "storey_area",
+   "gold": 114.25,
+   "pred": 100.46,
+   "q": "What is the total net floor area of all rooms (spaces) on 'Level 2', in m²?"
+  },
+  {
+   "line": 86376,
+   "file": "bsc-duplex_duplex-electrical-20121207.ifc",
+   "family": "model_count",
+   "gold": 28,
+   "pred": null,
+   "q": "How many light fixtures are there in the model 'Duplex Apartment - electrical'?"
+  },
+  {
+   "line": 86374,
+   "file": "bsc-duplex_duplex-mep-20110907.ifc",
+   "family": "model_count",
+   "gold": 28,
+   "pred": null,
+   "q": "How many light fixtures are there in the model 'Duplex Apartment - MEP'?"
+  }
+ ]
+}

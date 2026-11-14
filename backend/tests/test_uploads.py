@@ -230,3 +230,91 @@ def test_swiss_dataset_dxf_upload_answers_gold(tmp_path):
         assert a["answer"]["value"] == 12 and len(a["evidence"]["boxes"]) == 12
         assert a["check"] == {"method": "decisions_api", "status": "sample", "image": "none"}
         assert a["calls"] == 0
+
+
+# ---- privacy of uploads (security review) ------------------------------------------------
+
+def test_upload_files_no_store_409_404_and_allow_list(tmp_path):
+    app = make_app(tmp_path, job_options={"join_timeout_s": 30, "target": loop_forever})
+    with TestClient(app) as c:
+        pending = upload(c, plain_dxf()).json()["drawing_id"]
+        time.sleep(0.3)
+        r = c.get(f"/drawings/{pending}/plan.svg")
+        assert r.status_code == 409 and r.json()["code"] == "processing"
+    with TestClient(make_app(tmp_path / "b")) as c:
+        body = upload(c, plain_dxf()).json()
+        did = body["drawing_id"]
+        wait_status(c, did)
+        f = c.get(f"/drawings/{did}/plan.svg")
+        assert f.status_code == 200 and f.headers["cache-control"] == "private, no-store"
+        for path in (f"/drawings/{did}", f"/drawings/{did}/status"):
+            assert c.get(path).headers["cache-control"] == "private, no-store"
+        a = c.post("/ask", json={"drawing_id": did, "question": "How many doors?"})
+        assert a.headers["cache-control"] == "private, no-store"
+        c.portal.call(c.app.state.svc.writer.flush)
+        csv = c.get(f"/answers/{a.json()['answer_id']}/evidence.csv")
+        assert csv.status_code == 200 and csv.headers["cache-control"] == "private, no-store"
+        # traversal / non-allow-listed names
+        for name in ("source.dxf", "drawing.json", "model.json", "..%2Fsource.dxf"):
+            assert c.get(f"/drawings/{did}/{name}").status_code == 404
+        assert c.get("/drawings/swiss-46639/../../etc/passwd").status_code == 404
+        # delete → files, answers and the CSV are gone
+        assert c.delete(f"/drawings/{did}", headers={"x-delete-token": body["delete_token"]}
+                        ).status_code == 204
+        assert c.get(f"/drawings/{did}/plan.svg").status_code == 404
+        assert c.get(f"/drawings/{did}").status_code == 404
+        assert c.get(f"/answers/{a.json()['answer_id']}/evidence.csv").status_code == 404
+        gone = c.post("/ask", json={"drawing_id": did, "question": "How many doors?"})
+        assert gone.status_code == 404
+
+
+def test_library_files_stay_publicly_cacheable(tmp_path):
+    from aura.config import Settings
+    from aura.main import create_app
+    from tests.conftest import BACKEND
+
+    build = BACKEND / "build" / "drawings"
+    if not (build / "swiss-46639" / "plan.svg").is_file():
+        pytest.skip("dataset: run scripts/preprocess.py first")
+    s = Settings(DATA_DIR=tmp_path / "d", AURA_BUILD_DIR=build)
+    with TestClient(create_app(s, use_gemini=False)) as c:
+        r = c.get("/drawings/swiss-46639/plan.svg")
+        assert r.status_code == 200 and r.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_uploads_never_listed_but_askable_by_id_over_mcp(tmp_path):
+    from fastmcp import Client
+    from fastmcp.exceptions import ToolError
+
+    from aura.mcp import build_mcp
+
+    with TestClient(make_app(tmp_path)) as c:
+        body = upload(c, plain_dxf()).json()
+        did = body["drawing_id"]
+        wait_status(c, did)
+        c.get(f"/drawings/{did}")  # loads it into the registry cache
+        svc = c.app.state.svc
+        assert did not in svc.registry.library_ids()
+        assert did not in [x["id"] for x in c.get("/drawings").json()["drawings"]]
+        mcp = build_mcp(lambda: svc)
+
+        async def listed_and_asked():
+            async with Client(mcp) as m:
+                lib = (await m.call_tool("list_drawings", {})).structured_content
+                ids = [x["id"] for x in (lib.get("result", lib))]
+                assert did not in ids and "swiss-46639" in ids
+                a = (await m.call_tool("ask_drawing", {"drawing_id": did,
+                                                       "question": "How many doors?"})).data
+                return a
+
+        a = c.portal.call(listed_and_asked)
+        assert a["answer"]["reason"] == "not_supported_yet"
+        assert c.delete(f"/drawings/{did}", headers={"x-delete-token": body["delete_token"]}
+                        ).status_code == 204
+
+        async def after_delete():
+            async with Client(mcp) as m:
+                with pytest.raises(ToolError, match="Unknown drawing"):
+                    await m.call_tool("ask_drawing", {"drawing_id": did, "question": "doors?"})
+
+        c.portal.call(after_delete)

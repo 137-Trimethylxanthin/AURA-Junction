@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from aura.budget import ip_hash
 
 access = logging.getLogger("aura.access")
+_UPLOAD_ID = re.compile(r"up-[A-Za-z0-9]+")
+_ID = re.compile(r"/(answers|conversations)/[^/]+")
+
+
+def redact(path: str) -> str:
+    """Upload, answer and conversation ids are capabilities: never in logs."""
+    return _ID.sub(r"/\1/…", _UPLOAD_ID.sub("up-…", path or ""))
 
 
 class JsonFormatter(logging.Formatter):
@@ -69,7 +77,7 @@ class AccessLogMiddleware:
             access.info("", extra={"fields": {
                 "kind": "http",
                 "method": scope.get("method"),
-                "path": scope.get("path"),
+                "path": redact(scope.get("path", "")),
                 "status": status["code"],
                 "ms": int((time.perf_counter() - t0) * 1000),
                 "ip_hash": ip_hash(client[0] if client else None, self.salt),

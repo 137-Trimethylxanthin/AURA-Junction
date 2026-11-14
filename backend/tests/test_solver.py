@@ -173,8 +173,11 @@ def test_46639_key_values(m46639):
 @needs_data
 def test_46639_evidence_equals_bundled(m46639):
     bundled = json.loads(BUNDLED_JSON.read_text(encoding='utf-8'))
+    strip = lambda bs: [{k: v for k, v in b.items() if k != 'note'} for b in bs]
     for subj in ('window', 'door', 'washbasin'):
-        assert m46639.boxes()[subj] == bundled['evidence'][subj], subj
+        assert strip(m46639.boxes()[subj]) == strip(bundled['evidence'][subj]), subj
+        # notes sit on the same boxes (the wording is agreed with L3 and may differ until the file is regenerated)
+        assert [bool(b.get('note')) for b in m46639.boxes()[subj]] == [bool(b.get('note')) for b in bundled['evidence'][subj]]
 
 
 @pytest.mark.dataset

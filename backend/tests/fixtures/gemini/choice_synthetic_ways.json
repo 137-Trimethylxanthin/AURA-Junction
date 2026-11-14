@@ -1,0 +1,108 @@
+{
+ "source": "synthetic",
+ "note": "SYNTHETIC: unsure intent (0.52) hands over to the agent.",
+ "question": "how many ways in and out are there for flat B",
+ "path": "/decisions",
+ "request": {
+  "model": "gemini-decision-1",
+  "input": [
+   {
+    "type": "text",
+    "text": "A user asked this question about the construction floor plan below:\nhow many ways in and out are there for flat B\n"
+   },
+   {
+    "type": "image",
+    "data": "sha256:74c7f7ac8d156765",
+    "mime_type": "image/png",
+    "resolution": "low"
+   }
+  ],
+  "questions": {
+   "intent": {
+    "type": "choice",
+    "instructions": "What does the question ask for?",
+    "criteria": {
+     "count": "Asks how many items there are (a number of objects, rooms or apartments).",
+     "area": "Asks for a surface or floor area, or how big a room or apartment is.",
+     "length": "Asks for a length, width, height, distance or volume.",
+     "text": "Asks for a name, type, material, rating, list or other non-numeric fact.",
+     "other": "Not a question about a building or its drawing."
+    }
+   },
+   "subject": {
+    "type": "choice",
+    "instructions": "If the question asks for a count, what is being counted?",
+    "criteria": {
+     "window": "windows",
+     "door": "doors",
+     "washbasin": "washbasins or sinks",
+     "wc": "toilets or WC seats",
+     "bathtub": "bathtubs",
+     "shower": "showers",
+     "room": "rooms of some kind (bedrooms, bathrooms, kitchens...)",
+     "apartment": "apartments or dwelling units",
+     "other": "none of these, or not a count"
+    }
+   },
+   "scope": {
+    "type": "choice",
+    "instructions": "Which part of the floor plan is the question about?",
+    "criteria": {
+     "floor": "the whole floor plan, or no particular part of it",
+     "unit_A": "apartment A",
+     "unit_B": "apartment B",
+     "label_00": "the rooms labelled 'Terrasse'",
+     "label_01": "the rooms labelled 'Séjour/repas'",
+     "label_02": "the rooms labelled 'Cuisine'",
+     "label_03": "the rooms labelled 'Chambre à coucher'",
+     "label_04": "the rooms labelled 'Bain'",
+     "label_05": "the rooms labelled 'Couloir'",
+     "label_06": "the rooms labelled 'Réduit'",
+     "label_07": "the rooms labelled ''"
+    }
+   },
+   "on_drawing": {
+    "type": "noul",
+    "instructions": "Is the information needed to answer the question shown on this drawing?"
+   }
+  }
+ },
+ "status": 200,
+ "response": {
+  "answers": {
+   "intent": {
+    "type": "choice",
+    "choice": "count",
+    "confidence": 0.52,
+    "probabilities": {
+     "count": 0.52
+    }
+   },
+   "subject": {
+    "type": "choice",
+    "choice": "door",
+    "confidence": 0.55,
+    "probabilities": {
+     "door": 0.55
+    }
+   },
+   "scope": {
+    "type": "choice",
+    "choice": "unit_B",
+    "confidence": 0.9,
+    "probabilities": {
+     "unit_B": 0.9
+    }
+   },
+   "on_drawing": {
+    "type": "noul",
+    "noul": 0.7,
+    "confidence": 0.7
+   }
+  },
+  "usage": {
+   "total_input_tokens": 460,
+   "total_output_tokens": 0
+  }
+ }
+}

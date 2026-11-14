@@ -116,12 +116,13 @@ test('fire rating question abstains without any digits in the answer card head',
   await shot(page, 'golden-abstain', info)
 })
 
-test('WC question says the fixtures are not extracted yet', async ({ page }) => {
+test('WC question is answered from the CAD fixtures: 5 WCs, matching the dataset', async ({ page }) => {
   await ask(page, Q.wc)
   const card = lastCard(page)
-  await expect(card.locator('[data-abstain="not_supported_yet"]')).toBeVisible()
-  await expect(card).toContainText('aren’t extracted yet')
-  await expect(card.locator('[data-answer-value]')).toHaveCount(0)
+  expect(await answerValue(page)).toBe('5')
+  await expect(goldChip(page)).toContainText('Dataset: 5 ✓')
+  await expect(planBoxes(page)).toHaveCount(5)
+  await expect(card.locator('[data-abstain]')).toHaveCount(0)
 })
 
 test('composer stays inside the viewport without scrolling after 6 turns', async ({ page }, info) => {

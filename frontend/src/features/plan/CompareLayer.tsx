@@ -2,12 +2,11 @@ import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
 import { ChevronsLeftRightIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore, useAppStoreShallow } from '@/store'
-import { pctPoint, type StageRef } from './shared'
+import { pctPoint, swipeSplit, type StageRef } from './shared'
 
 const clampSplit = (v: number) => Math.min(98, Math.max(2, v))
 
 /** Position of the swipe divider, shared with the context menu ("Compare with the original here"). */
-export const swipeSplit = { current: 50 }
 
 /** Original drawing over the rebuilt one: a swipe divider (default) or a multiply blend. */
 export function CompareLayer({ stageRef }: { stageRef: StageRef }) {

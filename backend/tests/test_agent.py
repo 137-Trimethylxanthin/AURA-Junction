@@ -57,3 +57,63 @@ def test_fixtures_hold_no_image_bytes_or_key():
         for part in fx["request"].get("input", []):
             if part.get("type") == "image":
                 assert part["data"].startswith("sha256:")
+
+
+# ---- agent inside the pipeline (synthetic fixtures, see their "note") ---------------------
+
+def _app(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from tests.conftest import make_app
+
+    return TestClient(make_app(tmp_path, transport=FakeTransport(FIXTURES / "gemini"),
+                               with_image=True))
+
+
+def test_unsure_choice_hands_over_to_the_agent(tmp_path):
+    with _app(tmp_path) as c:
+        b = c.post("/ask", json={"drawing_id": "swiss-46639", "question":
+                                 "how many ways in and out are there for flat B"}).json()
+        assert b["route"] == "agent"
+        assert b["answer"] == {"kind": "count", "value": 9, "subject": "door"}
+        assert b["scope"] == {"kind": "unit", "unit": "B"} and len(b["evidence"]["boxes"]) == 9
+        assert b["calls"] == 1 + 2  # one choice + two function-calling iterations
+        # Provenance: "40 percent" is in no tool result, so that sentence is gone.
+        assert b["explanation"] == "Apartment B has 9 doors."
+        assert any(n["id"] == "provenance" and n["kind"] == "warn" for n in b["trace"])
+        assert next(n for n in b["trace"] if n["id"] == "intent")["tag"].startswith("agent")
+
+
+def test_agent_without_a_result_abstains_and_filters_prose(tmp_path):
+    with _app(tmp_path) as c:
+        b = c.post("/ask", json={"drawing_id": "swiss-46639",
+                                 "question": "how many places can people sleep in apartment A"}).json()
+        assert b["route"] == "agent" and b["answer"]["reason"] == "unclear_question"
+        assert b["explanation"] == ("Beds are not drawn, so sleeping places cannot be counted.")
+        assert any(n.get("tool", {}).get("name") == "list_rooms" for n in b["trace"])
+
+
+def test_chat_streams_agent_tool_calls(tmp_path):
+    import json as _json
+
+    with _app(tmp_path) as c, c.stream("POST", "/chat", json={
+            "drawing_id": "swiss-46639",
+            "message": "how many ways in and out are there for flat B"}) as r:
+        text = "".join(r.iter_text())
+    events = [blk.split("\n")[0][7:] for blk in text.strip().split("\n\n")]
+    assert events[:2] == ["turn", "understood"] and events[-2:] == ["answer", "done"]
+    und = _json.loads(text.split("\n\n")[1].split("\n")[1][6:])
+    assert und["route"] == "agent"
+    assert "tool_call" in events
+
+
+def test_provenance_numbers_and_words():
+    from aura.provenance import filter_prose, numbers_in
+
+    assert numbers_in("22 doors, 139,34 m², zweiundzwanzig, twenty-two, douze") == [
+        22.0, 139.34, 22.0, 22.0, 12.0]
+    kept, dropped = filter_prose("There are twelve windows. About 13 are big.", {12.0})
+    assert kept == "There are twelve windows." and dropped == ["About 13 are big."]
+    # rounding of a tool value is fine; the user's room number is allowed via the question
+    kept, _ = filter_prose("Room 3.04 has 17.0 m².", {17.04, 3.04})
+    assert kept == "Room 3.04 has 17.0 m²."

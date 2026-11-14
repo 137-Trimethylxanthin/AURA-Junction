@@ -138,6 +138,8 @@ test('marking the bathroom block and asking counts the washbasins whose centre i
 test.describe('compare', () => {
   async function openCompare(page: Page) {
     await page.locator('[aria-label="Compare with original"]').click()
+    // The compare layer is code-split: wait until its divider is on screen before dragging it.
+    await expect(page.getByRole('slider', { name: /^Compare:/ })).toBeVisible()
   }
   const divider = (page: Page) => page.getByRole('slider', { name: /^Compare:/ })
 

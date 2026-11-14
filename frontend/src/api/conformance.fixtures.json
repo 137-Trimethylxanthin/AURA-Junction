@@ -168,16 +168,16 @@
       }
     },
     {
-      "name": "area of all indoor rooms (real mismatch with the dataset)",
+      "name": "area of all indoor rooms (within 2 % of the dataset)",
       "question": "What is the total net floor area of all numbered indoor rooms?",
       "lang": "en",
       "expect": {
         "kind": "area",
-        "value": 229.89
+        "value": 261.96
       },
       "gold": {
         "value": 258,
-        "match": false
+        "match": true
       }
     },
     {
@@ -224,21 +224,45 @@
       "gold": null
     },
     {
-      "name": "WC → not supported yet",
+      "name": "WCs",
       "question": "How many WCs are there?",
       "lang": "en",
       "expect": {
-        "kind": "abstain",
-        "reason": "not_supported_yet"
+        "kind": "count",
+        "value": 5,
+        "subject": "wc"
+      },
+      "gold": {
+        "value": 5,
+        "match": true
       }
     },
     {
-      "name": "bathtubs → not supported yet",
+      "name": "bathtubs",
       "question": "How many bathtubs are drawn on this floor plan?",
       "lang": "en",
       "expect": {
-        "kind": "abstain",
-        "reason": "not_supported_yet"
+        "kind": "count",
+        "value": 2,
+        "subject": "bathtub"
+      },
+      "gold": {
+        "value": 2,
+        "match": true
+      }
+    },
+    {
+      "name": "showers",
+      "question": "How many showers are drawn on this floor plan?",
+      "lang": "en",
+      "expect": {
+        "kind": "count",
+        "value": 2,
+        "subject": "shower"
+      },
+      "gold": {
+        "value": 2,
+        "match": true
       }
     },
     {

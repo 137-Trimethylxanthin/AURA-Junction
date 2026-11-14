@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from aura import answer as A
 from aura import tools
+from aura.agent.loop import MAX_ITERATIONS, describe_call, run_agent
 from aura.budget import Budget, BudgetError
 from aura.cache import AnswerCache, CheckCache, answer_key
 from aura.config import Settings, models_enabled
@@ -23,6 +24,7 @@ from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse, ChatRequest
 from aura.gemini.check import check_key, default_anchors, run_check, slice_check
 from aura.gemini.client import GeminiClient, GeminiError
 from aura.gemini.understand import understand
+from aura.provenance import allowed_numbers, filter_prose
 from aura.router import FIRE_PATTERN, route
 from aura.store import Store
 from aura.writer import Writer
@@ -62,6 +64,18 @@ class Caller:
     presenter: bool = False
 
 
+def ensure_ready(svc: Services, drawing_id: str) -> None:
+    """Uploads are answered only when ready (409 processing), and not at all once deleted."""
+    if not drawing_id.startswith("up-") or svc.store is None:
+        return
+    row = svc.store.drawing_row(drawing_id)
+    if row is None:
+        svc.registry.evict(drawing_id)
+        raise PipelineError("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
+    if row["status"] != "ready":
+        raise PipelineError("processing", f"Drawing '{drawing_id}' is {row['status']}.", 409)
+
+
 def _tool_events(built: A.Built) -> list[tuple[str, dict]]:
     """tool_call / tool_result pairs for the trace nodes that carry a tool."""
     out: list[tuple[str, dict]] = []
@@ -91,8 +105,69 @@ def context_from(turns: list[dict]) -> dict | None:
     return None
 
 
+AGENT_TIMEOUT_S = 25.0
+AGENT_TAG = "agent · flash-lite"
+
+
+async def _agent(svc: Services, d: tools.LoadedDrawing, question: str, lang: str, caller: Caller,
+                 stats: dict, history: list[dict] | None, choice_tag: str) -> A.Built:
+    """Function calling; the answer comes from the ToolResult the model names."""
+    try:
+        async with asyncio.timeout(AGENT_TIMEOUT_S):
+            ar = await run_agent(svc.client, d, question, history=history,  # type: ignore[arg-type]
+                                 ip_hash=caller.ip_hash, presenter=caller.presenter)
+    except (BudgetError, GeminiError, TimeoutError) as e:
+        stats["no_cache"] = True
+        return A.unclear(question, lang, d, intent_tag=choice_tag,
+                         look=f"The model step was skipped: {e or 'timeout'}.")
+    stats["calls"] += ar.calls
+    stats["cost_usd"] += ar.cost_usd
+    stats["route"] = "agent"
+    final = ar.final
+    nodes = []
+    for i, tr in enumerate(ar.results, 1):
+        if final is not None and tr.result_id == final.result_id:
+            continue  # the answer's own read/collect node carries this call
+        nodes.append({"id": f"agent-{i}", "parent": "q", "title": "Tool call", "tag": AGENT_TAG,
+                      "body": tr.summary or describe_call(tr), "kind": "exact",
+                      "evidence_ids": [b.id for b in tr.boxes] or None,
+                      "tool": A.tool_meta(tr)})
+    if final is None or final.kind not in ("count", "area", "text"):
+        why = {"no_final": "The model did not name a tool result.",
+               "limit": f"The model used its {MAX_ITERATIONS} steps without a final answer."}.get(
+            ar.stopped, "No tool result answers this question.")
+        built = A.unclear(question, lang, d, intent_tag=AGENT_TAG, look=why)
+    elif not final.supported:
+        built = A.not_supported(question, lang, final.args.get("scope") or {"kind": "floor"}, final,
+                                intent_tag=AGENT_TAG)
+    elif final.kind == "count":
+        built = A.count(question, lang, d, final, final.args.get("scope") or {"kind": "floor"},
+                        None, intent_tag=AGENT_TAG)
+    elif final.kind == "area":
+        built = A.area(question, lang, d, final, final.args.get("scope") or {"kind": "floor"},
+                       None, intent_tag=AGENT_TAG)
+    else:
+        built = A.text(question, lang, d, final, final.subject or "label", intent_tag=AGENT_TAG)
+    trace = built.body["trace"]
+    at = next((i for i, n in enumerate(trace) if n["id"] == "answer"), len(trace))
+    nodes = [{k: v for k, v in n.items() if v is not None} for n in nodes]
+    if ar.explanation:
+        kept, dropped = filter_prose(ar.explanation, allowed_numbers(ar.results, question))
+        if kept:
+            built.body["explanation"] = kept
+        if dropped:
+            nodes.append({"id": "provenance", "parent": "q", "title": "Provenance filter",
+                          "tag": "numbers checked", "kind": "warn",
+                          "body": f"Removed {len(dropped)} sentence(s) of model prose with a "
+                                  "number that no tool result produced."})
+    built.body["trace"] = trace[:at] + nodes + trace[at:]
+    built.results = [*ar.results, *[r for r in built.results if r not in ar.results]]
+    return built
+
+
 async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller: Caller,
-                  stats: dict, context: dict | None = None) -> A.Built:
+                  stats: dict, context: dict | None = None,
+                  history: list[dict] | None = None) -> A.Built:
     question = req.question.strip()
     r = route(question, d.ctx)
     if context:
@@ -135,8 +210,9 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
                     f"The model judged this information is not shown on the drawing "
                     f"(p = {u.on_drawing:.2f}).", intent_body="abstain · not on drawing",
                     intent_tag=tag)
-            if not u.confident:
-                return A.unclear(question, lang, d, intent_tag=tag)
+            if (not u.confident or u.intent == "other"
+                    or (u.intent == "count" and not u.subject)):
+                return await _agent(svc, d, question, lang, caller, stats, history, tag)
             if u.intent == "count" and u.subject:
                 intent, subject = "count", u.subject
             elif u.intent == "area":
@@ -148,7 +224,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
                     question, lang, {"kind": "floor"}, "not_supported_yet", "(a list or text fact)",
                     "Lists and other non-numeric facts are not extracted from this drawing yet.",
                     intent_body="text · not extracted yet", intent_tag=tag)
-            else:
+            else:  # pragma: no cover - every intent option is handled above
                 return A.unclear(question, lang, d, intent_tag=tag)
             if text_scope is None and u.scope and u.scope_conf >= 0.6:
                 text_scope = u.scope
@@ -263,9 +339,10 @@ def _check_node(check: dict, cached: bool, stats: dict, subject: str) -> dict:
             "evidence_ids": check["ranking"]}
 
 
-async def run(svc: Services, req: AskRequest, caller: Caller,
-              context: dict | None = None) -> AsyncIterator[tuple[str, dict]]:
+async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | None = None,
+              history: list[dict] | None = None) -> AsyncIterator[tuple[str, dict]]:
     t0 = time.perf_counter()
+    ensure_ready(svc, req.drawing_id)
     d = svc.registry.get(req.drawing_id)
     if d is None:
         raise PipelineError("unknown_drawing", f"Unknown drawing '{req.drawing_id}'", 404)
@@ -287,7 +364,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller,
 
     stats = {"calls": 0, "cost_usd": 0.0, "route": "template", "check_calls": 0,
              "check_cost_usd": 0.0, "check_tokens": 0}
-    built = await _decide(svc, req, d, caller, stats, context)
+    built = await _decide(svc, req, d, caller, stats, context, history)
     yield "understood", {"detected_lang": built.body["detected_lang"],
                          "canonical_en": built.body["canonical_en"], "route": stats["route"]}
     for ev in _tool_events(built):
@@ -372,14 +449,15 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
                              (conv_id, now, body.drawing_id))
     yield "turn", {"conversation_id": conv_id, "turn_id": turn_id}
 
-    context = context_from(store.recent_turns(conv_id) if store and existing else [])
+    history = store.recent_turns(conv_id) if store and existing else []
+    context = context_from(history)
     req = AskRequest(drawing_id=body.drawing_id, question=body.message, scope=body.scope,
                      overrides=body.overrides, lang_hint=body.lang_hint)
     queue: asyncio.Queue = asyncio.Queue()
 
     async def produce() -> None:
         try:
-            async for item in run(svc, req, caller, context):
+            async for item in run(svc, req, caller, context, history):
                 await queue.put(item)
         except PipelineError as e:
             await queue.put(("error", {"error": str(e), "code": e.code}))

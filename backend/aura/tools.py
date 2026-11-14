@@ -329,7 +329,9 @@ class Registry:
     def add(self, d: LoadedDrawing) -> None:
         self._cache[d.id] = d
 
-    def ids(self) -> list[str]:
+    def library_ids(self) -> list[str]:
+        """Library drawings only. Uploads are addressable by id but never listed: the
+        unguessable id is their only access control. Every listing must use this."""
         seen = [k for k, v in self._cache.items() if v.source != "upload"]
         for base in self.dirs:
             index = base / "index.json"
@@ -342,7 +344,7 @@ class Registry:
                 for p in sorted(base.iterdir()):
                     if (p / "drawing.json").is_file() and p.name not in seen:
                         seen.append(p.name)
-        return seen
+        return [i for i in seen if not i.startswith("up-")]
 
     def get(self, drawing_id: str) -> LoadedDrawing | None:
         if drawing_id in self._cache:

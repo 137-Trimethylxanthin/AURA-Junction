@@ -1,0 +1,268 @@
+{
+ "source": "synthetic",
+ "note": "SYNTHETIC (not recorded): agent lists rooms, then names no result; the '3' sentence must be dropped by the provenance filter.",
+ "path": "/models/gemini-3.1-flash-lite:generateContent",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "how many places can people sleep in apartment A"
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "list_rooms",
+       "args": {
+        "scope": "unit:A"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "list_rooms",
+       "response": {
+        "result_id": "r-718f3c6ecbc3",
+        "summary": "13 rooms in apartment A: 3.01 Terrasse, 3.02 Séjour/repas, 3.03 Cuisine, 3.04 Chambre à coucher, 3.05 Chambre à coucher, 3.06 Bain, 3.07 Chambre à coucher, 3.08 Couloir, 3.09 Bain, 3.10 Chambre à coucher, 3.11 Réduit, 3.12 Bain, 3.13 Terrasse",
+        "supported": true,
+        "rooms": [
+         {
+          "room_id": "3.01",
+          "name": "Terrasse",
+          "unit": "A",
+          "area_m2": 30.39,
+          "outdoor": true
+         },
+         {
+          "room_id": "3.02",
+          "name": "Séjour/repas",
+          "unit": "A",
+          "area_m2": 38.57,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.03",
+          "name": "Cuisine",
+          "unit": "A",
+          "area_m2": 7.83,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.04",
+          "name": "Chambre à coucher",
+          "unit": "A",
+          "area_m2": 17.04,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.05",
+          "name": "Chambre à coucher",
+          "unit": "A",
+          "area_m2": 13.81,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.06",
+          "name": "Bain",
+          "unit": "A",
+          "area_m2": 6.0,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.07",
+          "name": "Chambre à coucher",
+          "unit": "A",
+          "area_m2": 13.76,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.08",
+          "name": "Couloir",
+          "unit": "A",
+          "area_m2": 15.87,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.09",
+          "name": "Bain",
+          "unit": "A",
+          "area_m2": 5.98,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.10",
+          "name": "Chambre à coucher",
+          "unit": "A",
+          "area_m2": 13.6,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.11",
+          "name": "Réduit",
+          "unit": "A",
+          "area_m2": 3.26,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.12",
+          "name": "Bain",
+          "unit": "A",
+          "area_m2": 3.62,
+          "outdoor": false
+         },
+         {
+          "room_id": "3.13",
+          "name": "Terrasse",
+          "unit": "A",
+          "area_m2": 53.16,
+          "outdoor": true
+         }
+        ]
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "You answer questions about one construction floor plan by calling tools. Never write a number yourself: every number must come from a tool result. Scopes are 'floor', 'unit:<letter>', 'room:<id>' or 'label:<printed room label>'. Finish with final_answer, naming the result_id that answers the question, and a one- or two-sentence explanation in the user's language. If no tool can answer, call final_answer with result_id 'none'. This drawing has apartments [A, B] and room labels [, Bain, Chambre à coucher, Couloir, Cuisine, Réduit, Séjour/repas, Terrasse]."
+    }
+   ]
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "count_objects",
+      "description": "Count drawn objects of one kind in a scope, from the CAD layers.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "subject": {
+         "type": "string",
+         "enum": [
+          "window",
+          "door",
+          "washbasin",
+          "wc",
+          "bathtub",
+          "shower",
+          "room",
+          "apartment"
+         ]
+        },
+        "scope": {
+         "type": "string",
+         "description": "floor | unit:<letter> | room:<id> | label:<printed label>"
+        }
+       },
+       "required": [
+        "subject"
+       ]
+      }
+     },
+     {
+      "name": "room_areas",
+      "description": "Net floor area (m²) of a scope, summed room by room from printed areas.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "scope": {
+         "type": "string",
+         "description": "floor | unit:<letter> | room:<id> | label:<label>"
+        }
+       }
+      }
+     },
+     {
+      "name": "list_rooms",
+      "description": "List rooms (id, printed label, apartment, area) in a scope.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "scope": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "find_text",
+      "description": "Find printed text on the drawing (e.g. fire ratings like EI30) by regex.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "pattern": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "pattern"
+       ]
+      }
+     },
+     {
+      "name": "final_answer",
+      "description": "Finish: name the tool result that answers the question and explain briefly. Never write a number that is not in a tool result.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "result_id": {
+         "type": "string"
+        },
+        "explanation": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "result_id",
+        "explanation"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "temperature": 0
+  }
+ },
+ "status": 200,
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "role": "model",
+     "parts": [
+      {
+       "functionCall": {
+        "name": "final_answer",
+        "args": {
+         "result_id": "none",
+         "explanation": "Apartment A has 3 rooms labelled Chambre à coucher. Beds are not drawn, so sleeping places cannot be counted."
+        }
+       }
+      }
+     ]
+    },
+    "finishReason": "STOP"
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 450,
+   "candidatesTokenCount": 30
+  }
+ }
+}

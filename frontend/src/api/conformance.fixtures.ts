@@ -103,11 +103,11 @@ export const CONFORMANCE: ConformanceCase[] = [
     gold: { value: 88.09, match: true },
   },
   {
-    name: 'area of all indoor rooms (real mismatch with the dataset)',
+    name: 'area of all indoor rooms (within 2 % of the dataset)',
     question: 'What is the total net floor area of all numbered indoor rooms?',
     lang: 'en',
-    expect: { kind: 'area', value: 229.89 },
-    gold: { value: 258.0, match: false },
+    expect: { kind: 'area', value: 261.96 },
+    gold: { value: 258.0, match: true },
   },
   {
     name: 'area of room 3.04',
@@ -132,17 +132,27 @@ export const CONFORMANCE: ConformanceCase[] = [
     gold: null,
   },
   // Abstains
+  // Fixture counts (wc-*, tub-*, shower-* evidence)
   {
-    name: 'WC → not supported yet',
+    name: 'WCs',
     question: 'How many WCs are there?',
     lang: 'en',
-    expect: { kind: 'abstain', reason: 'not_supported_yet' },
+    expect: { kind: 'count', value: 5, subject: 'wc' },
+    gold: { value: 5, match: true },
   },
   {
-    name: 'bathtubs → not supported yet',
+    name: 'bathtubs',
     question: 'How many bathtubs are drawn on this floor plan?',
     lang: 'en',
-    expect: { kind: 'abstain', reason: 'not_supported_yet' },
+    expect: { kind: 'count', value: 2, subject: 'bathtub' },
+    gold: { value: 2, match: true },
+  },
+  {
+    name: 'showers',
+    question: 'How many showers are drawn on this floor plan?',
+    lang: 'en',
+    expect: { kind: 'count', value: 2, subject: 'shower' },
+    gold: { value: 2, match: true },
   },
   {
     name: 'fire rating → not on drawing (mockup suggestion)',

@@ -1,5 +1,5 @@
 """LOCAL preprocessing: dataset -> build/drawings/<id>/{drawing.json, plan.svg, original.png, thumb.png,
-tiles/, model.json, gold.json} for swiss-46639 plus the library picks, and numbered overlays in
+model.json, gold.json} for swiss-46639 plus the library picks, and numbered overlays in
 build/overlays/<id>.png. 0 model calls.
 
 Usage (from backend/): uv run python -I scripts/preprocess.py [--data ../data/junction-dataset] [--ids swiss-46639 ...]
@@ -96,7 +96,7 @@ def process(stem: str, data: Path, qlines, overlays: bool = True) -> dict:
     sd = data / 'data' / 'swiss_dwellings'
     model = swiss.load(sd / f'{stem}.dxf')
     d = OUT / 'drawings' / model.id
-    (d / 'tiles').mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
     gold = gold_rows(model, qlines)
     measured = dt.datetime.now(dt.UTC).isoformat(timespec='seconds')
     facts = {'gold_total': len(gold), 'correct': sum(g['match'] for g in gold), 'measured_at': measured,
@@ -107,12 +107,6 @@ def process(stem: str, data: Path, qlines, overlays: bool = True) -> dict:
     orig.save(d / 'original.png', optimize=True)
     rpng.thumbnail(orig).save(d / 'thumb.png', optimize=True)
     boxes = [b for s in swiss.BOX_SUBJECTS for b in model.boxes()[s]]
-    tiles, index = rpng.tiles(sd / f'{stem}.png', model, al, boxes)
-    for k, im in tiles.items():
-        im.save(d / 'tiles' / f'{k}.png', optimize=True)
-    write_json(d / 'tiles' / 'index.json', {'tile_px': rpng.TILE, 'source': 'dataset_png', 'alignment': 'approximate',
-                                                 'align': al, 'tiles': index})
-
     drawing = build_drawing(model, facts=facts)
     # Extra sections (clients ignore them), as in frontend/src/data/drawing.swiss-46639.json, for tools.py.
     drawing['evidence'] = {s: model.boxes()[s] for s in swiss.BOX_SUBJECTS}

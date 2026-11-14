@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import multiprocessing as mp
 import resource
-import traceback
 from pathlib import Path
 
 AS_LIMIT = 1536 * 1024 * 1024
@@ -95,7 +94,6 @@ def _child(kind: str, src: str, out: str, drawing_id: str, meta: dict, conn) -> 
     except MemoryError:
         conn.send({"ok": False, "error": "The file needs more memory than allowed."})
     except Exception as e:  # noqa: BLE001 - report any parse failure to the parent
-        traceback.print_exc()
         conn.send({"ok": False, "error": f"Could not read this file ({type(e).__name__})."})
     finally:
         conn.close()

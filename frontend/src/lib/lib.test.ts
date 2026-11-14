@@ -216,8 +216,11 @@ describe('answer.ts', () => {
   it('gold chip states', () => {
     const b = ask({ drawing_id: 'swiss-46639', question: 'What is the net floor area of apartment B?' })
     expect(goldChip(b, false).state).toBe('within_tolerance')
+    // 261.96 against the dataset's 258.0: within 2 %.
     const all = ask({ drawing_id: 'swiss-46639', question: 'What is the net floor area of all numbered indoor rooms?' })
-    expect(goldChip(all, false).state).toBe('mismatch')
+    expect(goldChip(all, false).state).toBe('within_tolerance')
+    // A real mismatch still reads as one (the bundled drawing no longer has a mismatching row).
+    expect(goldChip({ ...all, gold: { ...all.gold!, match: false } }, false).state).toBe('mismatch')
     const region = ask({
       drawing_id: 'swiss-46639',
       question: 'How many windows?',
@@ -237,8 +240,13 @@ describe('answer.ts', () => {
     expect(deriveAnswer(apts, u, bundledDrawing).value).toBe(1)
   })
 
-  it('abstain has no value', () => {
+  it('the WC ask returns a count of 5 that matches the dataset', () => {
     const r = ask({ drawing_id: 'swiss-46639', question: 'How many WCs?' })
+    expect(deriveAnswer(r, emptyToggles())).toMatchObject({ kind: 'count', value: 5, gold: { state: 'match' } })
+  })
+
+  it('abstain has no value', () => {
+    const r = ask({ drawing_id: 'swiss-46639', question: 'What is the fire rating of the entrance door?' })
     expect(deriveAnswer(r, emptyToggles())).toMatchObject({ kind: 'abstain', value: null, gold: { state: 'none' } })
   })
 })

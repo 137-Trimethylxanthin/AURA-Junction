@@ -53,6 +53,7 @@ def test_check_is_counted_separately_and_cached(live_client):
     assert ch["least_certain_id"] == "basin-04" == ch["ranking"][0]
     assert ch["anchors_max"] == pytest.approx(0.0836) and ch["agreed"] == 5
     assert ch["calls"] == 1 and ch["cached"] is False and ch["tokens"] == 4784
+    assert ch["cost_usd"] > 0
     assert ch["cost_usd"] == pytest.approx(0.0004784)
     node = next(n for n in b["trace"] if n["id"] == "check")
     assert "1 model call" in node["body"] and node["confidence"] == pytest.approx(0.2615, abs=1e-3)
@@ -251,6 +252,7 @@ def test_cached_answer_does_not_replay_live_check_cost(live_client):
     node = next(n for n in again["trace"] if n["id"] == "check")
     assert again["route"] == "cache" and "0 model calls" in node["body"]
     assert again["check"]["calls"] == 0 and again["check"]["cached"] is True
+    assert again["check"]["cost_usd"] == 0 and again["check"]["tokens"] == 0
     assert "1 model call" not in node["body"]
 
 

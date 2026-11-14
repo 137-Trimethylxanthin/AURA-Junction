@@ -1,21 +1,42 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowUpIcon, CrosshairIcon, MicIcon, XIcon } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { LOCALE } from '@/lib/format'
-import { cn } from '@/lib/utils'
-import { actions, selectAttachedMark, selectIsPending, selectSessionLang, useAppStore } from '@/store'
-import { speechSupported, useSpeech } from '@/features/voice/useSpeech'
-import { VoiceCard } from '@/features/voice/VoiceCard'
-import { PROMPT_BLOCKS, fillBlock, useDraft } from './draft'
-import { ScrollRow } from './ScrollRow'
-import { SuggestionList } from './Suggestions'
-import { LANG_NAME_EN } from './view'
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
+import { ArrowUpIcon, CrosshairIcon, MicIcon, XIcon } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { LOCALE } from "@/lib/format"
+import { cn } from "@/lib/utils"
+import {
+  actions,
+  selectAttachedMark,
+  selectIsPending,
+  selectSessionLang,
+  useAppStore,
+} from "@/store"
+import { speechSupported, useSpeech } from "@/features/voice/useSpeech"
+import { PROMPT_BLOCKS, fillBlock, useDraft } from "./draft"
+import { ScrollRow } from "./ScrollRow"
+import { SuggestionList } from "./Suggestions"
+import { LANG_NAME_EN } from "./view"
+
+/** Loaded the first time the microphone is used. */
+const VoiceCard = lazy(() =>
+  import("@/features/voice/VoiceCard").then((m) => ({ default: m.VoiceCard }))
+)
 
 const MAX_LINES = 4
 const LINE_PX = 20
 
 function isTyping(el: Element | null) {
-  return el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))
+  return (
+    el instanceof HTMLElement &&
+    (el.isContentEditable ||
+      ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))
+  )
 }
 
 export function Composer() {
@@ -34,7 +55,7 @@ export function Composer() {
   useLayoutEffect(() => {
     const el = ta.current
     if (!el) return
-    el.style.height = 'auto'
+    el.style.height = "auto"
     el.style.height = `${Math.min(el.scrollHeight, MAX_LINES * LINE_PX + 16)}px`
   }, [text])
 
@@ -52,18 +73,25 @@ export function Composer() {
   // "/" focuses the composer from anywhere outside a text field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || isTyping(document.activeElement)) return
+      if (
+        e.key !== "/" ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey ||
+        isTyping(document.activeElement)
+      )
+        return
       e.preventDefault()
       ta.current?.focus()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
   }, [])
 
   const send = () => {
     const q = text.trim()
     if (!q || pending) return
-    useDraft.getState().setText('')
+    useDraft.getState().setText("")
     void actions().ask(q)
     ta.current?.focus()
   }
@@ -80,18 +108,20 @@ export function Composer() {
   return (
     <div className="flex flex-col gap-2">
       {voiceOpen ? (
-        <VoiceCard
-          state={speech.state}
-          text={speech.text}
-          error={speech.error}
-          langName={LANG_NAME_EN[lang]}
-          onStop={speech.stop}
-          onDiscard={closeVoice}
-          onUse={() => {
-            useDraft.getState().fill(speech.text)
-            closeVoice()
-          }}
-        />
+        <Suspense fallback={null}>
+          <VoiceCard
+            state={speech.state}
+            text={speech.text}
+            error={speech.error}
+            langName={LANG_NAME_EN[lang]}
+            onStop={speech.stop}
+            onDiscard={closeVoice}
+            onUse={() => {
+              useDraft.getState().fill(speech.text)
+              closeVoice()
+            }}
+          />
+        </Suspense>
       ) : null}
 
       {mark ? (
@@ -114,8 +144,8 @@ export function Composer() {
 
       <div
         className={cn(
-          'flex items-end gap-1.5 rounded-xl border border-input/60 bg-background p-1.5 transition-shadow',
-          'focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30',
+          "flex items-end gap-1.5 rounded-xl border border-input/60 bg-background p-1.5 transition-shadow",
+          "focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30"
         )}
       >
         <textarea
@@ -124,7 +154,11 @@ export function Composer() {
           value={text}
           onChange={(e) => useDraft.getState().setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing
+            ) {
               e.preventDefault()
               send()
             }
@@ -142,12 +176,20 @@ export function Composer() {
             aria-pressed={voiceOpen}
             title="Ask by voice"
             onClick={voiceOpen ? closeVoice : openVoice}
-            className={cn(voiceOpen && 'bg-destructive-surface text-destructive')}
+            className={cn(
+              voiceOpen && "bg-destructive-surface text-destructive"
+            )}
           >
             <MicIcon />
           </Button>
         ) : null}
-        <Button size="icon" aria-label="Send" title="Send (Enter)" disabled={!text.trim() || pending} onClick={send}>
+        <Button
+          size="icon"
+          aria-label="Send"
+          title="Send (Enter)"
+          disabled={!text.trim() || pending}
+          onClick={send}
+        >
           <ArrowUpIcon />
         </Button>
       </div>

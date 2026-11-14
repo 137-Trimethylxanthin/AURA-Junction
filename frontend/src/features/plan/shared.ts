@@ -40,3 +40,6 @@ export function parseMetres(s: string): number | null {
 
 /** A menu or dialog is open somewhere: it owns Escape. */
 export const overlayOpen = () => !!document.querySelector('[role=menu],[role=dialog],[role=alertdialog]')
+
+/** Swipe divider position in % (shared by the compare layer and the context menu without loading the layer). */
+export const swipeSplit = { current: 50 }

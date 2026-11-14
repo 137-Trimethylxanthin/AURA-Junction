@@ -36,6 +36,11 @@ class AnswerCache:
         while len(self._d) > self.max:
             self._d.popitem(last=False)
 
+    def drop_drawing(self, drawing_id: str) -> None:
+        prefix = json.dumps([drawing_id])[:-1] + ","
+        for k in [k for k in self._d if k.startswith(prefix)]:
+            del self._d[k]
+
     def clear(self) -> None:
         self._d.clear()
 

@@ -54,7 +54,7 @@ class Jobs:
                     await asyncio.to_thread(proc.join, 5)
                     await self._set(drawing_id, "failed", None,
                                     f"Parsing took longer than {int(self.join_timeout_s)} s.")
-                    log.warning("parse %s killed after %.0f s", drawing_id, time.monotonic() - t0)
+                    log.warning("upload parse killed after %.0f s", time.monotonic() - t0)
                     return
                 res = conn.recv() if conn.poll() else {
                     "ok": False, "error": "The parser stopped unexpectedly (memory or CPU limit)."}
