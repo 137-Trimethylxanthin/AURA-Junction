@@ -29,7 +29,11 @@ export function apiBase(): string | null {
 export function apiUrl(url: string, base = apiBase()): string | null {
   const safe = safeUrl(url)
   if (!safe || !base || !safe.startsWith('/')) return safe
-  return base.replace(/\/+$/, '') + safe
+  const root = base.replace(/\/+$/, '')
+  // Already resolved (a drawing taken from the app's cache carries resolved image URLs): with a
+  // root-relative base such as "/api", prefixing again would ask for /api/api/... and 404.
+  if (root.startsWith('/') && safe.startsWith(root + '/')) return safe
+  return root + safe
 }
 
 // ---- storage (localStorage can throw in private mode; every access is guarded) -----------------------------

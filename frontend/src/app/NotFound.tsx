@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/empty"
 import { SiteHeader } from "@/components/shell/SiteHeader"
 import { useTitle } from "@/hooks/use-title"
-import { BUNDLED_DRAWING_ID } from "@/data/ids"
+import { SAMPLE_ROUTE } from "@/api/sample"
 import { useUi } from "@/i18n/uiLang"
 
 export default function NotFound() {
@@ -38,7 +38,7 @@ export default function NotFound() {
               <Link to="/app">{tu("all_drawings")}</Link>
             </Button>
             <Button variant="outline" asChild>
-              <Link to={`/d/${BUNDLED_DRAWING_ID}`}>
+              <Link to={SAMPLE_ROUTE}>
                 {tu("open_sample")}
               </Link>
             </Button>
