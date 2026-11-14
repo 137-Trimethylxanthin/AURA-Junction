@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+<rect width="800" height="600" fill="#ffffff"/>
+<path d="M107 495 L346 495 L346 295 L595.5 295 L595.5 108 L357 108 L357 181.5 L346 181.5 L346 108 L107 108 Z" fill="#eef0f3" stroke="none"/>
+<path d="M107 495 L346 495 L346 295 L595.5 295 L595.5 108 L357 108 L357 181.5 L346 181.5 L346 108 L107 108 Z" fill="none" stroke="#c9ced6" stroke-width="0.8"/>
+<path d="M96.5 501 L101 504 L353 504 L356.5 499 L356.5 305 L599 305 L605 299 L605 97.5 L101 97.5 L96.5 100 Z M105.5 494.5 L105.5 106 L347 106 L347 181 L356.5 179 L356.5 107 L597 107 L597 292 L594 296.5 L347 296.5 L347 492 L344 494.5 Z" fill="#2f343c" fill-rule="evenodd" stroke="#2f343c" stroke-width="0.6"/>
+<text x="200" y="300" font-family="Inter, Helvetica, Arial, sans-serif" font-size="13.2" fill="#4b5563" text-anchor="middle" dominant-baseline="middle">LIVING</text>
+</svg>

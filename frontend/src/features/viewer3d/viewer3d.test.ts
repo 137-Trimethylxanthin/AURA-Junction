@@ -159,3 +159,38 @@ describe('image pixels', () => {
     expect(paper.ink[30 * w + 5]).toBe(0)
   })
 })
+
+describe('image upload with a vector rebuild (backend/aura/vectorize.py)', () => {
+  const svg = readFileSync('src/features/viewer3d/fixtures.vector-plan.svg', 'utf8')
+  const imageDrawing = {
+    ...bundledDrawing,
+    id: 'up-test',
+    kind: 'raster' as const,
+    m_per_pct_x: 0,
+    m_per_pct_y: 0,
+    images: { rebuilt: '/drawings/up-test/plan.svg', original: '/drawings/up-test/original.png' },
+    rooms: [
+      {
+        ...bundledDrawing.rooms[0],
+        room_id: 'l',
+        num: 'l',
+        name: 'LIVING',
+        points: [[12.5, 16.7], [75, 16.7], [75, 50], [43.75, 50], [43.75, 83.3], [12.5, 83.3]] as [number, number][],
+        label_at: [25, 50] as [number, number],
+        area_m2: null,
+      },
+    ],
+  }
+
+  it('is recognised as a rebuilt plan and extrudes its walls and the L-shaped room', () => {
+    expect(isRebuiltPlanSvg(svg)).toBe(true)
+    const plan = parsePlanSvg(svg)
+    expect(plan.width).toBe(800)
+    expect(plan.walls.length).toBeGreaterThan(0)
+    const m = buildPlanModel(imageDrawing, plan)
+    expect(m.rooms).toHaveLength(1)
+    const bb = new THREE.Box3().setFromObject(m.group)
+    expect(bb.max.y - bb.min.y).toBeGreaterThan(1) // walls stand up
+    m.dispose()
+  })
+})

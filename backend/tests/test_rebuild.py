@@ -82,5 +82,7 @@ def test_apply_end_to_end_on_a_drawn_plan(tmp_path):
     assert out["images"]["original"] == "/drawings/up-t/original.png"
     room = out["rooms"][0]
     assert len(room["points"]) >= 6
-    truth = (500 * 200 + 250 * 200) / (800 * 600) * 100 * 100 * 0.1 * 0.1  # m² at 0.1 m per pct
-    assert room["area_m2"] == pytest.approx(truth, rel=0.08)
+    # Net floor area, inside the 10 px walls: the centre-line L (150 000 px²) less half a wall along its 2000 px
+    # perimeter; m² at 0.1 m per pct.
+    truth = (500 * 200 + 250 * 200 - 2000 * 5) / (800 * 600) * 100 * 100 * 0.1 * 0.1
+    assert room["area_m2"] == pytest.approx(truth, rel=0.05)
