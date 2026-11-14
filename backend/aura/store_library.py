@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("aura.store_library")
 
 PREFIX = "st-"
-VERSION = 1            # bump when the generated document or images change shape: every cache is rebuilt
+VERSION = 2            # bump when the generated document or images change shape: every cache is rebuilt
 LIST_TTL_S = 30.0      # how often the listing's store signature is re-read
 DOC_TTL_S = 30.0       # how often an open drawing's signature is re-read
 FILE_IDS_TTL_S = 60.0

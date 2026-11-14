@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from aura import answer as A
-from aura import tools, units
+from aura import dimension_answers, tools, units
 from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agent
 from aura.budget import Budget, BudgetError, watch_refusals
 from aura.cache import AnswerCache, CheckCache, answer_key
@@ -1034,7 +1034,19 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 yield ev
             return
 
-        # Short exact context inheritance (e.g. "how many doors?" -> "and in apartment B?")
+        # 1b. A plain length question ("overall width", "how wide is the kitchen", "longest printed dimension")
+        # answered from the printed dimensions, else the measured outline: 0 model calls, always a length.
+        if not req.overrides and (scope_dump is None or scope_dump.get("kind") == "floor"):
+            dim_built = dimension_answers.try_answer(question, lang, d)
+            if dim_built is not None:
+                yield "understood", {"detected_lang": dim_built.body["detected_lang"],
+                                     "canonical_en": dim_built.body["canonical_en"], "route": "template"}
+                for ev in _tool_events(dim_built):
+                    yield ev
+                async for ev in _finalize_and_emit(svc, d, req, dim_built, caller, stats, meters, t0, key, allow_cache=True):
+                    yield ev
+                return
+
         r = route(question, d.ctx)
         if context and not has_followup_semantics:
             short = len(question.split()) <= 5

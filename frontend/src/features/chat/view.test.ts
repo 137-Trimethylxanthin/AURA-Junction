@@ -58,6 +58,18 @@ describe('1.1 answer kinds', () => {
     expect(valueParts(r, d, 'en')).toEqual(['42.50', 'm³'])
     expect(sentence(r, d, bundledDrawing, 'en')).toContain('in the whole model')
   })
+  it('a printed or measured length explains itself: no "as given by the model file" line', () => {
+    const r = {
+      ...base,
+      answer: { kind: 'quantity' as const, value: 24.384, unit: 'm' as const },
+      explanation: 'Depth (up the page): 80\' - 0" as printed = 24.38 m (the overall dimension printed on the sheet).',
+    }
+    expect(isAskResponse(r)).toBe(true)
+    const d = deriveAnswer(r, emptyToggles())
+    expect(valueParts(r, d, 'en')).toEqual(['24.38', 'm'])
+    expect(sentence(r, d, bundledDrawing, 'en')).toBe('')
+    expect(sentence(r, d, { ...bundledDrawing, kind: 'ifc' }, 'en')).toContain('model file')
+  })
   it('an answer asked in another unit shows that unit, with the metric value beside it', () => {
     const display = {
       unit: 'sqft', label: 'sq ft', style: 'decimal' as const,

@@ -443,7 +443,7 @@ class LoadedDrawing:
     def public_drawing(self) -> dict:
         """Drawing as served: contract fields only (evidence/gold/texts stripped)."""
         out = {k: v for k, v in self.drawing.items()
-               if k not in ("evidence", "gold", "texts", "anchors", "detection")}
+               if k not in ("evidence", "gold", "texts", "anchors", "detection", "dimensions")}
         out.setdefault("capabilities", self.engine.capabilities())
         out.setdefault("kind", "cad_dxf")
         out.setdefault("source", self.source)

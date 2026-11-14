@@ -1065,6 +1065,26 @@ _ASKED = re.compile(r"^\W*(?:ok(?:ay)?,?\s+)?(?:now\s+)?(?:which|what|list|show(
                     r"(?:\s+(?:all|only|the|of\s+(?:them|those|these)))*\s+(\w+)", re.IGNORECASE)
 
 
+_MEASURE_Q = re.compile(
+    r"\bhow\s+(?:long|wide|high|tall|deep|far|thick)\b|\b(?:length|width|height|depth|distance|thickness)\b|"
+    r"\bwie\s+(?:lang|breit|hoch|tief|weit|dick)\b|\b(?:länge|breite|höhe|tiefe)\b|"
+    r"\b(?:longueur|largeur|hauteur|profondeur)\b|\b(?:pituus|leveys|korkeus|syvyys)\b|"
+    r"\bkuinka\s+(?:pitkä|leveä|korkea|syvä)\b|\b(?:lunghezza|larghezza|altezza|profondità)\b|"
+    r"\bquanto\s+(?:è\s+)?(?:lung[oa]|larg[oa]|alt[oa])\b", re.IGNORECASE)
+_COUNT_Q = re.compile(r"\bhow\s+many\b|\bnumber\s+of\b|\bcount\b|\bwie\s*viele?\b|\banzahl\b|\bcombien\b|\bnombre\s+de\b|"
+                      r"\bkuinka\s+monta\b|\bmontako\b|\bquant[ie]\b", re.IGNORECASE)
+COUNT_FOR_MEASURE = ("The question asks for a length, not for how many: finish_as='count' would answer with a number of "
+                     "rows. Select the measured value itself (for example value_m from q.dimensions, or length_m / "
+                     "width_m from q.room_sizes) and finish with finish_as='cell' on it, or with finish_as='reason'; "
+                     "finish with set='none' when the drawing holds no such length.")
+
+
+def asks_for_measure(question: str) -> bool:
+    """'How long / wide / high is ...', 'the width of ...': the answer is a length, never a number of rows."""
+    q = question or ""
+    return bool(_MEASURE_Q.search(q)) and not _COUNT_Q.search(q)
+
+
 def asks_for_rooms(question: str) -> bool:
     """The noun the question asks for is rooms ('which rooms have a door wider than 0.9 m')."""
     m = _ASKED.search(question or "")
@@ -1673,6 +1693,9 @@ async def _loop(svc, d, question, lang, caller, meter, history, model, calls0, s
                 return None
             steps += 1
             try:
+                if fc.args.get("finish_as") == "count" and asks_for_measure(question):
+                    # a quantity question finishes with a quantity: a number of rows is not a length
+                    raise StepError(COUNT_FOR_MEASURE)
                 if fc.name == "judge":
                     if meter.calls - calls0 >= MAX_CALLS:
                         return None

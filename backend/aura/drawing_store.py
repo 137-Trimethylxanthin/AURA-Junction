@@ -132,6 +132,7 @@ def normalise(ours: dict, doc: dict, evidence: dict, model: dict, sources: dict[
     """
     ent_of_item = {it["id"]: it.get("entity_id") for it in model.get("items", [])}
     ent_of_room = {r["room_id"]: r.get("entity_id") for r in model.get("rooms", [])}
+    type_of_room = {r["room_id"]: r.get("room_type") for r in model.get("rooms", [])}
     tables_by_subject: dict[str, set[str]] = {}
     out_ev: dict[str, list[dict]] = {}
     dropped: dict[str, int] = {}
@@ -158,6 +159,8 @@ def normalise(ours: dict, doc: dict, evidence: dict, model: dict, sources: dict[
         if ent is not None:
             row["store_ref"] = ent
             room_tables.update(sources.get(ent, []))
+        if type_of_room.get(r["room_id"]):
+            row["room_type"] = type_of_room[r["room_id"]]  # the store's normalised type: "kitchen" for TUPAK, Cucina
         rooms.append(row)
     methods = {s: _method_of(t) for s, t in tables_by_subject.items()}
     for s in out_ev:
@@ -179,6 +182,22 @@ def normalise(ours: dict, doc: dict, evidence: dict, model: dict, sources: dict[
         rooms=rooms, units=doc.get("units", []), evidence=out_ev, texts=texts, capabilities=caps,
         evidence_method=methods,
     )
+    # what the sheet prints (dimension lines, room sizes, overall sizes) and the plan's own extent: a length question
+    # is answered from these, each dimension with its box on the page shown and how it was read
+    dims = []
+    for x in doc.get("dimensions") or []:
+        row = dict(x)
+        ent = row.get("store_ref")
+        row["method"] = _method_of(set(sources.get(ent, []))) if ent is not None else "vision"
+        dims.append(row)
+    out.pop("dimensions", None)
+    out.pop("extent_m", None)
+    out.pop("printed_dimensions", None)
+    if dims:
+        out["dimensions"] = dims
+        out["printed_dimensions"] = len(dims)
+    if doc.get("extent_m"):
+        out["extent_m"] = doc["extent_m"]
     if dropped:
         out["store_dropped"] = dropped
     return out

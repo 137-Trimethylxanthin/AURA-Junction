@@ -94,3 +94,20 @@ frontend (compare label, area formatting, `format.ts`) and the store (reader reg
 `q.items`, prompt). Suites on the merged tree: backend 678 passed / 34 skipped, store 147 passed /
 1 skipped, frontend 342 passed, typecheck clean.
 
+
+**Stream E — printed dimensions answer and show (`on/e-dimension-answers`)**
+
+- A plain length question (overall width / depth / size, a room's width / length / size, longest or
+  shortest printed dimension) is answered by `backend/aura/dimension_answers.py` with 0 model calls:
+  the printed overall dimension, else a chain of printed dimensions summed (said so, and only when
+  it agrees with the measured extent), else the extent of the walls / room outlines (labelled
+  measured or estimate); a room from its printed size, else its rotated bounding box. Never a count:
+  no data means an abstention with the reason, and tool steps refuse `finish_as=count` for a
+  how long / wide / high question.
+- The drawing document carries `dimensions` (text, metres, box and line on the page shown; on a PDF
+  page without a frame the box comes from where the reader saw it), `rooms[].size`, `rooms[].room_type`
+  and `extent_m`. The dimension used is the answer's evidence box (label = printed text).
+- Imperial sheets: "80' - 0\" as printed = 24.38 m"; "in feet" converts through the units hook.
+- Not built: width of a plan whose page has neither an overall dimension nor a frame (lower bound is
+  stated); dimensions on other pages of a multi-page PDF are cited without a box; Finnish
+  abbreviations the store vocabulary does not know (TUPAK, PH) still go to the tool steps.
