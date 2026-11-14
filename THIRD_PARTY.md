@@ -1,6 +1,6 @@
 # Third-party software and data
 
-AURA is MIT-licensed (see `LICENSE`). No AGPL or GPL-3 code is used: PyMuPDF and ultralytics are deliberately excluded.
+AURA is MIT-licensed (see `LICENSE`). **No AGPL code is used**: PyMuPDF (`fitz`), psycopg and ultralytics are deliberately excluded. The only copyleft pieces are IfcOpenShell (LGPL, imported unmodified) and, in the lossless project store, PostGIS and the optional LibreDWG (GPL), which run as separate programs and are never linked into AURA; see "Lossless project store" below.
 
 ## Backend (Python, direct dependencies)
 
@@ -57,6 +57,28 @@ Direct dependencies (`agent-service/requirements.txt`):
 | pytesseract | 0.3.13 | Apache-2.0 |
 | ifcopenshell | 0.9.0.post1 | LGPL-3.0-or-later (imported dynamically as an unmodified library) |
 | pytest, pytest-asyncio (dev only) | 9.2.0, 1.5.0 | MIT, Apache-2.0 |
+
+## Lossless project store (`store/`)
+
+`store/` (the `jstore` API, its PostgreSQL database image and tests) is part of the **KuK Hofclankerei** project and is published with AURA under the repository's **MIT** licence. The backend now ships its dependencies. The authoritative, version-by-version table (licences read from each package's metadata inside the built `jstore-api` image) is [`store/THIRD_PARTY.md`](store/THIRD_PARTY.md); `store/requirements.txt` pins the versions. Summary, checked against that table:
+
+**Permissive (MIT, BSD, Apache-2.0, ISC, PSF, MIT-CMU and similar):** pg8000 (BSD), pdfplumber and pdfminer.six (MIT), pypdfium2 (BSD-3-Clause / Apache-2.0, bundles PDFium), opencv-python-headless (Apache-2.0), scikit-image, scipy, networkx, shapely, numpy (BSD-3-Clause), matplotlib (PSF-style), onnxruntime (MIT), RapidOCR with its bundled PP-OCRv4 models (Apache-2.0), pytesseract and Tesseract (Apache-2.0), ezdxf, pillow, fastapi, uvicorn, httpx, pydantic, openai, openai-agents, and the rest of the transitive set listed in `store/THIRD_PARTY.md`.
+
+**Copyleft, and how it is kept at arm's length:**
+
+| Component | Licence | How it is used |
+|---|---|---|
+| IfcOpenShell 0.9.0.post1 | LGPL-3.0-or-later | Imported unmodified as a pip wheel by the store's IFC reader; it can be replaced by the user's own build. |
+| PostGIS 3.7.0 | GPL-2.0-or-later | Only inside the separately built database container (`store/db/Dockerfile`), as a PostgreSQL extension, reached over the PostgreSQL wire protocol; no PostGIS code is linked into or shipped with the API. Distributing that database image means distributing GPL software with its source offer (provided by the Debian/PGDG packages). |
+| LibreDWG 0.13.3 (`dwg2dxf`) | GPL-3.0-or-later | **Optional and off by default**: only present in images built with `--build-arg WITH_LIBREDWG=1`, started as a separate program to convert DWG to DXF, never linked or imported. The AURA images and the default store images do not contain it. |
+| certifi, tqdm | MPL-2.0 (tqdm: MPL-2.0 AND MIT) | File-level copyleft, used unmodified. |
+| Debian base images (glibc, libstdc++, libgomp, ...) | LGPL / GPL with the GCC runtime exception, and others | The usual system libraries of `python:3.14-slim` and `postgres:17`. |
+
+**Database image:** PostgreSQL 17 (with `pg_trgm`, `unaccent`, `plpgsql`) and pgvector 0.8.7 are under the PostgreSQL License (permissive, BSD-like). PostGIS (above) is the only GPL part; its dependencies include GEOS (LGPL-2.1), PROJ (MIT), GDAL (MIT) and SFCGAL (LGPL-2.0-or-later, built on CGAL GPL-3.0 / LGPL-3.0), all inside the database container only.
+
+**Not used, on purpose:** PyMuPDF / `fitz` (AGPL-3.0) and psycopg (LGPL-3.0). PDFs are read with pypdfium2 and pdfplumber; the database driver is pg8000. There is no AGPL code anywhere in AURA.
+
+The reference page of the store loads React, ReactDOM and htm (MIT) from esm.sh at view time; nothing is vendored.
 
 ## Frontend (npm, production)
 

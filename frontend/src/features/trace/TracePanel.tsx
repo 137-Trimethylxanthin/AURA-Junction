@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
-import { ChevronLeftIcon } from 'lucide-react'
+import { CheckIcon, ChevronLeftIcon, CopyIcon } from 'lucide-react'
 import type { TraceKind, TraceNode } from '@/api/contract'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -56,6 +56,52 @@ function confidence(c: TraceNode['confidence']): string | null {
   if (c === undefined) return null
   if (c === 'sample') return 'sample'
   return `${Math.round(c <= 1 ? c * 100 : c)} %`
+}
+
+/** Collapsible monospaced SQL of a step, with its row count, columns and time; wraps instead of scrolling the page. */
+function SqlBlock({ sql }: { sql: NonNullable<ReturnType<typeof traceDetail>['sql']> }) {
+  const { tu } = useUi()
+  const [copied, setCopied] = useState(false)
+  const stats = [
+    sql.rows !== undefined ? tu(sql.rows === 1 ? 'tr_sql_row' : 'tr_sql_rows', { n: sql.rows }) : null,
+    sql.columns.length ? tu('tr_sql_columns', { cols: sql.columns.join(', ') }) : null,
+    sql.ms !== undefined ? `${sql.ms} ms` : null,
+  ].filter(Boolean)
+  const copy = () => {
+    void navigator.clipboard
+      ?.writeText(sql.query)
+      .then(() => {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1500)
+      })
+      .catch(() => undefined)
+  }
+  return (
+    <details className="group text-xs" data-sql>
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-0.5 text-muted-foreground select-none">
+        <Badge variant="outline" className="font-mono">
+          {tu('tr_sql')}
+        </Badge>
+        <span className="num min-w-0 break-words">{stats.join(' · ')}</span>
+      </summary>
+      <div className="relative mt-1.5">
+        <pre className="num max-w-full rounded-md border bg-muted/50 p-2 pr-10 font-mono text-[12px] leading-snug break-words whitespace-pre-wrap">
+          {sql.query}
+        </pre>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="absolute top-1 right-1 size-8"
+          aria-label={copied ? tu('tr_sql_copied') : tu('tr_sql_copy')}
+          title={copied ? tu('tr_sql_copied') : tu('tr_sql_copy')}
+          onClick={copy}
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </Button>
+      </div>
+    </details>
+  )
 }
 
 export function TracePanel() {
@@ -203,6 +249,7 @@ export function TracePanel() {
                     ) : null}
                   </div>
                 ) : null}
+                {detail.sql ? <SqlBlock sql={detail.sql} /> : null}
                 {detail.resources?.grabbed !== undefined ? (
                   <p className="num text-xs text-muted-foreground" data-resources>
                     {tu('tr_resources', {
@@ -242,12 +289,23 @@ export function TracePanel() {
                         </ul>
                       </details>
                     ) : null}
+                    {detail.filter.keptIds.length > 0 ? (
+                      <details className="text-xs text-muted-foreground" data-kept-ids>
+                        <summary className="cursor-pointer select-none">
+                          {tu('tr_kept_ids', { n: detail.filter.keptIds.length })}
+                        </summary>
+                        <p className="num mt-1 break-words">
+                          {detail.filter.keptIds.slice(0, 60).join(', ')}
+                          {detail.filter.keptIds.length > 60 ? ', …' : ''}
+                        </p>
+                      </details>
+                    ) : null}
                   </div>
                 ) : null}
                 {detail.answer ? (
                   <p className="num text-xs text-muted-foreground" data-answer>
                     {[
-                      detail.answer.source,
+                      detail.answer.source === 'sql' ? tu('tr_sql') : detail.answer.source,
                       detail.answer.calls !== undefined ? callsText(detail.answer.calls, lang) : null,
                       detail.answer.cost !== undefined ? fmtUsd(detail.answer.cost) : null,
                     ]
