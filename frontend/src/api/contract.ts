@@ -9,6 +9,20 @@ export const CONTRACT_VERSION = '1.2'
 export type Lang = 'en' | 'fr' | 'fi' | 'de'
 export const LANGS: readonly Lang[] = ['en', 'fr', 'fi', 'de']
 
+/** 1.2: 6 WCAG AA categorical evidence series tokens (`--group-1..6` + `--group-1..6-surface` in STACK.md / index.css). */
+export type GroupColor = 'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c6'
+export const GROUP_COLORS: readonly GroupColor[] = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6']
+
+export function groupColorVars(color: GroupColor): { fg: string; surface: string; index: 1 | 2 | 3 | 4 | 5 | 6 } {
+  const idx = (GROUP_COLORS.indexOf(color) + 1) as 1 | 2 | 3 | 4 | 5 | 6
+  const safeIdx = idx >= 1 && idx <= 6 ? idx : 1
+  return {
+    fg: `var(--group-${safeIdx})`,
+    surface: `var(--group-${safeIdx}-surface)`,
+    index: safeIdx,
+  }
+}
+
 /** 0–100 % of the width/height of Drawing.images.rebuilt as served, origin top-left, y down. */
 export type Pct = number
 
@@ -90,6 +104,10 @@ export interface Box extends PctRect {
    * Both are counted, as the dataset does. This field (not `note`) is the only signal for "drawn twice".
    */
   duplicate_of?: string
+  /** 1.2: categorical color-group id referencing `Evidence.groups[].id`. */
+  group_id?: string
+  /** 1.2: floor drawing id when evidence spans a multi-plan house/project bundle. */
+  drawing_id?: string
 }
 
 export interface RoomPoly {
@@ -184,6 +202,12 @@ export interface Drawing {
   facts?: DrawingFacts
   /** 1.2: original uploaded file extension (e.g. ".pdf" when kind === "raster"). */
   source_ext?: string
+  /** 1.2: parent house/building project bundle id when grouped. */
+  project_id?: string
+  /** 1.2: short floor badge label (e.g. "KG", "EG", "1. OG", "GF", "Page 2"). */
+  floor_label?: string
+  /** 1.2: vertical floor sort order (e.g. -1 basement, 0 ground, 1..N upper, 99 attic). */
+  floor_order?: number
 }
 
 /** One card of `GET /drawings` (1.1). */
@@ -204,6 +228,34 @@ export interface DrawingSummary {
   expires_at?: string
   /** 1.2: original uploaded file extension (e.g. ".pdf" when kind === "raster"). */
   source_ext?: string
+  /** 1.2: parent house/building project bundle id when grouped. */
+  project_id?: string
+  /** 1.2: short floor badge label (e.g. "KG", "EG", "1. OG", "GF", "Page 2"). */
+  floor_label?: string
+  /** 1.2: vertical floor sort order (e.g. -1 basement, 0 ground, 1..N upper, 99 attic). */
+  floor_order?: number
+}
+
+/** 1.2: one ordered floor entry inside a multi-plan house/building `ProjectBundle`. */
+export interface ProjectFloor {
+  drawing_id: string
+  label: string
+  order: number
+}
+
+/** 1.2: grouped house/building project bundle enabling fast floor switching & cross-plan matching. */
+export interface ProjectBundle {
+  id: string
+  title: string
+  floors: ProjectFloor[]
+  auto_matched?: boolean
+  created_at?: string
+}
+
+/** 1.2: `GET /projects` body. */
+export interface ProjectList {
+  contract_version: string
+  projects: ProjectBundle[]
 }
 
 /** `GET /drawings` body (1.1). */
@@ -232,6 +284,12 @@ export interface UploadResult {
   status: 'queued'
 }
 
+export interface ScopeProject {
+  kind: 'project'
+  project_id: string
+  drawing_ids: string[]
+}
+
 export type Scope =
   | { kind: 'floor' }
   /** 1.1: the whole building model (IFC), not just the drawing's storey. */
@@ -240,6 +298,8 @@ export type Scope =
   | { kind: 'room'; room_id: RoomId }
   | { kind: 'label'; label: string }
   | { kind: 'region'; rect: PctRect; label: string }
+  /** 1.2: cross-plan house/project bundle scope across multiple floor drawings. */
+  | ScopeProject
 
 export interface Override {
   room_id: RoomId
@@ -338,6 +398,41 @@ export interface EvidenceRoom {
   /** null: the area is not printed (1.1). Never 0 for unknown. */
   area_m2: number | null
   edited?: boolean
+  /** 1.2: categorical color-group id referencing `Evidence.groups[].id`. */
+  group_id?: string
+  /** 1.2: floor drawing id when evidence spans a multi-plan house/project bundle. */
+  drawing_id?: string
+}
+
+/** 1.2: categorical color-coded evidence group (e.g. Apartment A, Stair S1 -> 1. OG). */
+export interface EvidenceGroup {
+  id: string
+  label: string
+  color: GroupColor
+  target_drawing_id?: string
+}
+
+/** 1.2: directional vector on a plan (e.g. stair/ramp/circulation lead-to route). */
+export interface EvidenceLink {
+  id: string
+  from_pos: [Pct, Pct]
+  to_pos: [Pct, Pct]
+  waypoints?: [Pct, Pct][]
+  group_id?: string
+  label?: string
+  drawing_id?: string
+  target_drawing_id?: string
+}
+
+export interface Evidence {
+  boxes: Box[]
+  rooms: EvidenceRoom[]
+  /** 1.1: counted elements without a 2D box (IFC walls, columns, whole-model counts); id = IFC GlobalId. */
+  rows?: EvidenceRow[]
+  /** 1.2: categorical color groups referenced by `group_id` on boxes, rooms, and links. */
+  groups?: EvidenceGroup[]
+  /** 1.2: directional flow vectors (e.g. stairs and where they lead). */
+  links?: EvidenceLink[]
 }
 
 export interface Check {
@@ -389,8 +484,8 @@ export interface AskResponse {
   /** Client-only, never sent: evidence or trace items dropped because they failed validation (see salvageAskResponse). */
   dropped_items?: number
   answer: Answer
-  /** `rows` (1.1): counted elements without a 2D box (IFC walls, columns, whole-model counts); id = IFC GlobalId. */
-  evidence: { boxes: Box[]; rooms: EvidenceRoom[]; rows?: EvidenceRow[] }
+  /** `rows` (1.1): counted elements without a 2D box; `groups`/`links` (1.2): categorical colors & flow vectors. */
+  evidence: Evidence
   detected_lang: Lang
   canonical_en: string
   scope: Scope
@@ -610,6 +705,9 @@ const isOneOf = <T extends string>(v: unknown, set: readonly T[]): v is T =>
   typeof v === 'string' && (set as readonly string[]).includes(v)
 const isPair = (v: unknown): v is [number, number] =>
   Array.isArray(v) && v.length === 2 && isNum(v[0]) && isNum(v[1])
+const isPct = (v: unknown): v is Pct => isNum(v) && v >= 0 && v <= 100
+const isPctPair = (v: unknown): v is [Pct, Pct] =>
+  Array.isArray(v) && v.length === 2 && isPct(v[0]) && isPct(v[1])
 
 const isRect = (v: unknown): v is PctRect & Obj =>
   isObj(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h)
@@ -628,6 +726,14 @@ export function isScope(v: unknown): v is Scope {
       return isStr(v.label)
     case 'region':
       return isRect(v.rect) && isStr(v.label)
+    case 'project':
+      return (
+        isStr(v.project_id) &&
+        v.project_id.length > 0 &&
+        Array.isArray(v.drawing_ids) &&
+        v.drawing_ids.length > 0 &&
+        v.drawing_ids.every((id) => isStr(id) && id.length > 0)
+      )
     default:
       return false
   }
@@ -640,8 +746,38 @@ export function isBox(v: unknown): v is Box {
     isStr(v.id) &&
     isOneOf(v.subject, BOX_SUBJECTS) &&
     (v.room_id === undefined || isStr(v.room_id)) &&
+    (v.unit === undefined || isStr(v.unit)) &&
     (v.note === undefined || isStr(v.note)) &&
-    (v.duplicate_of === undefined || isStr(v.duplicate_of))
+    (v.duplicate_of === undefined || isStr(v.duplicate_of)) &&
+    (v.group_id === undefined || isStr(v.group_id)) &&
+    (v.drawing_id === undefined || isStr(v.drawing_id))
+  )
+}
+
+export function isEvidenceGroup(v: unknown): v is EvidenceGroup {
+  return (
+    isObj(v) &&
+    isStr(v.id) &&
+    v.id.length > 0 &&
+    isStr(v.label) &&
+    v.label.length > 0 &&
+    isOneOf(v.color, GROUP_COLORS) &&
+    (v.target_drawing_id === undefined || isStr(v.target_drawing_id))
+  )
+}
+
+export function isEvidenceLink(v: unknown): v is EvidenceLink {
+  return (
+    isObj(v) &&
+    isStr(v.id) &&
+    v.id.length > 0 &&
+    isPctPair(v.from_pos) &&
+    isPctPair(v.to_pos) &&
+    (v.waypoints === undefined || (Array.isArray(v.waypoints) && v.waypoints.every(isPctPair))) &&
+    (v.group_id === undefined || isStr(v.group_id)) &&
+    (v.label === undefined || isStr(v.label)) &&
+    (v.drawing_id === undefined || isStr(v.drawing_id)) &&
+    (v.target_drawing_id === undefined || isStr(v.target_drawing_id))
   )
 }
 
@@ -714,6 +850,8 @@ export function isAskResponse(v: unknown): v is AskResponse {
   if (!ev.boxes.every(isBox)) return false
   if (!ev.rooms.every(evRoomOk)) return false
   if (ev.rows !== undefined && !(Array.isArray(ev.rows) && ev.rows.every(evRowOk))) return false
+  if (ev.groups !== undefined && !(Array.isArray(ev.groups) && ev.groups.every(isEvidenceGroup))) return false
+  if (ev.links !== undefined && !(Array.isArray(ev.links) && ev.links.every(isEvidenceLink))) return false
   if (v.dropped_items !== undefined && !isNum(v.dropped_items)) return false
   if (v.gold !== undefined) {
     const g = v.gold
@@ -794,7 +932,10 @@ export function isDrawing(v: unknown): v is Drawing {
     optStr(v.created_at) &&
     optStr(v.expires_at) &&
     (v.facts === undefined || isFacts(v.facts)) &&
-    optStr(v.source_ext)
+    optStr(v.source_ext) &&
+    optStr(v.project_id) &&
+    optStr(v.floor_label) &&
+    optNum(v.floor_order)
   )
 }
 
@@ -826,20 +967,57 @@ export function isDrawingSummary(v: unknown): v is DrawingSummary {
     (v.source === undefined || isOneOf(v.source, ['library', 'upload'] as const)) &&
     optNum(v.progress) &&
     optStr(v.error) &&
-    optStr(v.source_ext)
+    optStr(v.source_ext) &&
+    optStr(v.project_id) &&
+    optStr(v.floor_label) &&
+    optNum(v.floor_order)
   )
+}
+
+export function isProjectFloor(v: unknown): v is ProjectFloor {
+  return isObj(v) && isStr(v.drawing_id) && v.drawing_id.length > 0 && isStr(v.label) && v.label.length > 0 && isNum(v.order)
+}
+
+export function isProjectBundle(v: unknown): v is ProjectBundle {
+  return (
+    isObj(v) &&
+    isStr(v.id) &&
+    v.id.length > 0 &&
+    isStr(v.title) &&
+    v.title.length > 0 &&
+    Array.isArray(v.floors) &&
+    v.floors.every(isProjectFloor) &&
+    (v.auto_matched === undefined || typeof v.auto_matched === 'boolean') &&
+    optStr(v.created_at)
+  )
+}
+
+export function isProjectList(v: unknown): v is ProjectList {
+  return isObj(v) && isStr(v.contract_version) && Array.isArray(v.projects) && v.projects.every(isProjectBundle)
+}
+
+export function salvageProjectList(v: unknown): { list: unknown; dropped: number } {
+  if (!isObj(v) || !Array.isArray(v.projects)) return { list: v, dropped: 0 }
+  const projects = v.projects.filter(isProjectBundle)
+  return { list: { ...v, projects }, dropped: v.projects.length - projects.length }
 }
 
 // ---- one bad item can't take down a list ----------------------------------------------------------
 
 const evRoomOk = (r: unknown) =>
-  isObj(r) && isStr(r.room_id) && typeof r.included === 'boolean' && (r.area_m2 === null || isNum(r.area_m2))
+  isObj(r) &&
+  isStr(r.room_id) &&
+  typeof r.included === 'boolean' &&
+  (r.area_m2 === null || isNum(r.area_m2)) &&
+  (r.edited === undefined || typeof r.edited === 'boolean') &&
+  optStr(r.group_id) &&
+  optStr(r.drawing_id)
 const evRowOk = (r: unknown) => isObj(r) && isStr(r.id) && optStr(r.name) && optNum(r.value)
 
 /**
- * Drops the evidence boxes, rooms, rows and trace nodes that fail validation instead of rejecting the whole answer,
- * and counts them in `dropped_items` so the card can say so. The answer itself (value, scope, …) is still validated
- * strictly by isAskResponse afterwards. Anything that is not a list is left as is for the guard to reject.
+ * Drops the evidence boxes, rooms, rows, groups, links and trace nodes that fail validation instead of rejecting the
+ * whole answer, and counts them in `dropped_items` so the card can say so. The answer itself (value, scope, …) is still
+ * validated strictly by isAskResponse afterwards. Anything that is not a list is left as is for the guard to reject.
  */
 export function salvageAskResponse(v: unknown): unknown {
   if (!isObj(v) || !isObj(v.evidence)) return v
@@ -856,6 +1034,8 @@ export function salvageAskResponse(v: unknown): unknown {
     boxes: keep(ev.boxes, isBox),
     rooms: keep(ev.rooms, evRoomOk),
     ...(ev.rows !== undefined ? { rows: keep(ev.rows, evRowOk) } : {}),
+    ...(ev.groups !== undefined ? { groups: keep(ev.groups, isEvidenceGroup) } : {}),
+    ...(ev.links !== undefined ? { links: keep(ev.links, isEvidenceLink) } : {}),
   }
   const trace = keep(v.trace, isTraceNode)
   return dropped ? { ...v, evidence, trace, dropped_items: dropped } : v

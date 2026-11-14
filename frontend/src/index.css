@@ -49,6 +49,18 @@
   --color-info-surface: var(--info-surface);
   --color-user: var(--user);
   --color-user-surface: var(--user-surface);
+  --color-group-1: var(--group-1);
+  --color-group-1-surface: var(--group-1-surface);
+  --color-group-2: var(--group-2);
+  --color-group-2-surface: var(--group-2-surface);
+  --color-group-3: var(--group-3);
+  --color-group-3-surface: var(--group-3-surface);
+  --color-group-4: var(--group-4);
+  --color-group-4-surface: var(--group-4-surface);
+  --color-group-5: var(--group-5);
+  --color-group-5-surface: var(--group-5-surface);
+  --color-group-6: var(--group-6);
+  --color-group-6-surface: var(--group-6-surface);
 
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
@@ -105,6 +117,19 @@
   /* ours: user input (marked areas, scope, what-if sizes) */
   --user: #0f766e;
   --user-surface: #ccfbf1;
+  /* categorical evidence groups (apartments, stairs, circulation routes; WCAG AA >= 5.9:1) */
+  --group-1: #1260b8;
+  --group-1-surface: #ddeaf7;
+  --group-2: #6d3ab7;
+  --group-2-surface: #efe7fb;
+  --group-3: #a82465;
+  --group-3-surface: #fbe5f0;
+  --group-4: #0b6b8a;
+  --group-4-surface: #dff3f9;
+  --group-5: #475569;
+  --group-5-surface: #e8edf3;
+  --group-6: #7c4a15;
+  --group-6-surface: #f6eadc;
 
   /* neutral greys only; charts are not used for meaning */
   --chart-1: #d4d4d4;
