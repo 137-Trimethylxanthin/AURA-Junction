@@ -628,7 +628,7 @@ export function CommandPaletteDialog({
                         <span className="truncate">{label}</span>
                         {room.area_m2 !== null ? (
                           <span className="num ml-auto text-xs text-muted-foreground">
-                            {areaFmt.format(room.area_m2)} m²
+                            {room.area_source === 'estimate' ? '≈ ' : ''}{areaFmt.format(room.area_m2)} m²
                           </span>
                         ) : null}
                       </CommandItem>

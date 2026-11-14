@@ -492,7 +492,8 @@ class DrawingStore:
             calls = sum(int(p.get("requests") or 0) for p in ((spec or {}).get("spec") or {}).get("pages") or [])
             page = M.page_path(self.jsettings.data_dir, m)
             return {"doc": M.drawing_doc(m), "evidence": M.evidence_doc(m), "model": M.model_doc(m),
-                    "sources": sources, "calls": calls, "page": str(page) if page else None}
+                    "sources": sources, "calls": calls, "page": str(page) if page else None,
+                    "plan_svg": M.plan_svg(db, m) if m.vector_scan else None}
 
     async def materialise(self, drawing_id: str, file_id: str, key: str) -> bool:
         meta = self._meta(drawing_id)
@@ -525,6 +526,8 @@ class DrawingStore:
             ours["images"] = {"original": f"/drawings/{drawing_id}/original.png"}
             ours["thumbnail"] = f"/drawings/{drawing_id}/thumb.png"
             ours["frame"] = dict(ours.get("frame") or {}, px=list(size))
+        ours["images"] = await asyncio.to_thread(_plan_images, drawing_id, out_dir, ours.get("images") or {},
+                                                 built.get("plan_svg"))
         doc = normalise(ours, built["doc"], built["evidence"], built["model"],
                         {int(k): v for k, v in built["sources"].items()})
         doc["store"] = {"file_id": file_id, "drawing_key": key}
@@ -643,6 +646,26 @@ def _spent(file_id: str, key: str) -> dict:
     return {"cost_usd": p["cost_usd"], "metered_calls": p["calls"],
             "tokens": {"input": p["input_tokens"], "output": p["output_tokens"]},
             "by_model": p["by_model"]}
+
+
+def _plan_images(drawing_id: str, out_dir: Path, images: dict, svg: str | None) -> dict:
+    """The upload's images once the store has read it.  An image plan with a vector model of its own shows that
+    drawing (plan.svg, written here) and keeps the scan as the original, exactly aligned: both are the same
+    page in percent.  Without such a model the scan stays the only picture, and nothing is offered to compare."""
+    base = f"/drawings/{drawing_id}"
+    path = out_dir / "plan.svg"
+    if svg:
+        from .store_library import sized_svg
+        tmp = path.with_suffix(".svg.tmp")
+        tmp.write_text(sized_svg(svg), encoding="utf-8")
+        os.replace(tmp, path)
+        return {"rebuilt": f"{base}/plan.svg", "original": f"{base}/original.png", "original_alignment": "exact"}
+    if str(images.get("rebuilt") or "").endswith("/plan.svg") and (out_dir / "original.png").is_file():
+        path.unlink(missing_ok=True)                 # the model went away on a later interpretation
+        return {"rebuilt": f"{base}/original.png"}
+    if images.get("original") and images.get("original") == images.get("rebuilt"):
+        return {"rebuilt": images["rebuilt"]}        # one picture: not a pair to compare
+    return images
 
 
 def _page_images(page: Path, out_dir: Path) -> tuple[int, int]:

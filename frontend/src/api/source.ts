@@ -206,7 +206,10 @@ export function createSource(opts: SourceOptions = {}): Source {
         images: {
           ...d.images,
           rebuilt: abs(d.images.rebuilt),
-          ...(d.images.original ? { original: abs(d.images.original) } : {}),
+          // The same picture on both sides is not a pair to compare: no original, no Compare control.
+          ...(d.images.original && d.images.original !== d.images.rebuilt
+            ? { original: abs(d.images.original) }
+            : { original: undefined, original_alignment: undefined }),
         },
         ...(d.thumbnail ? { thumbnail: abs(d.thumbnail) } : {}),
       }))

@@ -22,6 +22,15 @@ export function fmtArea(n: number, lang: Lang): string {
   ).format(n)
 }
 
+/**
+ * A room's area as shown to people. An area measured under an estimated scale (a scan that states none) is
+ * approximate: "≈ 12 m² (estimate)", never two decimals it does not have.
+ */
+export function fmtRoomArea(area: number, source: string | undefined, lang: Lang): string {
+  if (source !== 'estimate') return `${fmtArea(area, lang)} m²`
+  return `≈ ${fmtCount(Math.round(area), lang)} m² (estimate)`
+}
+
 export function fmtCount(n: number, lang: Lang): string {
   return cached(countFmt, lang, () => new Intl.NumberFormat(LOCALE[lang], { maximumFractionDigits: 0 })).format(n)
 }

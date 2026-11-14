@@ -426,7 +426,7 @@ class RoomPoly(_Open):
     points: list[tuple[float, float]]
     label_at: tuple[float, float]
     rect: RoomRect | None = None
-    area_source: Literal["printed", "outline"] | None = None
+    area_source: Literal["printed", "outline", "estimate"] | None = None
 
 
 class Credit(_Open):

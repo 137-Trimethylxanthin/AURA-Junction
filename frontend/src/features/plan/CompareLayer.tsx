@@ -13,6 +13,7 @@ const clampSplit = (v: number) => Math.min(98, Math.max(2, v))
 export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
   const { tu } = useUi()
   const src = useAppStore((s) => s.session.drawing.images.original)
+  const isScan = useAppStore((s) => s.session.drawing.kind === 'raster')
   const { on, mode, opacity } = useAppStoreShallow((s) => s.ui.compare)
   const imgRef = useRef<HTMLImageElement>(null)
   const divRef = useRef<HTMLDivElement>(null)
@@ -129,7 +130,7 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
             {tu('cmp_original')}
           </span>
           <span className="pointer-events-none absolute right-2 bottom-2 z-30 rounded-sm border border-foreground bg-background px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-foreground">
-            {tu('cmp_rebuilt')}
+            {tu(isScan ? 'cmp_rebuilt_scan' : 'cmp_rebuilt')}
           </span>
         </>
       ) : null}

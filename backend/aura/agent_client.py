@@ -634,6 +634,7 @@ class AgentClient:
                     "name": rm.get("name"),
                     **({"unit": rm["unit"]} if rm.get("unit") else {}),
                     "area_m2": rm.get("area_m2"),
+                    **({"area_is_estimate": True} if rm.get("area_source") == "estimate" else {}),
                     **({"outdoor": True} if rm.get("outdoor") else {}),
                     **({"pos_pct": rm["label_at"]} if rm.get("label_at") else {}),
                 }

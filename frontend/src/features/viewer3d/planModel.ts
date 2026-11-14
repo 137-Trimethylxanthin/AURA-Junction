@@ -164,7 +164,7 @@ function labelEl(room: RoomPoly, fmt: Intl.NumberFormat): HTMLDivElement {
   if (room.area_m2 != null) {
     const a = document.createElement('span')
     a.className = 'v3d-label-area'
-    a.textContent = `${fmt.format(room.area_m2)} m²`
+    a.textContent = `${room.area_source === 'estimate' ? '≈ ' : ''}${fmt.format(room.area_m2)} m²`
     el.appendChild(a)
   }
   return el
