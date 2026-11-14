@@ -47,6 +47,7 @@ import {
 } from "./ProjectBundlerBar"
 import { UploadPanel } from "./UploadPanel"
 import { STEP_LABEL, reportedCounts } from "@/pages/upload/stages"
+import { useGroupFinisher } from "@/pages/upload/groups"
 import { useStoreMode, useUploads } from "@/pages/upload/useUploads"
 import { Badge } from "@/components/ui/badge"
 import type { UiKey } from "@/i18n/strings"
@@ -178,6 +179,7 @@ export default function LibraryPage() {
   // The user's own uploads: finished ones become library cards; the rest stay on /upload.
   const mode = useStoreMode(base)
   const { rows: uploadRows, remove: removeUpload } = useUploadsOrNone(base, mode, refresh)
+  useGroupFinisher(base, uploadRows)
   const own = useMemo(
     () => ownUploadEntries(uploadRows, mode, (n) => tu("ul_page", { n })),
     [uploadRows, mode, tu]

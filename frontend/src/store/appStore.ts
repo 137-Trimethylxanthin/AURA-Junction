@@ -674,6 +674,7 @@ export function createAppStore(deps: StoreDeps = {}): AppStore {
               question: text,
               ...(get().session.conversationId ? { conversation_id: get().session.conversationId! } : {}),
               ...(scope ? { scope } : {}),
+              ...(activeProjId ? { project_id: activeProjId } : {}),
               ...(opts.overrides?.length ? { overrides: opts.overrides } : {}),
               lang_hint: get().session.lang,
             },

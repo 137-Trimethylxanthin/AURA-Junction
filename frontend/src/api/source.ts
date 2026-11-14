@@ -85,6 +85,7 @@ export interface ChatTurnRequest {
   question: string
   conversation_id?: string
   scope?: Scope
+  project_id?: string
   overrides?: Override[]
   lang_hint?: Lang
 }
@@ -251,17 +252,42 @@ export function createSource(opts: SourceOptions = {}): Source {
     async chat(turn, onEvent, signal) {
       await init()
       await recover()
+      const targetProjId = turn.scope?.kind === 'project' ? turn.scope.project_id : turn.project_id
+      const syncLocalProject = async (pid: string | undefined): Promise<boolean> => {
+        if (!baseUrl || !pid) return false
+        const localBundle = myProjects.get(pid)
+        if (!localBundle || localBundle.floors.length < 2) return false
+        try {
+          const saved = await saveProject(
+            { baseUrl, fetch: opts.fetch },
+            localBundle,
+            { headers: myProjects.authHeaders(localBundle) },
+          )
+          if (saved.token) myProjects.setToken(localBundle.id, saved.token)
+          return true
+        } catch {
+          return false
+        }
+      }
       const askReq: AskRequest = {
         drawing_id: turn.drawing_id,
         question: turn.question,
         ...(turn.scope ? { scope: turn.scope } : {}),
+        ...(turn.project_id ? { project_id: turn.project_id } : {}),
         ...(turn.overrides ? { overrides: turn.overrides } : {}),
         ...(turn.lang_hint ? { lang_hint: turn.lang_hint } : {}),
       }
       if (status.kind === 'local' || !baseUrl || Date.now() < chatOffUntil) return this.ask(askReq)
+      if (targetProjId) {
+        const localBundle = myProjects.get(targetProjId)
+        if (localBundle && !localBundle.auto_matched && !myProjects.tokenOf(targetProjId)) {
+          await syncLocalProject(targetProjId)
+        }
+      }
       let response: AskResponse | undefined
       let seen = false
       let retried = false
+      let syncedOn404 = false
       for (;;) {
         try {
           await streamChat(
@@ -270,6 +296,7 @@ export function createSource(opts: SourceOptions = {}): Source {
               message: turn.question,
               ...(turn.conversation_id ? { conversation_id: turn.conversation_id } : {}),
               ...(turn.scope ? { scope: turn.scope } : {}),
+              ...(turn.project_id ? { project_id: turn.project_id } : {}),
               ...(turn.overrides ? { overrides: turn.overrides } : {}),
               ...(turn.lang_hint ? { lang_hint: turn.lang_hint } : {}),
             },
@@ -277,6 +304,7 @@ export function createSource(opts: SourceOptions = {}): Source {
               baseUrl,
               fetch: opts.fetch,
               signal,
+              headers: myProjects.listHeaders(),
               onEvent(e) {
                 seen = true
                 if (e.event === 'answer') response = e.data.response
@@ -287,6 +315,20 @@ export function createSource(opts: SourceOptions = {}): Source {
           )
           break
         } catch (e) {
+          // Local project created offline or before server sync settled: push it to /projects and retry once.
+          if (
+            e instanceof ApiError &&
+            e.status === 404 &&
+            e.code === 'not_found' &&
+            targetProjId &&
+            !seen &&
+            !signal?.aborted &&
+            !syncedOn404 &&
+            (await syncLocalProject(targetProjId))
+          ) {
+            syncedOn404 = true
+            continue
+          }
           // A transient network error before anything streamed: the backend may just be restarting. Retry once.
           if (e instanceof TransportError && e.kind !== 'timeout' && !seen && !signal?.aborted && !retried) {
             retried = true
@@ -325,14 +367,48 @@ export function createSource(opts: SourceOptions = {}): Source {
           throw new TransportError('This drawing needs the AURA server, which is not reachable right now', 'network')
         return { response: local(req), fellBack: false }
       }
+      const targetProjId = req.scope?.kind === 'project' ? req.scope.project_id : req.project_id
+      const syncLocalProject = async (pid: string | undefined): Promise<boolean> => {
+        if (!baseUrl || !pid) return false
+        const localBundle = myProjects.get(pid)
+        if (!localBundle || localBundle.floors.length < 2) return false
+        try {
+          const saved = await saveProject(
+            { baseUrl, fetch: opts.fetch },
+            localBundle,
+            { headers: myProjects.authHeaders(localBundle) },
+          )
+          if (saved.token) myProjects.setToken(localBundle.id, saved.token)
+          return true
+        } catch {
+          return false
+        }
+      }
+      if (targetProjId) {
+        const localBundle = myProjects.get(targetProjId)
+        if (localBundle && !localBundle.auto_matched && !myProjects.tokenOf(targetProjId)) {
+          await syncLocalProject(targetProjId)
+        }
+      }
+      const callAsk = () =>
+        postAsk({ baseUrl, fetch: opts.fetch }, req, { timeoutMs: askTimeoutMs, headers: myProjects.listHeaders() })
       try {
         try {
-          return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
+          return { response: await callAsk(), fellBack: false }
         } catch (e) {
+          if (
+            e instanceof ApiError &&
+            e.status === 404 &&
+            e.code === 'not_found' &&
+            targetProjId &&
+            (await syncLocalProject(targetProjId))
+          ) {
+            return { response: await callAsk(), fellBack: false }
+          }
           // A transient network error: the backend may just be restarting. Retry once before giving up.
           if (!(e instanceof TransportError) || e.kind === 'timeout') throw e
           await sleep(RETRY_DELAY_MS)
-          return { response: await postAsk({ baseUrl, fetch: opts.fetch }, req, askTimeoutMs), fellBack: false }
+          return { response: await callAsk(), fellBack: false }
         }
       } catch (e) {
         if (e instanceof ApiError) throw e

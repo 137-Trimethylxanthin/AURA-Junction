@@ -82,7 +82,7 @@ export function bundleFor(g: PendingGroup, ready: UploadRow[]): ProjectBundle {
 }
 
 /** Saves each pending group as a project once its files are ready (locally at once, then on the server). */
-export function useGroupFinisher(base: string, rows: UploadRow[]) {
+export function useGroupFinisher(base: string | null, rows: UploadRow[]) {
   const busy = useRef(new Set<string>())
   useEffect(() => {
     for (const g of pendingGroups.list()) {
@@ -96,10 +96,14 @@ export function useGroupFinisher(base: string, rows: UploadRow[]) {
       busy.current.add(g.id)
       const bundle = bundleFor(g, d.ready)
       pendingGroups.remove(g.id)
+      if (!base) {
+        busy.current.delete(g.id)
+        continue
+      }
       void saveProject({ baseUrl: base }, bundle, { headers: myProjects.authHeaders(bundle) })
         .then(({ token }) => myProjects.setToken(bundle.id, token))
         .catch(() => {
-          /* kept locally; the library's project bar syncs it later */
+          /* kept locally; the library's project bar or source.chat syncs it later */
         })
         .finally(() => busy.current.delete(g.id))
     }

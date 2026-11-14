@@ -103,6 +103,8 @@ export interface ChatStreamOptions extends ClientOptions {
   signal?: AbortSignal
   /** No byte for this long (connect included) → TransportError timeout. The server's own deadline is 60 s. */
   idleTimeoutMs?: number
+  /** Extra per-call headers (e.g. `x-project-token` / `x-delete-token` for multi-floor project scope). */
+  headers?: Record<string, string>
   onEvent: (e: ChatEvent) => void
 }
 
@@ -133,7 +135,7 @@ export async function streamChat(req: ChatRequest, opts: ChatStreamOptions): Pro
     try {
       res = await doFetch(join(opts.baseUrl, '/chat'), {
         method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...presenterHeader() },
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...presenterHeader(), ...opts.headers },
         body: JSON.stringify(req),
         signal: ctrl.signal,
       })
@@ -142,7 +144,17 @@ export async function streamChat(req: ChatRequest, opts: ChatStreamOptions): Pro
       if (timedOut) throw new TransportError(`No answer within ${idleMs / 1000} s`, 'timeout')
       throw new TransportError(e instanceof Error ? e.message : 'Network error', 'network')
     }
-    if (res.status === 404 || res.status === 405) throw new ChatUnavailable(res.status === 404)
+    if (res.status === 405) throw new ChatUnavailable(false)
+    if (res.status === 404) {
+      let body: unknown = null
+      try {
+        body = dropNulls(await res.json())
+      } catch {
+        body = null
+      }
+      if (isErrorBody(body)) throw new ApiError(body.error, 404, body.code, body)
+      throw new ChatUnavailable(true)
+    }
     if (res.status >= 500) {
       let body: unknown
       try {

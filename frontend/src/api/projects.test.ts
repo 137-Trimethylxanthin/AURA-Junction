@@ -91,6 +91,80 @@ describe('myProjects tokens and pruning', () => {
     expect(headers[PROJECT_TOKEN_HEADER]).toBe('tok-1')
   })
 
+  it('sends project & upload tokens on POST /chat and POST /ask, and auto-syncs local projects on 404 not_found', async () => {
+    const { createSource } = await import('./source')
+    const { ask } = await import('./local')
+    const baseAns = { ...ask({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' }), source: 'api' as const }
+    const sse = `event: answer\ndata: ${JSON.stringify({ response: baseAns })}\n\nevent: done\ndata: {}\n\n`
+
+    myUploads.add({ id: 'up-1', name: 'f1.png', delete_token: 'del-1', created_at: '2026-11-15T00:00:00Z' })
+    myUploads.add({ id: 'up-2', name: 'f2.png', delete_token: 'del-2', created_at: '2026-11-15T00:00:00Z' })
+    myProjects.save(bundle('proj-mwgxu9xx', ['up-1', 'up-2']))
+    // Simulate a stale local token after a server restart so first /chat returns 404 Unknown project
+    myProjects.setToken('proj-mwgxu9xx', 'stale-tok')
+
+    const calls: { method: string; url: string; headers: Record<string, string>; body?: string }[] = []
+    let serverHasProject = false
+    const src = createSource({
+      baseUrl: 'http://x',
+      fetch: async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET'
+        const headers = (init?.headers ?? {}) as Record<string, string>
+        const body = init?.body as string | undefined
+        calls.push({ method, url, headers, body })
+        if (url.endsWith('/health')) {
+          return new Response(JSON.stringify({ ok: true, contract_version: CONTRACT_VERSION, answerer: 'hybrid' }))
+        }
+        if (method === 'POST' && url.endsWith('/projects')) {
+          serverHasProject = true
+          return new Response(JSON.stringify({ ...bundle('proj-mwgxu9xx', ['up-1', 'up-2']), token: 'fresh-tok' }))
+        }
+        if (method === 'POST' && url.endsWith('/chat')) {
+          if (!serverHasProject || headers[PROJECT_TOKEN_HEADER] !== 'fresh-tok') {
+            return new Response(
+              JSON.stringify({ contract_version: CONTRACT_VERSION, code: 'not_found', error: "Unknown project 'proj-mwgxu9xx'." }),
+              { status: 404, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+        }
+        if (method === 'POST' && url.endsWith('/ask')) {
+          expect(headers[PROJECT_TOKEN_HEADER]).toBe('fresh-tok')
+          expect(headers['x-delete-token']).toBe('del-2,del-1')
+          return new Response(JSON.stringify(baseAns), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        throw new Error(`unexpected ${method} ${url}`)
+      },
+    })
+
+    const res = await src.chat(
+      {
+        drawing_id: 'up-1',
+        question: 'How many doors across all floors?',
+        project_id: 'proj-mwgxu9xx',
+        scope: { kind: 'project', project_id: 'proj-mwgxu9xx', drawing_ids: ['up-1', 'up-2'] },
+      },
+      () => {},
+    )
+    expect(res.response.answer).toEqual(baseAns.answer)
+    expect(myProjects.tokenOf('proj-mwgxu9xx')).toBe('fresh-tok')
+    const chatCalls = calls.filter((c) => c.url.endsWith('/chat'))
+    expect(chatCalls).toHaveLength(2)
+    expect(chatCalls[0].headers[PROJECT_TOKEN_HEADER]).toBe('stale-tok')
+    expect(chatCalls[0].headers['x-delete-token']).toBe('del-2,del-1')
+    expect(chatCalls[1].headers[PROJECT_TOKEN_HEADER]).toBe('fresh-tok')
+    expect(JSON.parse(chatCalls[1].body!).project_id).toBe('proj-mwgxu9xx')
+
+    // Direct /ask also receives fresh project & delete tokens
+    const askRes = await src.ask({
+      drawing_id: 'up-1',
+      question: 'How many doors?',
+      project_id: 'proj-mwgxu9xx',
+      scope: { kind: 'project', project_id: 'proj-mwgxu9xx', drawing_ids: ['up-1', 'up-2'] },
+    })
+    expect(askRes.response.answer).toEqual(baseAns.answer)
+  })
+
   it('prunes floors that 404 and drops projects left with fewer than 2 floors', async () => {
     myProjects.save(bundle('keep', ['a', 'b', 'gone']))
     myProjects.save(bundle('drop', ['c', 'gone']))

@@ -244,6 +244,8 @@ def render_pdf(src: Path, out: Path, drawing_id: str, meta: dict[str, Any],
             _save_single_page_pdf(doc, idx, sib_pdf)
         tmp_p0 = out / "source_p1.pdf"
         _save_single_page_pdf(doc, 0, tmp_p0)
+        doc.close()
+        doc = None
         tmp_p0.replace(src)
 
         floors.sort(key=lambda f: (float(f["order"]), f["drawing_id"]))
@@ -262,4 +264,5 @@ def render_pdf(src: Path, out: Path, drawing_id: str, meta: dict[str, Any],
             "siblings": siblings,
         }
     finally:
-        doc.close()
+        if doc is not None:
+            doc.close()
