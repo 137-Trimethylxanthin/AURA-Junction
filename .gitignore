@@ -38,3 +38,4 @@ agent-service/runs/
 # build metadata and local browser captures
 *.egg-info/
 .playwright-mcp/
+frontend/public/dev-uploads.json
