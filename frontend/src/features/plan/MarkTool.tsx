@@ -5,9 +5,6 @@ import { actions, useAppStore } from '@/store'
 import { useUi } from '@/i18n/uiLang'
 import { markLabel, nextLabel, overlayOpen, pctPoint, type StageRef } from './shared'
 
-// Re-exported for compatibility with pre-Wave-2 Composer imports before Lane F2 merges.
-export { markLabel }
-
 const MIN_PCT = 1.5
 
 /** Marked areas, in the user colour. The attached one (sent with the next question) is emphasised. */
