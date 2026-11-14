@@ -914,6 +914,71 @@ def adjacent_boxes(d: LoadedDrawing, subject: str, room_ids: list[str]) -> ToolR
               "reach_m": WALL_REACH_M})
 
 
+_OPS = {"gt": (lambda k, n: k > n, "more than"), "ge": (lambda k, n: k >= n, "at least"),
+        "lt": (lambda k, n: k < n, "fewer than"), "le": (lambda k, n: k <= n, "at most"),
+        "eq": (lambda k, n: k == n, "exactly")}
+
+
+def rooms_by_count(d: LoadedDrawing, subject: str, op: str, n: int, measure: str = "list") -> ToolResult:
+    """Rooms filtered by how many doors/windows they have ('rooms with more than 1 door'). A box belongs to every
+    room whose outline it touches (within WALL_REACH_M), the same rule as `adjacent_boxes`, so a door on a wall
+    shared by two rooms counts for both. Outdoor spaces are left out. `measure`: 'list' (mark the rooms),
+    'count' (how many rooms) or 'area' (their summed net area). 0 model calls; the same answer every time."""
+    from shapely.geometry import Polygon
+    from shapely.geometry import box as sbox
+
+    args: dict[str, Any] = {"subject": subject, "op": op, "n": n, "measure": measure, "scope": {"kind": "floor"},
+                            "rule": "rooms_by_count"}
+    t0 = time.perf_counter()
+    test, words = _OPS[op]
+    base = count_objects(d, subject, {"kind": "floor"})
+    rows = [r for r in d.drawing.get("rooms", []) if len(r.get("points") or []) >= 3]
+    if not base.supported or base.kind == "none" or not rows:
+        return ToolResult(result_id=_rid(d.id, "list_rooms", args), tool="list_rooms", args=args, kind="none",
+                          subject="room", supported=base.supported,
+                          summary=base.summary if not base.supported else "No room outlines on this drawing.",
+                          ms=_ms(t0))
+    mx = float(d.drawing.get("m_per_pct_x") or 0.1)
+    my = float(d.drawing.get("m_per_pct_y") or mx)
+    reach = WALL_REACH_M / max(1e-6, (mx + my) / 2)
+    grown = [(b, sbox(b.x, b.y, b.x + b.w, b.y + b.h).buffer(reach)) for b in base.boxes]
+    per_room: list[tuple[dict, list[Box]]] = []
+    outdoor = 0
+    for r in rows:
+        if r.get("outdoor"):
+            outdoor += 1
+            continue
+        poly = Polygon(r["points"]).buffer(0)
+        per_room.append((r, [b for b, g in grown if g.intersects(poly)]))
+    kept = [(r, bs) for r, bs in per_room if test(len(bs), n)]
+    kept.sort(key=lambda x: (-len(x[1]), str(x[0].get("room_id"))))
+    areas = [_area(r) for r, _ in kept]
+    known = [a for a in areas if a is not None]
+    total = round(sum(known), 2)
+    seen: set[str] = set()
+    boxes = [b for _, bs in kept for b in bs if not (b.id in seen or seen.add(b.id))]
+    kept_ids = {r["room_id"] for r, _ in kept}
+    rooms = [EvidenceRoom(room_id=r["room_id"], included=r["room_id"] in kept_ids, area_m2=_area(r))
+             for r, _ in per_room]
+    phrase = f"{words} {n} {noun(subject, n)}"
+    listing = "; ".join(f"{r.get('name') or 'Room'} {r['room_id']} ({len(bs)})" for r, bs in kept)
+    summary = (f"Counted the {noun(subject, 2)} touching each of {len(per_room)} indoor rooms (a {subject} on a "
+               f"shared wall counts for both rooms){f'; {outdoor} outdoor spaces left out' if outdoor else ''}. "
+               f"{len(kept)} rooms have {phrase}" + (f": {listing}." if kept else ".")
+               + (f" Their net area together: {total:.2f} m²." if measure == "area" and known else "")
+               + (f" {len(areas) - len(known)} of them have no known area." if len(known) < len(areas) else ""))
+    value = total if measure == "area" else float(len(kept))
+    return ToolResult(
+        result_id=_rid(d.id, "list_rooms", args), tool="list_rooms", args=args,
+        kind="area" if measure == "area" else "count", subject="room", value=value,
+        numbers=[value, float(len(kept)), float(len(per_room)), *known, *(float(len(bs)) for _, bs in kept)],
+        boxes=boxes, rooms=rooms, summary=summary, ms=_ms(t0),
+        meta={"kept": [{"id": r["room_id"], "name": r.get("name") or "", "n": len(bs), "area_m2": a}
+                       for (r, bs), a in zip(kept, areas)],
+              "candidates": len(per_room), "outdoor": outdoor, "phrase": phrase, "measure": measure,
+              "total_m2": total, "unknown_area": len(areas) - len(known), "reach_m": WALL_REACH_M})
+
+
 def what_if(d: LoadedDrawing, scope: dict | None, overrides: list[dict]) -> ToolResult:
     return room_areas(d, scope, overrides)
 

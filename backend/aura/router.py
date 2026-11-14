@@ -20,11 +20,11 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 10  # 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools
-EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent"})
+ROUTER_VERSION = 11  # 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
+EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
-                 "room_rank", "adjacent"]
+                 "room_rank", "adjacent", "rooms_by_count"]
 InternalLang = Literal["en", "fr", "fi", "de", "it"]
 
 _LD = r"[^\W_]"  # letter or digit
@@ -64,7 +64,7 @@ _MARKERS: dict[str, list[re.Pattern[str]]] = {
     "de": [
         _wl("wie|viele|wieviele|welche|gibt|es|der|die|das|den|dem|ist|sind|hat|auf|im|in der|"
             "diesem|dieser|plan|und|groß|gross|von|mit"),
-        _ws("fenster|tür|wohnung|fläche|wohnfläche|nettofläche|nettowohn|nettogeschoss|zimmer|"
+        _ws("fenster|tür|wohnung|fläche|gesamt|wohnfläche|nettofläche|nettowohn|nettogeschoss|zimmer|"
             "räume|raum|waschbeck|küche|grundriss|badezimmer|badewanne|dusche|brandschutz|anzahl|"
             "quadratmeter|stockwerk|geschoss|bezeichnung|eingezeichnet|dargestellt"),
     ],
@@ -81,7 +81,7 @@ _MARKERS: dict[str, list[re.Pattern[str]]] = {
     ],
     "it": [
         _wl("quanti|quante|quanto|qual|quale|è|sono|ci|il|lo|la|gli|le|di|del|della|dell|dei|"
-            "delle|in|questo|questa|piano|pianta"),
+            "delle|in|questo|questa|piano|pianta|tutti|tutte"),
         _ws("finestr|porte|lavabi|appartament|locali|locale|superficie netta|vasche|docce|"
             "disegnat|rappresentat|denominazione|unità abitative"),
     ],
@@ -106,6 +106,12 @@ def lang_scores(text: str) -> dict[str, float]:
         if ch:
             out[lang] += 0.5 * len(ch.findall(s))
     return out
+
+
+def stem_scores(text: str) -> dict[str, int]:
+    """Hits of each language's distinctive domain stems ('fenster', 'ovet', 'surface'), not its function words."""
+    s = _LABEL_NAMES.sub(" ", (text or "").lower())
+    return {k: len(_MARKERS[k][1].findall(s)) for k in _TIE}
 
 
 def detect_lang(text: str) -> tuple[InternalLang, bool]:
@@ -554,6 +560,48 @@ def is_followup_message(text: str, routed: Routed | None = None) -> bool:
     return False
 
 
+_NUM_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "ein": 1, "eine": 1, "einer": 1, "einem": 1, "einen": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5, "sechs": 6,
+    "un": 1, "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "six ": 6,
+    "yksi": 1, "yhden": 1, "yhtä": 1, "kaksi": 2, "kahden": 2, "kahta": 2, "kolme": 3, "kolmen": 3, "neljä": 4,
+    "viisi": 5,
+}
+_NUM = r"(\d+|" + "|".join(sorted((re.escape(k.strip()) for k in _NUM_WORDS), key=len, reverse=True)) + r")"
+_CMP = [
+    ("gt", r"more than|over|greater than|mehr als|über|plus d['’]|plus de|enemmän kuin|yli"),
+    ("ge", r"at least|minimum of|mindestens|wenigstens|au moins|vähintään"),
+    ("lt", r"less than|fewer than|under|weniger als|moins d['’]|moins de|vähemmän kuin|alle"),
+    ("le", r"at most|no more than|maximum of|höchstens|maximal|au plus|enintään"),
+    ("eq", r"exactly|genau|exactement|tasan|precisely"),
+]
+_CMP_RX = [(op, re.compile(rf"(?:{w})\s*{_NUM}\b", re.IGNORECASE)) for op, w in _CMP]
+_OR_MORE = re.compile(rf"\b{_NUM}\s*(?:\+|or more|oder mehr|ou plus|tai enemmän)", re.IGNORECASE)
+_ROOMS_WITH_N = re.compile(
+    rf"(?:rooms?|pièces?|chambres?|zimmer|räume|huonee?t?)\s+(?:that\s+|which\s+)?"
+    rf"(?:with|have|has|having|avec|ayant|mit|joissa|jossa)\s+(?:on\s+)?{_NUM}\s", re.IGNORECASE)
+
+
+def _num(tok: str) -> int | None:
+    tok = tok.strip().lower()
+    return int(tok) if tok.isdigit() else _NUM_WORDS.get(tok)
+
+
+def rooms_by_count_of(s: str) -> tuple[str, int] | None:
+    """(op, n) when the question filters rooms by how many of something they have: 'rooms with more than
+    1 door' -> ('gt', 1); '2 or more windows' -> ('ge', 2); 'rooms with two doors' -> ('eq', 2)."""
+    if not ROOMS_WITH.search(s) and not ROOM_WORD.search(s):
+        return None
+    for op, rx in _CMP_RX:
+        if (m := rx.search(s)) and (n := _num(m.group(1))) is not None:
+            return op, n
+    if (m := _OR_MORE.search(s)) and (n := _num(m.group(1))) is not None:
+        return "ge", n
+    if (m := _ROOMS_WITH_N.search(s)) and (n := _num(m.group(1))) is not None:
+        return "eq", n
+    return None
+
+
 def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     s = unicodedata.normalize("NFC", text or "")
     lang, signal = detect_lang(s)
@@ -598,6 +646,13 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
     if METADATA.search(s) and (box_subject or ROOM_WORD.search(s) or LAYER_WORD.search(s)):
         return Routed("unknown", lang, signal, scope=_scope(s, ctx), subject=box_subject,
                       matched=["metadata", *([box_subject] if box_subject else [])])
+    # "rooms that have more than 1 door", "Räume mit mindestens zwei Fenstern": an exact filter over the rooms
+    # by how many doors/windows touch each one, then marked, counted or summed by area.
+    if box_subject in ("door", "window") and (bc := rooms_by_count_of(s)) is not None:
+        op, n = bc
+        measure = "area" if AREA.search(s) else "count" if COUNT.search(s) else "list"
+        return Routed("rooms_by_count", lang, signal, subject=box_subject, scope={"kind": "floor"},
+                      pattern=f"{op}|{n}|{measure}", matched=["rooms_by_count", box_subject, op, str(n), measure])
     rank = "max" if RANK_MAX.search(s) else "min" if RANK_MIN.search(s) else None
     if rank and box_subject is None and not APARTMENT.search(s) and not COUNT.search(s):
         concept, printed = room_concept(s)

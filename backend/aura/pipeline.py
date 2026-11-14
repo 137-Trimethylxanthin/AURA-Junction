@@ -39,6 +39,7 @@ from aura.gemini.score import MIN_CONFIDENCE as SCORE_MIN_CONFIDENCE
 from aura.gemini.score import family_of as score_family_of
 from aura.gemini.score import run_score
 from aura.gemini.understand import MIN_CONFIDENCE, decide_hybrid_route, understand
+from aura.language import question_language
 from aura.provenance import allowed_numbers, filter_prose
 from aura.router import (
     COLOR_CUE,
@@ -513,6 +514,13 @@ async def _execute_exact_intent(
             return A.unclear(question, lang, d, scope, intent_tag=tag, look=tr.summary), False
         return A.room_rank(question, lang, d, tr, scope, matched, intent_tag=tag), True
 
+    if intent == "rooms_by_count":
+        op, n, measure = (pattern or "gt|1|list").split("|")
+        tr = await asyncio.to_thread(tools.rooms_by_count, d, subject or "door", op, int(n), measure)
+        if tr.kind == "none":
+            return A.unclear(question, lang, d, scope, intent_tag=tag, look=tr.summary), False
+        return A.rooms_by_count(question, lang, d, tr, matched, intent_tag=tag), True
+
     if intent == "adjacent":
         room_ids = (ref or {}).get("room_ids") or [scope.get("room_id")]
         tr = await asyncio.to_thread(tools.adjacent_boxes, d, subject or "door", room_ids)
@@ -569,7 +577,7 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
     """Exact + legacy Gemini choice/agent path (used when `svc.agent is None` or `answerer == 'exact'`)."""
     question = req.question.strip()
     r = route(question, d.ctx)
-    lang = r.lang if r.lang_signal else (req.lang_hint or "en")
+    lang = await question_language(svc, question, req.lang_hint or "en", caller, stats.get("meter"))
 
     # Deterministic `<2ms` color-coding follow-up on prior rooms
     if (color_built := _try_deterministic_color_followup(question, lang, d, history)) is not None:
@@ -1015,7 +1023,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     # has its own choice step, in-backend agent and image scoring.
     full = svc.drawing_store is not None and svc.drawing_store.available()
     if mode in ("hybrid", "agent") and (svc.agent is not None or full):
-        lang = r_pre.lang if r_pre.lang_signal else (req.lang_hint or "en")
+        lang = await question_language(svc, question, req.lang_hint or "en", caller, meters["answer"])
 
         # 1. `<2ms` deterministic color-coding follow-up on prior rooms (`0` model calls)
         if (color_built := _try_deterministic_color_followup(question, lang, d, history)) is not None:
@@ -1059,7 +1067,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         exact_project = is_project and r.intent == "count"
         if mode == "hybrid" and (not is_project or exact_project) and not has_followup_semantics:
             if (indexed and r.intent in (
-                    "count", "area", "quantity", "find_text", "room_rank", "adjacent")) or (
+                    "count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count")) or (
                     # Detected image/PDF page: door/window counts (and show/list variants) come from
                     # raster.json at 0 calls, as a model estimate; never the sidecar.
                     isinstance(d.engine, tools.RasterEngine) and r.intent == "count"
