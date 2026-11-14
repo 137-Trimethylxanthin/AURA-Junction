@@ -46,6 +46,8 @@ export function readShortcutModifiers(
   return { isAltGr, hasCmdCtrl, hasPlainAlt }
 }
 
+const hydrationSeq = new WeakMap<AppStore, number>()
+
 /**
  * Resolves and hydrates `activeProject` when a workspace drawing loads:
  * 1. Local `myProjects` (`aura.projects`) bundles synchronously,
@@ -57,55 +59,63 @@ export async function hydrateActiveProject(opts: {
   sourceKind: 'api' | 'local' | null
   store?: AppStore
   baseUrl?: string | null
+  signal?: AbortSignal
 }): Promise<ProjectBundle | null> {
   const store = opts.store ?? appStore
-  const { drawingId, sourceKind } = opts
+  const { drawingId, sourceKind, signal } = opts
+  const seq = (hydrationSeq.get(store) ?? 0) + 1
+  hydrationSeq.set(store, seq)
   const initialLoadId = store.getState().session.load.id
-  const isStillCurrent = () => {
-    const curId = store.getState().session.load.id
-    return curId === drawingId || curId === initialLoadId
-  }
+  const isStillCurrent = () =>
+    !signal?.aborted &&
+    hydrationSeq.get(store) === seq &&
+    store.getState().session.load.id === initialLoadId
 
   // 1. Synchronous check against user-saved projects in localStorage (`aura.projects`).
   const saved = myProjects.forDrawing(drawingId)
   if (saved && saved.floors.length >= 2) {
-    store.getState().setActiveProject(saved)
+    if (isStillCurrent()) store.getState().setActiveProject(saved)
     return saved
   }
 
-  // Keep existing activeProject immediately if it already contains this floor while async checks run.
-  const currentActive = store.getState().activeProject
-  if (currentActive && currentActive.floors.length >= 2 && currentActive.floors.some((f) => f.drawing_id === drawingId)) {
-    return currentActive
+  // While the data source is still booting (`sourceKind === null`), preserve any primed project until ready.
+  if (sourceKind === null) {
+    const primed = store.getState().activeProject
+    return primed && primed.floors.length >= 2 && primed.floors.some((f) => f.drawing_id === drawingId)
+      ? primed
+      : null
   }
 
   const base = opts.baseUrl !== undefined ? opts.baseUrl : apiBase()
   if (sourceKind === 'api' && base) {
     let srvProjects: ProjectBundle[] = []
     try {
-      const body = await request({ baseUrl: base }, '/projects', { method: 'GET' }, 8_000)
+      const body = await request({ baseUrl: base }, '/projects', { method: 'GET', signal }, 8_000)
       const list = Array.isArray(body)
         ? body
         : body && typeof body === 'object' && Array.isArray((body as { projects?: unknown }).projects)
           ? (body as { projects: unknown[] }).projects
           : []
       srvProjects = list.filter(isProjectBundle)
-      if (srvProjects.length > 0) myProjects.syncFromServer(srvProjects)
+      if (srvProjects.length > 0 && !signal?.aborted) myProjects.syncFromServer(srvProjects)
     } catch {
+      if (signal?.aborted) return null
       /* `/projects` optional or unreachable: fall through to `/drawings` auto-grouping */
     }
 
     try {
       const listing = await listDrawings({ baseUrl: base }, 8_000)
+      if (!isStillCurrent()) return null
       const resolved = myProjects.forDrawing(drawingId, listing.drawings, srvProjects)
       if (resolved && resolved.floors.length >= 2) {
-        if (isStillCurrent()) store.getState().setActiveProject(resolved)
+        store.getState().setActiveProject(resolved)
         return resolved
       }
     } catch {
+      if (!isStillCurrent()) return null
       const fromSrvOnly = myProjects.forDrawing(drawingId, [], srvProjects)
       if (fromSrvOnly && fromSrvOnly.floors.length >= 2) {
-        if (isStillCurrent()) store.getState().setActiveProject(fromSrvOnly)
+        store.getState().setActiveProject(fromSrvOnly)
         return fromSrvOnly
       }
     }
@@ -197,7 +207,6 @@ export function dispatchWorkspaceShortcut(e: KeyboardEvent, opts: ShortcutDispat
     }
     if (s.ui.shortcutsOpen) {
       e.preventDefault()
-      s.setShortcutsOpen(false)
       s.setCommandOpen(true)
       return true
     }
@@ -215,6 +224,7 @@ export function dispatchWorkspaceShortcut(e: KeyboardEvent, opts: ShortcutDispat
     e.keyCode !== 229 &&
     !isEditable(e.target) &&
     !hasCmdCtrl &&
+    !hasPlainAlt &&
     e.key === '?'
   ) {
     e.preventDefault()
@@ -335,7 +345,7 @@ export function dispatchWorkspaceShortcut(e: KeyboardEvent, opts: ShortcutDispat
     navigateIfCrossFloorEvidence(store, chosen, opts.navigate)
     return true
   }
-  if ((!e.shiftKey && keyLower === 'x') || e.key === 'Delete') {
+  if (!e.shiftKey && (keyLower === 'x' || e.key === 'Delete')) {
     const { activeTurnId, selectedEvidenceId } = s.ui
     if (!activeTurnId || !selectedEvidenceId) return false
     e.preventDefault()

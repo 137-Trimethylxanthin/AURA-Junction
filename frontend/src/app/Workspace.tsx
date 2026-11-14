@@ -79,24 +79,33 @@ export default function Workspace() {
   useTitle(ready ? drawing.title : "Drawing")
   const sourceKind = useAppStore((s) => (s.session.source.state === 'ready' ? s.session.source.kind : null))
   const traceOpen = useAppStore((s) => s.ui.traceOpen)
+  const activeProjectId = useAppStore((s) => s.activeProject?.id ?? null)
 
   // Hydrate House / Project bundle context from localStorage (`aura.projects`), `/projects`, or sibling plans.
   useEffect(() => {
+    let controller = new AbortController()
     const sync = () => {
+      controller.abort()
+      controller = new AbortController()
       void hydrateActiveProject({
         drawingId,
         drawing: ready ? drawing : undefined,
         sourceKind,
+        signal: controller.signal,
       })
     }
     sync()
-    return myProjects.subscribe(sync)
+    const unsub = myProjects.subscribe(sync)
+    return () => {
+      controller.abort()
+      unsub()
+    }
   }, [drawingId, ready, drawing, sourceKind])
 
-  // After a reload: bring back this drawing's last conversation from the API (kept by id in localStorage).
+  // After a reload: bring back this drawing's (or hydrated House Project's) last conversation from the API.
   useEffect(() => {
     if (ready && sourceKind === 'api') void actions().restoreConversation()
-  }, [ready, sourceKind, drawingId])
+  }, [ready, sourceKind, drawingId, activeProjectId])
 
   if (!ready)
     return (
@@ -237,7 +246,9 @@ function LoadState({ load }: { load: DrawingLoad }) {
     <div className="flex min-h-dvh flex-col bg-background">
       <SiteHeader />
       <main
-        className="flex flex-1 items-center justify-center p-6"
+        id="main"
+        tabIndex={-1}
+        className="flex flex-1 items-center justify-center p-6 outline-none"
         aria-live="polite"
         data-drawing-load={load.state}
       >

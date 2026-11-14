@@ -1,6 +1,7 @@
 import { tu, useUi } from "@/i18n/uiLang"
 import type { UiKey } from "@/i18n/strings"
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { motion, useReducedMotion } from "motion/react"
 import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
@@ -173,6 +174,11 @@ export function ChatPanel() {
   useChatSideEffects()
   const pairs = usePairs()
   const root = useRef<HTMLDivElement>(null)
+  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null)
+  const setRootRef = useCallback((node: HTMLDivElement | null) => {
+    root.current = node
+    setPortalHost(node?.closest("aside") ?? null)
+  }, [])
   const count = useRef(0)
   const reduce = useReducedMotion()
   /** Follow the newest question until the user scrolls by hand. */
@@ -210,10 +216,16 @@ export function ChatPanel() {
     }
   }, [])
 
-  return (
-    <div ref={root} className="flex min-h-full flex-col">
+  const liveAndToasts = (
+    <>
       <LiveRegion />
       <ChatToaster />
+    </>
+  )
+
+  return (
+    <div ref={setRootRef} className="flex min-h-full flex-col">
+      {portalHost ? createPortal(liveAndToasts, portalHost) : liveAndToasts}
       {pairs.length === 0 ? (
         <div className="flex flex-col gap-3 p-4 pt-5">
           <div className="flex flex-col gap-1">
