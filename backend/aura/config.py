@@ -12,10 +12,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+# The caps AURA_UNLIMITED lifts (each also accepts 0 = unlimited on its own).
+UNLIMITED_CAPS = ("event_cap", "daily_cap", "dev_cap", "measurement_cap", "ip_agent_per_hour",
+                  "agent_runs_per_ip_hour", "agent_runs_per_day", "uploads_per_ip_hour",
+                  "max_queued_uploads", "upload_quota_bytes")
 
 
 def _split_csv(v: object) -> object:
@@ -55,15 +61,18 @@ class Settings(BaseSettings):
     presenter_token: SecretStr | None = Field(default=None, alias="AURA_PRESENTER_TOKEN")
     ip_salt: SecretStr = Field(default=SecretStr("aura-local-salt"), alias="AURA_IP_SALT")
 
-    # Budget (plan: "Gemini request budget"). Every cap: 0 = unlimited (the default);
-    # a public deployment sets positive caps. Spend is always counted (/budget, /health).
-    event_cap: int = Field(default=0, alias="AURA_EVENT_CAP")
+    # Budget (plan: "Gemini request budget"). Bounded by default; a cap set to 0 is unlimited, and
+    # AURA_UNLIMITED=true lifts every request/upload cap at once (local dev and demo only:
+    # scripts/dev-backend.sh sets it). Spend is always counted (/budget, /health).
+    unlimited: bool = Field(default=False, alias="AURA_UNLIMITED")
+    event_cap: int = Field(default=1000, alias="AURA_EVENT_CAP")
     event_seed: int = Field(default=94, alias="AURA_BUDGET_SEED")
-    daily_cap: int = Field(default=0, alias="AURA_DAILY_CAP")
-    dev_cap: int = Field(default=0, alias="AURA_DEV_CAP")
-    measurement_cap: int = Field(default=0, alias="AURA_MEASUREMENT_CAP")
-    ip_agent_per_hour: int = Field(default=0, alias="AURA_IP_AGENT_PER_HOUR")
-    # Raster analyses without the presenter token: 0 = unlimited, -1 = presenter only, N = N.
+    daily_cap: int = Field(default=350, alias="AURA_DAILY_CAP")
+    dev_cap: int = Field(default=100, alias="AURA_DEV_CAP")
+    measurement_cap: int = Field(default=120, alias="AURA_MEASUREMENT_CAP")
+    ip_agent_per_hour: int = Field(default=40, alias="AURA_IP_AGENT_PER_HOUR")
+    # Raster analyses without the presenter token: 0 = presenter only, N > 0 = N public analyses
+    # (AURA_UNLIMITED opens them to everyone).
     raster_public_cap: int = Field(default=0, alias="AURA_RASTER_PUBLIC_CAP")
     budget_tz: str = Field(default="Europe/Helsinki", alias="AURA_BUDGET_TZ")
 
@@ -73,11 +82,17 @@ class Settings(BaseSettings):
     answerer: Literal["hybrid", "agent", "exact"] = Field(
         default="hybrid", alias="AURA_ANSWERER"
     )
+    # Felix's lossless drawing store (jstore, in-process) on Postgres. Unset = quick mode: jstore is
+    # never imported, uploads stop at our own parse (stage ready_unindexed). The DSN holds a password.
+    store_dsn: SecretStr | None = Field(default=None, alias="AURA_STORE_DSN")
+    store_reader_password: SecretStr | None = Field(default=None, alias="AURA_STORE_READER_PASSWORD")
+    store_data_dir: Path = Field(default=BACKEND_DIR / ".data" / "store", alias="AURA_STORE_DATA_DIR")
+    store_workers: int = Field(default=2, alias="AURA_STORE_WORKERS")
     sidecar_url: str | None = Field(default=None, alias="AURA_SIDECAR_URL")
     sidecar_token_file: Path | None = Field(default=None, alias="AURA_SIDECAR_TOKEN_FILE")
     sidecar_model: str = Field(default="gemini-3.8-flash", alias="AURA_SIDECAR_MODEL")
-    agent_runs_per_ip_hour: int = Field(default=0, alias="AURA_AGENT_RUNS_PER_IP_HOUR")
-    agent_runs_per_day: int = Field(default=0, alias="AURA_AGENT_RUNS_PER_DAY")
+    agent_runs_per_ip_hour: int = Field(default=3, alias="AURA_AGENT_RUNS_PER_IP_HOUR")
+    agent_runs_per_day: int = Field(default=15, alias="AURA_AGENT_RUNS_PER_DAY")
 
     turn_deadline_s: float = Field(default=120.0, alias="AURA_TURN_DEADLINE_S")
     # dev: every answering stage in the trace (grab, decision, filter, answer) with its detail;
@@ -89,14 +104,22 @@ class Settings(BaseSettings):
     cleanup_every_s: float = Field(default=3600.0, alias="AURA_CLEANUP_S")
     upload_ttl_s: float = Field(default=24 * 3600.0, alias="AURA_UPLOAD_TTL_S")
     # Upload abuse limits (checked before the body is read). 0 = unlimited.
-    uploads_per_ip_hour: int = Field(default=0, alias="AURA_UPLOADS_PER_IP_HOUR")
-    max_queued_uploads: int = Field(default=0, alias="AURA_MAX_QUEUED_UPLOADS")
-    upload_quota_bytes: int = Field(default=0, alias="AURA_UPLOAD_QUOTA_BYTES")
+    uploads_per_ip_hour: int = Field(default=10, alias="AURA_UPLOADS_PER_IP_HOUR")
+    max_queued_uploads: int = Field(default=20, alias="AURA_MAX_QUEUED_UPLOADS")
+    upload_quota_bytes: int = Field(default=2 * 1024**3, alias="AURA_UPLOAD_QUOTA_BYTES")
 
     @field_validator("allowed_origins", mode="before")
     @classmethod
     def _origins(cls, v: object) -> object:
         return _split_csv(v)
+
+    @model_validator(mode="after")
+    def _unlimited(self) -> Settings:
+        """AURA_UNLIMITED: every request/upload cap becomes 0 (= unlimited); counting goes on."""
+        if self.unlimited:
+            for name in UNLIMITED_CAPS:
+                object.__setattr__(self, name, 0)
+        return self
 
     @property
     def db_path(self) -> Path:

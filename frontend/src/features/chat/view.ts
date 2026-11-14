@@ -1,4 +1,4 @@
-import type { AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
+import type { AgentFailure, AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
 import { LOCALE, fmtArea, fmtCount, noun } from '@/lib/format'
 import { t, type StringKey, type UiKey } from '@/i18n/strings'
@@ -146,12 +146,17 @@ const METHOD_KEY: Record<Exclude<Method, 'cad_geometry'>, StringKey> = {
   detector: 'method_detector',
   vision: 'method_vision',
   agent_estimate: 'method_agent',
+  pdf_vector: 'method_pdf_vector',
+  store_sql: 'method_store_sql',
   none: 'method_none',
 }
 
 export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
   const out: Chip[] = []
   if (resp.method === 'cad_geometry') out.push({ key: 'method', text: t(lang, 'chip_exact'), tone: 'success' })
+  // No model involved: exact-style chip, unless the answer carries an estimate (then it keeps the estimate styling).
+  else if ((resp.method === 'pdf_vector' || resp.method === 'store_sql') && !resp.estimate)
+    out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'success' })
   else if (resp.method === 'agent_estimate') {
     out.push({ key: 'method', text: t(lang, 'chip_agent_estimate'), tone: 'info' })
     if (resp.cost_usd > 0 || resp.calls > 0) {
@@ -162,7 +167,9 @@ export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
         outline: true,
       })
     }
-  } else out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'neutral' })
+  } else
+    // A vision count is a model estimate (plan principle: model-detected items are always labelled as estimates).
+    out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: resp.method === 'vision' ? 'info' : 'neutral' })
 
   const c = resp.check
   if (c?.image === 'none')
@@ -361,6 +368,8 @@ const METHOD_FOOTER: Record<Method, StringKey> = {
   detector: 'method_detector',
   vision: 'method_vision',
   agent_estimate: 'method_agent',
+  pdf_vector: 'method_pdf_vector',
+  store_sql: 'method_store_sql',
   none: 'method_none',
 }
 
@@ -408,6 +417,7 @@ export function announce(resp: AskResponse, d: Derived): string {
     if (r === 'not_on_drawing') return 'Not on this drawing. Nothing guessed.'
     if (r === 'not_supported_yet') return 'Fixtures of this kind are not extracted yet. Nothing guessed.'
     if (r === 'low_confidence') return 'Not sure enough to say. Nothing stated as a count.'
+    if (r === 'not_answerable') return 'Not in this drawing’s data. Nothing guessed.'
     return 'The question could not be matched to this drawing.'
   }
   const v = valueParts(resp, d, 'en')
@@ -593,21 +603,17 @@ export function resolveSlashCommand(input: string, ctx: { hasTurns: boolean }): 
 }
 
 
-export type AgentFailure = 'unavailable' | 'timeout' | 'error'
+export type { AgentFailure } from '@/api/contract'
 
-/**
- * A deep-agent run that failed (service down, deadline, run error) arrives as a `low_confidence` abstain with no
- * estimate. Prefers an explicit `agent_failure` field when the backend sends one; otherwise reads the backend's
- * fixed "look" trace wording. Never returns the raw text: the card shows its own translated copy.
- */
+/** A failed deep-agent run (service down, deadline, run error), as the backend labels it in `agent_failure`. */
 export function agentFailure(resp: AskResponse): AgentFailure | null {
-  const a = resp.answer
-  if (a.kind !== 'abstain' || a.reason !== 'low_confidence' || resp.estimate) return null
-  const explicit = (resp as { agent_failure?: unknown }).agent_failure
-  if (explicit === 'unavailable' || explicit === 'timeout' || explicit === 'error') return explicit
-  const look = resp.trace.find((n) => n.id === 'look')?.body ?? ''
-  if (/service is unavailable/i.test(look)) return 'unavailable'
-  if (/did not finish in/i.test(look)) return 'timeout'
-  if (/could not complete this run/i.test(look)) return 'error'
-  return null
+  return resp.answer.kind === 'abstain' ? (resp.agent_failure ?? null) : null
+}
+
+/** What the exact router, tools and SQL tried, from the trace's `look` node (English, from the server); null when absent. */
+export function triedText(resp: AskResponse): string | null {
+  const look = resp.trace.find((n) => n.id === 'look')
+  const text = look?.body.replace(/^I cannot answer this from the drawing.s data:?\s*/i, '').trim()
+  if (!text) return null
+  return text.length > 240 ? `${text.slice(0, 237)}…` : text
 }

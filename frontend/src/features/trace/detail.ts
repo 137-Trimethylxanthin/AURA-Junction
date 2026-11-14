@@ -15,8 +15,16 @@ export interface TraceDetail {
     runnerUp?: string
     runnerUpPct?: number
   }
+  /** A query run by this step (`detail.query`, with `rows`, `columns`, `ms`), on any stage. */
+  sql?: { query: string; rows?: number; columns: string[]; ms?: number }
   resources?: { tables?: string; grabbed?: number; ms?: number }
-  filter?: { rule?: string; kept?: number; dropped?: number; reasons: { id: string; reason?: string }[] }
+  filter?: {
+    rule?: string
+    kept?: number
+    keptIds: string[]
+    dropped?: number
+    reasons: { id: string; reason?: string }[]
+  }
   answer?: { source?: string; calls?: number; cost?: number }
 }
 
@@ -37,6 +45,8 @@ export function traceDetail(node: Pick<TraceNode, 'stage' | 'detail'>): TraceDet
   const d = rec(node.detail)
   const out: TraceDetail = { stage: str(node.stage) }
   if (!d) return out
+  const query = str(d.query)
+  if (query) out.sql = { query, rows: num(d.rows), columns: strs(d.columns), ms: num(d.ms) }
   if (node.stage === 'decision') {
     out.decision = {
       decider: str(d.decider),
@@ -55,6 +65,7 @@ export function traceDetail(node: Pick<TraceNode, 'stage' | 'detail'>): TraceDet
     out.filter = {
       rule: str(d.rule),
       kept: Array.isArray(d.kept) ? d.kept.length : undefined,
+      keptIds: Array.isArray(d.kept) ? d.kept.flatMap((x) => (typeof x === 'string' || typeof x === 'number' ? [String(x)] : [])) : [],
       dropped: dropped?.length,
       reasons: (dropped ?? []).flatMap((x) => {
         const r = rec(x)

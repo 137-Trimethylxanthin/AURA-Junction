@@ -207,16 +207,12 @@ describe('autoGroupDrawings & myProjects', () => {
     expect(created.floors.map((f) => f.drawing_id)).toEqual(['swiss-4397', 'swiss-46639'])
     expect(myProjects.forDrawing('swiss-46639')?.id).toBe('proj-duplex')
 
-    // Auto-matched bundle removed by user stays ungrouped during resolveAll / syncFromServer
+    // No auto-grouping any more: same-named uploads stay separate, and a server auto-match is not adopted.
     const autoDrawings = [
       mkSummary('up-x1', 'Chalet Alpina · EG'),
       mkSummary('up-x2', 'Chalet Alpina · 1. OG'),
     ]
-    const resolvedBefore = myProjects.resolveAll(autoDrawings)
-    expect(resolvedBefore.map((p) => p.id)).toContain('auto-stem-chalet-alpina')
-
-    myProjects.remove('auto-stem-chalet-alpina')
-    expect(myProjects.resolveAll(autoDrawings).map((p) => p.id)).not.toContain('auto-stem-chalet-alpina')
+    expect(myProjects.resolveAll(autoDrawings).map((p) => p.id)).toEqual(['proj-duplex'])
     myProjects.syncFromServer([
       {
         id: 'auto-stem-chalet-alpina',
@@ -229,6 +225,19 @@ describe('autoGroupDrawings & myProjects', () => {
       },
     ])
     expect(myProjects.get('auto-stem-chalet-alpina')).toBeNull()
+    // ...but the pages of one multi-page upload are still one project.
+    myProjects.syncFromServer([
+      {
+        id: 'proj-up-pdf',
+        title: 'house.pdf',
+        floors: [
+          { drawing_id: 'up-pdf', label: 'Page 1', order: 1 },
+          { drawing_id: 'up-pdf-p2', label: 'Page 2', order: 2 },
+        ],
+        auto_matched: true,
+      },
+    ])
+    expect(myProjects.get('proj-up-pdf')?.floors).toHaveLength(2)
   })
 
   it('does not poison floor order/labels or project titles with random up-<id> tokens like up-2f or up-b1', () => {

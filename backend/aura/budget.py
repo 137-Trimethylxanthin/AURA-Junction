@@ -12,7 +12,8 @@ Every cap is "0 = unlimited" (the default); counting and cost booking happen reg
 - daily cap: public-bucket requests per Europe/Helsinki day.
 - dev / measurement buckets: their own caps.
 - per IP (public bucket only, skipped with the presenter token): agent and router-miss requests
-  per rolling hour; raster requests without the presenter token: `raster_public_cap` (-1 = never).
+  per rolling hour; raster requests need the presenter token unless `raster_public_cap` > 0
+  (or AURA_UNLIMITED).
   Checks are not limited per IP: they are cached per (drawing, subject) and bounded by the daily cap.
 - kill switch: `AURA_MODELS=off`, read on every reserve.
 """
@@ -36,7 +37,7 @@ Bucket = Literal["public", "dev", "measurement"]
 # What a request is for. The per-IP kind is derived from this.
 Purpose = str
 
-AGENT_PURPOSES = {"choice", "abstain_gate", "agent", "rewrite"}
+AGENT_PURPOSES = {"choice", "abstain_gate", "agent", "rewrite", "door_leaves"}  # per-IP hourly limit
 RASTER_PURPOSES = {"raster_detect", "raster_score"}
 
 _DEFAULT_PRICE: tuple[float, float] = (2.00, 10.00)
@@ -336,8 +337,7 @@ class Budget:
                         )
                 if not presenter:
                     if purpose in RASTER_PURPOSES:
-                        cap = self.s.raster_public_cap
-                        if cap < 0 or not _under(self._raster_public, cap):
+                        if not self.s.unlimited and self._raster_public >= self.s.raster_public_cap:
                             raise BudgetError(
                                 "presenter_required", "Raster analysis needs the presenter token."
                             )

@@ -9,6 +9,8 @@ dependencies = [
     "fastmcp>=4.2.0",
     "google-genai>=3.3.0",
     "httpx>=0.28.1",
+    "ifcopenshell>=0.9.0.post1",
+    "jstore",
     "modal>=1.6.4",
     "numpy>=2.5.4",
     "pillow>=13.0.0",
@@ -21,9 +23,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Kept so existing commands (`uv run --extra ifc ...`) still work; ifcopenshell is now required (jstore).
 ifc = [
     "ifcopenshell>=0.9.0.post1",
 ]
+
+[tool.uv.sources]
+# Felix's lossless store as an in-process library (one backend, one process); see store/pyproject.toml.
+jstore = { path = "../store", editable = true }
+
+[tool.uv]
+# rapidocr-onnxruntime asks for opencv-python (needs libGL); jstore ships opencv-python-headless instead.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
 
 [dependency-groups]
 dev = [

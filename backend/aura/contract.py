@@ -23,10 +23,13 @@ Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "roo
 TextSubject = Literal["label", "fire_rating"]
 BoxSubject = Subject | TextSubject
 BOX_SUBJECTS: tuple[str, ...] = ("window", "door", "washbasin", "wc", "bathtub", "shower")
-Method = Literal["cad_geometry", "ocr", "detector", "vision", "agent_estimate", "none"]
+# pdf_vector (1.2 additive): read from a PDF's vector paths and text by the drawing store (no model).
+Method = Literal["cad_geometry", "ocr", "detector", "vision", "agent_estimate", "pdf_vector",
+                 "store_sql", "none"]  # store_sql (1.2): an exact SQL answer over the drawing store
 TraceKind = Literal["exact", "model", "warn", "info"]
 AbstainReason = Literal["not_on_drawing", "not_supported_yet", "unclear_question",
-                        "low_confidence"]  # 1.1: a model estimate below its confidence gate
+                        "low_confidence",  # 1.1: a model estimate below its confidence gate
+                        "not_answerable"]  # 1.2: no tier could answer from the drawing's data
 ErrorCode = Literal[
     "bad_request",
     "unknown_drawing",
@@ -51,6 +54,7 @@ ToolName = Literal[
     "what_if",
     "find_text",
     "deep_agent",
+    "sql",  # 1.2: a guarded SELECT over the drawing store (tool steps)
 ]
 Route = Literal["template", "choice", "agent", "cache"]
 
@@ -150,6 +154,10 @@ class AskRequest(_Open):
     drawing_id: str = Field(min_length=1, max_length=200)
     question: str = Field(max_length=2000)
     scope: Scope | None = None
+    # 1.2 additive: a sheet of a multi-plan building is answered for the WHOLE building unless the
+    # question names a floor or `sheet_ids` selects some sheets (default: every sheet).
+    project_id: str | None = Field(default=None, max_length=200)
+    sheet_ids: list[str] | None = Field(default=None, max_length=50)
     overrides: list[Override] | None = Field(default=None, max_length=50)
     lang_hint: Lang | None = None
 
@@ -159,6 +167,8 @@ class ChatRequest(_Open):
     drawing_id: str = Field(min_length=1, max_length=200)
     message: str = Field(min_length=1, max_length=2000)
     scope: Scope | None = None
+    project_id: str | None = Field(default=None, max_length=200)  # see AskRequest
+    sheet_ids: list[str] | None = Field(default=None, max_length=50)
     overrides: list[Override] | None = Field(default=None, max_length=50)
     lang_hint: Lang | None = None
 
@@ -335,12 +345,25 @@ class TraceNode(_M):
     # its detail: {decider, model?, question?, options?, chosen, confidence?, runner_up?,
     # runner_up_confidence?, matched, route}. 'resources': {tables, grabbed, ms}.
     # 'filter': {rule, kept, dropped[{id, reason}]}. 'answer': {source, calls, cost_usd}.
-    stage: Literal["resources", "decision", "filter", "answer"] | None = None
+    stage: Literal["resources", "decision", "filter", "answer", "scope"] | None = None
     detail: dict[str, Any] | None = None
+
+
+class BreakdownItem(_M):
+    """1.2 additive: one sheet's share of a whole-building answer ("ground floor 14")."""
+
+    drawing_id: str
+    label: str
+    status: Literal["ok", "abstain", "error"]
+    value: float | None = None  # the sheet's count / area / quantity when it is summable
+    unit: str | None = None
 
 
 class AskResponse(_M):
     contract_version: str = CONTRACT_VERSION
+    # 1.2 additive: set only when the deep agent failed (the answer is then an abstain); the
+    # frontend shows a neutral "Ask again" card instead of a verdict.
+    agent_failure: Literal["unavailable", "timeout", "error"] | None = None
     answer: Answer
     evidence: Evidence
     detected_lang: Lang
@@ -361,6 +384,9 @@ class AskResponse(_M):
     route: Route | None = None
     explanation: str | None = None
     estimate: Estimate | None = None  # 1.1: a model estimate (image-only plans), never a fact
+    # 1.2 additive: per-sheet shares of a whole-building answer; evidence items carry their sheet's
+    # `drawing_id`, `scope` is the project scope of the sheets that were asked.
+    breakdown: list[BreakdownItem] | None = None
 
 
 class ErrorBody(_M):

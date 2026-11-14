@@ -31,6 +31,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { useUi } from "@/i18n/uiLang"
 import { actions } from "@/store"
+import { fileTypeOf } from "./ownUploads"
 
 export interface SelectablePlan {
   id: string
@@ -676,14 +677,23 @@ export function ProjectBundlerBar({
                               {bundle.title}
                             </p>
                             <p className="num text-xs text-muted-foreground">
-                              {tu("proj_floors_n", { n: sortedFloors.length })}
+                              {tu("ug_sheets_n", { n: sortedFloors.length })}
                             </p>
                           </div>
-                          {bundle.auto_matched ? (
-                            <Badge variant="secondary" className="shrink-0 text-xs">
-                              {tu("proj_auto_badge")}
-                            </Badge>
-                          ) : null}
+                          <span className="flex shrink-0 flex-wrap justify-end gap-1" data-project-types>
+                            {[
+                              ...new Set(
+                                sortedFloors.map((f) => {
+                                  const plan = planById.get(f.drawing_id)
+                                  return fileTypeOf({ title: plan?.title ?? f.drawing_id, kind: plan?.kind ?? "raster" })
+                                })
+                              ),
+                            ].map((t) => (
+                              <Badge key={t} variant="outline" className="text-xs">
+                                {t === "IMAGE" ? tu("kind_image") : t}
+                              </Badge>
+                            ))}
+                          </span>
                         </div>
 
                         <div

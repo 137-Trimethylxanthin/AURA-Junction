@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -31,7 +32,7 @@ from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from aura import tools, uploads
+from aura import ingest_cost, tools, uploads
 from aura.agent_client import AgentClient
 from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, Ledger, RequestRecord
 from aura.cache import AnswerCache, CheckCache
@@ -46,6 +47,8 @@ from aura.contract import (
     RewriteRequest,
 )
 from aura.csvout import evidence_csv
+from aura.drawing_store import NOTES as DS_NOTES
+from aura.drawing_store import DrawingStore
 from aura.gemini.client import GeminiClient, Meter, Transport
 from aura.jobs import Jobs
 from aura.logging import AccessLogMiddleware, RequestLogFile, setup_logging
@@ -59,6 +62,9 @@ from aura.voice import router as voice_router
 from aura.writer import Writer
 
 log = logging.getLogger("aura.main")
+
+REINDEX_EVERY_S = 60.0  # one store retry per upload per minute
+REINDEX_PER_IP_HOUR = 10
 
 SERVED_FILES = {"plan.svg", "original.png", "thumb.png"}  # allow-list: no other names
 LIBRARY_CACHE = "public, max-age=3600"
@@ -220,15 +226,16 @@ def _synthesize_projects(s: Services) -> list[ProjectBundle]:
 
 
 def _tokens(request: Request, header: str) -> list[str]:
-    """One or more tokens in a header (comma-separated, e.g. every project the browser owns)."""
-    return [t.strip() for t in (request.headers.get(header) or "").split(",") if t.strip()][:50]
+    """One or more tokens in a header: comma-separated and/or the header repeated."""
+    return [t.strip() for v in request.headers.getlist(header) for t in v.split(",") if t.strip()][:50]
 
 
 def _project_access(s: Services, request: Request, floor_ids: list[str], token_hash: str | None) -> bool:
-    """The request owns the project: its owner token (`x-project-token`), or for a bundle built
-    from an upload (multi-page PDF), the delete token of one of its upload floors (`x-delete-token`)."""
-    if token_hash and any(uploads.token_ok(t, token_hash) for t in _tokens(request, "x-project-token")):
-        return True
+    """The request owns the project. A project with an owner token (`token_hash`) is reached only
+    with that token (`x-project-token`); a bundle auto-built from an upload (no owner token) is
+    reached with the delete token of one of its upload floors (`x-delete-token`)."""
+    if token_hash:
+        return any(uploads.token_ok(t, token_hash) for t in _tokens(request, "x-project-token"))
     given = _tokens(request, "x-delete-token")
     if given and s.store is not None:
         for did in floor_ids:
@@ -248,12 +255,18 @@ def _project_of(s: Services, project_id: str) -> ProjectBundle | None:
     return next((p for p in _synthesize_projects(s) if p.id == project_id), None)
 
 
-def _scope_refused(s: Services, drawing_id: str, scope: Any) -> JSONResponse | None:
+def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -> JSONResponse | None:
     """A project scope is used only as the server stored it: every drawing it names (and the
-    drawing asked about) must be a floor of that stored bundle."""
+    drawing asked about) must be a floor of that stored bundle, and a bundle with an upload floor
+    is private exactly as in GET /projects (unknown to anyone without its token)."""
     if scope is None or getattr(scope, "kind", None) != "project":
         return None
     proj = _project_of(s, scope.project_id)
+    if proj is not None and any(f.drawing_id.startswith("up-") for f in proj.floors):
+        row = s.store.project_row(proj.id) if s.store else None
+        if not _project_access(s, request, [f.drawing_id for f in proj.floors],
+                               row.get("token_hash") if row else None):
+            proj = None  # same answer as an unknown id: do not confirm it exists
     if proj is None:
         return _err("not_found", f"Unknown project '{scope.project_id}'.", 404)
     members = {f.drawing_id for f in proj.floors}
@@ -261,6 +274,27 @@ def _scope_refused(s: Services, drawing_id: str, scope: Any) -> JSONResponse | N
     if outside:
         return _err("bad_request", f"Not floors of project '{proj.id}': {', '.join(outside[:5])}.", 400)
     return None
+
+
+def _visible_projects(s: Services, request: Request) -> list[ProjectBundle]:
+    """The bundles this caller may see (same rule as GET /projects)."""
+    hashes = {r["id"]: r.get("token_hash") for r in (s.store.project_rows() if s.store else [])}
+    return [p for p in _synthesize_projects(s)
+            if not any(f.drawing_id.startswith("up-") for f in p.floors)
+            or _project_access(s, request, [f.drawing_id for f in p.floors], hashes.get(p.id))]
+
+
+def _building_run(s: Services, request: Request, drawing_id: str, question: str, body: Any):
+    """A whole-building `run` for a drawing that is a sheet of a multi-plan project, else None."""
+    from aura import building
+
+    scope = body.scope.model_dump(exclude_none=True) if body.scope else None
+    plan = building.plan_for(_visible_projects(s, request), drawing_id, question,
+                             project_id=body.project_id, sheet_ids=body.sheet_ids, scope=scope)
+    if plan is None:
+        return None
+    from aura import pipeline
+    return functools.partial(building.run, plan=plan, base_run=pipeline.run, persist=pipeline._persist)
 
 
 def _same_project(s: Services, did_a: str, did_b: str) -> bool:
@@ -348,8 +382,22 @@ def create_app(
             if (settings.sidecar_url or sidecar_transport is not None)
             else None
         )
+        drawing_store = DrawingStore(settings, writer, store)
+        if settings.store_dsn is not None:  # unset = quick mode; jstore is never imported
+            await drawing_store.start()
+        app.state.drawing_store = drawing_store
         jobs = Jobs(writer, **(job_options or {}))
         jobs.on_done = registry.evict
+        jobs.on_ready = drawing_store.on_parsed
+        jobs.store_on = drawing_store.available
+
+        def store_failed(did: str) -> None:  # no store index for this page: our detection instead
+            task = asyncio.create_task(jobs.detect_later(did, settings.uploads_dir / did,
+                                                         drawing_store.ctx.get(did)))
+            jobs.tasks.add(task)
+            task.add_done_callback(jobs.tasks.discard)
+
+        drawing_store.on_store_failed = store_failed
         jobs.after_raster = _raster_hook(client)
         app.state.jobs = jobs
         app.state.svc = Services(
@@ -362,9 +410,22 @@ def create_app(
             answers=AnswerCache(ttl_s=settings.upload_ttl_s, store=store, writer=writer),
             checks=CheckCache(store, writer),
             agent=agent,
+            drawing_store=drawing_store,
         )
         holder["svc"] = app.state.svc
-        cleanup = asyncio.create_task(_cleanup_loop(app.state.svc), name="aura-cleanup")
+
+        def materialised(did: str) -> None:  # the drawing file changed: nothing cached may outlive it
+            registry.evict(did)
+            app.state.svc.answers.drop_drawing(did)
+            app.state.svc.checks.forget_drawing(did)
+
+        drawing_store.on_materialised = materialised
+        # Before the first request: the pool's pending set is in memory, so unsettled pages are
+        # re-followed now, never read as "not pending" by a status poll.
+        if drawing_store.available():
+            await drawing_store.resume_all(store.upload_rows())
+            drawing_store.start_sweeper()
+        cleanup = asyncio.create_task(_cleanup_loop(app.state.svc, drawing_store), name="aura-cleanup")
         try:
             async with mcp_app.router.lifespan_context(mcp_app):
                 yield
@@ -373,6 +434,7 @@ def create_app(
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup
             await jobs.cancel_all()
+            await drawing_store.close()
             await writer.stop()
             if budget.ledger is not None:
                 budget.ledger.close()
@@ -441,8 +503,11 @@ def create_app(
                 "budget_left": (budget["event"]["cap"] - budget["event"]["used"]
                                 if budget["event"]["cap"] > 0 else None),
                 **(s.store.spend_totals() if s.store else {}),
+                # the drawing store's ingestion (Gemini detection/reading of uploads), priced per model
+                **(ingest_cost.totals() if request.app.state.drawing_store.available() else {}),
             },
         }
+        body["store"] = "on" if request.app.state.drawing_store.available() else "off"
         if s.agent is not None:
             body["agent_ok"] = await s.agent.health_ok()
         return JSONResponse(body, status_code=200 if ok else 503)
@@ -545,9 +610,22 @@ def create_app(
             })
         except ValidationError as e:
             return JSONResponse({"detail": jsonable_encoder(e.errors())}, status_code=422)
+        given = _tokens(request, "x-delete-token")
+        # Floors an already-owned project held before this save stay covered by its owner token;
+        # every other upload floor needs its own delete token (one token never covers another).
+        covered: set[str] = set()
+        if existing is not None and existing.get("token_hash") and _project_access(
+                s, request, [], existing["token_hash"]):
+            covered = {str(f.get("drawing_id", "")) for f in existing["floors"]}
         for fl in pb.floors:
             if s.registry.get(fl.drawing_id) is None:
                 return _err("unknown_drawing", f"Unknown drawing '{fl.drawing_id}'.", 404)
+            # An upload may only be bundled by whoever holds its delete token (library drawings
+            # are public); otherwise a project would expose someone else's upload.
+            row = s.store.drawing_row(fl.drawing_id) if (s.store and fl.drawing_id.startswith("up-")) else None
+            if (row is not None and fl.drawing_id not in covered
+                    and not any(uploads.token_ok(t, row["delete_token_hash"]) for t in given)):
+                return _err("bad_request", f"You do not own drawing '{fl.drawing_id}'.", 403)
         sorted_floors = sorted(pb.floors, key=lambda f: (float(f.order), f.label, f.drawing_id))
         pb = pb.model_copy(update={"floors": sorted_floors})
         dumped = pb.model_dump(exclude_none=True)
@@ -566,7 +644,7 @@ def create_app(
                 ),
             )
         # The owner token is shown once, on create; only its hash is stored.
-        return dumped | ({"project_token": new_token} if new_token else {})
+        return dumped | ({"token": new_token, "project_token": new_token} if new_token else {})
 
     @app.delete("/projects/{project_id}")
     async def delete_project(project_id: str, request: Request):
@@ -597,12 +675,60 @@ def create_app(
                 body["progress"] = row["progress"]
             if row["error"]:
                 body["error"] = row["error"]
-            return body
+            return body | await _store_status(svc(request), request.app.state.drawing_store, row)
         d = svc(request).registry.get(drawing_id)
         if d is None:
             return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
         return {"contract_version": CONTRACT_VERSION, "id": d.id,
                 "status": d.drawing.get("status", "ready")}
+
+    reindex_last: dict[str, float] = {}
+    reindex_by_ip: dict[str, deque] = defaultdict(deque)
+
+    @app.get("/uploads/accepted")
+    async def uploads_accepted(request: Request) -> dict:
+        """What the upload page may offer right now: types, extensions and size caps."""
+        ds = request.app.state.drawing_store
+        images_open = (is_presenter(request, settings) or settings.unlimited
+                       or settings.raster_public_cap > 0)
+        return {"contract_version": CONTRACT_VERSION, "mode": ds.mode,
+                "types": uploads.accepted(store_on=ds.available(), images_open=images_open),
+                "ttl_hours": int(settings.upload_ttl_s // 3600)}
+
+    @app.post("/drawings/{drawing_id}/reindex")
+    @app.post("/drawings/{drawing_id}/store/retry")
+    async def reindex_drawing(drawing_id: str, request: Request):
+        """Retry the drawing store for an upload (all its pages); owner only (x-delete-token)."""
+        row = upload_row(request, drawing_id)
+        if row is None:
+            return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
+        if not uploads.token_ok(request.headers.get("x-delete-token"), row["delete_token_hash"]):
+            return _err("bad_request", "Wrong delete token.", 403)
+        ds = request.app.state.drawing_store
+        if not ds.available():
+            return _err("bad_request", "The drawing store is off (quick mode); nothing to retry.", 409)
+        s = svc(request)
+        pages = [drawing_id] + ([r["id"] for r in s.store.upload_rows() if r["id"].startswith(f"{drawing_id}-p")]
+                                if s.store and not re.search(r"-p\d+$", drawing_id) else [])
+        if any(p in ds.following for p in pages):
+            return _err("bad_request", "The drawing store is still working on this upload.", 409)
+        now, ip = time.time(), client_ip_hash(request, settings) or "-"
+        presenter = is_presenter(request, settings)
+        if now - reindex_last.get(drawing_id, 0.0) < REINDEX_EVERY_S:
+            return _err("rate_limited", "This upload was retried a moment ago; wait a minute.", 429)
+        q = reindex_by_ip[ip]
+        while q and now - q[0] > 3600:
+            q.popleft()
+        if len(q) >= REINDEX_PER_IP_HOUR and not presenter:
+            return _err("rate_limited", "Too many retries from this address; try again later.", 429)
+        reindex_last[drawing_id] = now
+        q.append(now)
+        for p in pages:  # the fallback detection spends under the requester's budget context
+            ds.ctx[p] = {"presenter": presenter, "ip_hash": client_ip_hash(request, settings)}
+        await ds.reindex(pages)
+        row = upload_row(request, drawing_id)
+        body = {"contract_version": CONTRACT_VERSION, "id": drawing_id, "status": row["status"]}
+        return JSONResponse(body | await _store_status(s, ds, row), status_code=202)
 
     @app.get("/drawings/{drawing_id}")
     async def get_drawing(drawing_id: str, request: Request):
@@ -632,7 +758,7 @@ def create_app(
             return _err("unknown_drawing", f"Unknown drawing '{drawing_id}'", 404)
         if not uploads.token_ok(request.headers.get("x-delete-token"), row["delete_token_hash"]):
             return _err("bad_request", "Wrong delete token.", 403)
-        await _remove_upload(svc(request), drawing_id)
+        await _remove_upload(svc(request), drawing_id, request.app.state.drawing_store)
         return Response(status_code=204)
 
     upload_times: dict[str, deque[float]] = defaultdict(deque)  # ip_hash → recent uploads
@@ -652,7 +778,11 @@ def create_app(
         if (refused := origin_refused(request)) is not None:
             return refused
         jobs = request.app.state.jobs
-        if 0 < settings.max_queued_uploads <= len(jobs.tasks):
+        # SVGs skip our parse queue (the store reads them) but count toward the same cap.
+        svg_busy = (svc(request).store._q(
+            "SELECT count(*) n FROM drawings WHERE status='processing' AND meta LIKE '%\"kind\": \"svg\"%'"
+        )[0]["n"] if svc(request).store else 0)
+        if 0 < settings.max_queued_uploads <= len(jobs.tasks) + svg_busy:
             return _err("rate_limited", "Uploads are busy; try again in a few minutes.", 429)
         if settings.upload_quota_bytes > 0 and _dir_bytes(settings.uploads_dir) >= settings.upload_quota_bytes:
             return _err("rate_limited", "Upload storage is full; try again later.", 429)
@@ -685,7 +815,8 @@ def create_app(
         size = f.size if f.size is not None else len(head)
         try:
             kind = uploads.validate(head, size, presenter_ok=presenter
-                                    or settings.raster_public_cap >= 0)
+                                    or settings.unlimited or settings.raster_public_cap > 0,
+                                    store_on=request.app.state.drawing_store.available())
         except uploads.UploadError as e:
             return _err(e.code, str(e), e.status)
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -708,6 +839,25 @@ def create_app(
              json.dumps({"kind": kind})))
         meta = {"title": title, "created_at": _iso(now),
                 "expires_at": _iso(exp_ts)}
+        request.app.state.drawing_store.ctx[acc.drawing_id] = {
+            "presenter": presenter, "ip_hash": client_ip_hash(request, settings)}
+        if kind == "svg" and not await asyncio.to_thread(uploads.svg_is_safe, acc.src):
+            await _remove_upload(s, acc.drawing_id)
+            return _err("unsupported_type", "This SVG declares a DTD or entities, which are not "
+                        "accepted. Save it as plain SVG and upload again.", 415)
+        if kind == "svg":
+            # No parse of ours: the drawing store reads the SVG; materialise writes the page image
+            # and marks the row ready. The SVG itself is never served (SERVED_FILES).
+            await s.writer.execute(  # type: ignore[union-attr]
+                "UPDATE drawings SET status='processing', progress=NULL WHERE id=?", (acc.drawing_id,))
+            skeleton = {"contract_version": CONTRACT_VERSION, "id": acc.drawing_id, "kind": "raster",
+                        "source": "upload", "status": "ready", "rooms": [], "units": [],
+                        "frame": {}, **meta}
+            (acc.dir / "drawing.json").write_text(json.dumps(skeleton), encoding="utf-8")
+            request.app.state.drawing_store.on_parsed(acc.drawing_id, [acc.drawing_id])
+            return JSONResponse({"contract_version": CONTRACT_VERSION, "drawing_id": acc.drawing_id,
+                                 "delete_token": acc.delete_token, "status": "queued"},
+                                status_code=202)
         request.app.state.jobs.submit(
             acc.drawing_id, worker_kind, acc.src, acc.dir, meta,
             {"presenter": presenter, "ip_hash": client_ip_hash(request, settings),
@@ -752,12 +902,14 @@ def create_app(
     async def post_ask(body: AskRequest, request: Request):
         if (r := not_ready(request, body.drawing_id)) is not None:
             return r
-        if (r := _scope_refused(svc(request), body.drawing_id, body.scope)) is not None:
+        if (r := _scope_refused(svc(request), request, body.drawing_id, body.scope)) is not None:
             return r
         meters = {"answer": Meter(), "check": Meter()}
         try:
             async with asyncio.timeout(settings.turn_deadline_s):
-                return JSONResponse(await ask(svc(request), body, caller_of(request), meters))
+                s = svc(request)
+                run_fn = _building_run(s, request, body.drawing_id, body.question, body)
+                return JSONResponse(await ask(s, body, caller_of(request), meters, run_fn))
         except TimeoutError:
             return _err("timeout", "The answer took too long.", 504, **_spent(*meters.values()))
 
@@ -768,13 +920,14 @@ def create_app(
         s = svc(request)
         if s.registry.get(body.drawing_id) is None:
             return _err("unknown_drawing", f"Unknown drawing '{body.drawing_id}'", 404)
-        if (r := _scope_refused(s, body.drawing_id, body.scope)) is not None:
+        if (r := _scope_refused(s, request, body.drawing_id, body.scope)) is not None:
             return r
         if body.conversation_id:
             conv = s.store.conversation(body.conversation_id) if s.store else None
             if conv is not None and not _same_project(s, conv["drawing_id"], body.drawing_id):
                 return _err("bad_request", "That conversation belongs to another drawing.", 400)
-        gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s)
+        gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s,
+                          _building_run(s, request, body.drawing_id, body.message, body))
         return StreamingResponse(_sse(gen), media_type="text/event-stream",
                                  headers={"cache-control": NO_STORE, "x-accel-buffering": "no"})
 
@@ -989,11 +1142,117 @@ async def _remove_single_upload(s: Services, drawing_id: str) -> None:
     await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     await w.execute("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     await w.execute("DELETE FROM answer_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
+    # Saved chat sessions on the upload (aura/sessions.py) go too; the table exists once sessions ran.
+    if s.store is not None and s.store._q(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_sessions'"):
+        await w.execute("DELETE FROM chat_sessions WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     s.answers.drop_drawing(drawing_id)
     s.checks.forget_drawing(drawing_id)
 
 
-async def _remove_upload(s: Services, drawing_id: str) -> None:
+_STAGE_RANK = {"queued": 0, "parsing": 1, "reading": 2, "interpreting": 3, "materialising": 4}
+_STAGE_FAIL = ("failed", "store_failed", "partial")
+
+
+async def _store_status(s: Services, ds: DrawingStore, row: dict) -> dict:
+    """The optional store fields of GET /drawings/{id}/status: stage, mode, pages[], counts, note,
+    ingest_calls, elapsed_s, stage_s (see the upload page's status contract)."""
+    did = row["id"]
+    rows = [row]
+    if s.store is not None and not re.search(r"-p\d+$", did):
+        sibs = [r for r in s.store.upload_rows() if r["id"].startswith(f"{did}-p")]
+        rows += sorted(sibs, key=lambda r: int(r["id"].rsplit("-p", 1)[1] or 0))
+    now = time.time()
+    pages, counts, calls, stages = [], {}, 0, []
+    cost, tok_in, tok_out = 0.0, 0, 0  # Gemini spend of the store's ingestion (aura/ingest_cost.py)
+    for i, r in enumerate(rows, 1):
+        try:
+            meta = json.loads(r.get("meta") or "{}")
+        except ValueError:
+            meta = {}
+        if await ds.refresh_db_stage(r["id"], meta) is not None and s.store is not None:
+            meta = json.loads((s.store.drawing_row(r["id"]) or {}).get("meta") or "{}")
+        stage, st = ds.page_stage(r, meta)
+        stages.append((stage, st))
+        page: dict[str, Any] = {"drawing_id": r["id"], "page": i, "stage": stage}
+        if meta.get("floor_label"):
+            page["label"] = meta["floor_label"]
+        for k in ("file_id", "counts", "methods"):
+            if st.get(k):
+                page[k] = st[k]
+        if stage == "store_failed":
+            page["error"] = "The file could not be read"
+        for k, v in (st.get("counts") or {}).items():
+            counts[k] = counts.get(k, 0) + v
+        calls += int(st.get("calls") or 0)
+        cost += float(st.get("cost_usd") or 0)
+        tok_in += int((st.get("tokens") or {}).get("input") or 0)
+        tok_out += int((st.get("tokens") or {}).get("output") or 0)
+        pages.append(page)
+    live = [x for x in stages if x[0] in _STAGE_RANK]
+    if live:
+        top, top_st = min(live, key=lambda x: _STAGE_RANK[x[0]])
+    else:
+        top, top_st = next((x for x in stages if x[0] in _STAGE_FAIL), stages[0])
+    done = sum(1 for x, _ in stages if x in ("indexed_store", "indexed_ours"))
+    note = (f"{done} of {len(stages)} pages indexed" if len(stages) > 1 and live else
+            DS_NOTES.get(top))
+    if top == "indexed_store" and any(v == "vision" for v in (top_st.get("methods") or {}).values()):
+        note = "Indexed by the drawing store; items found by a model are labelled estimates"
+    out: dict[str, Any] = {"stage": top, "mode": ds.mode, "pages": pages,
+                           "elapsed_s": max(0, int(now - float(row["t"]))),
+                           "stage_s": max(0, int(now - float(top_st.get("t_stage") or row["t"])))}
+    if counts:
+        out["counts"] = {"pages": len(pages)} | counts
+    est = sorted({k for _, st in stages for k, v in (st.get("methods") or {}).items() if v == "vision"})
+    if est:
+        out["estimates"] = est  # subjects whose counts come from a model (label them "estimate")
+    if note:
+        out["note"] = note
+    if ds.available() or calls:
+        out["ingest_calls"] = calls
+        out["ingest_cost_usd"] = round(cost, 6)
+        out["ingest_tokens"] = {"input": tok_in, "output": tok_out}
+    return out
+
+
+def _store_file_ids(s: Services, ids: set[str] | None = None) -> dict[str, set[str]]:
+    """file_id in the drawing store -> our upload rows that reference it (two uploads with identical
+    bytes share one store project)."""
+    refs: dict[str, set[str]] = {}
+    for r in s.store.upload_rows() if s.store else []:
+        if ids is not None and r["id"] not in ids:
+            continue
+        try:
+            fid = (json.loads(r.get("meta") or "{}").get("store") or {}).get("file_id")
+        except ValueError:
+            fid = None
+        if fid:
+            refs.setdefault(fid, set()).add(r["id"])
+    return refs
+
+
+async def _remove_upload(s: Services, drawing_id: str, ds: DrawingStore | None = None) -> None:
+    """Delete an upload (and its pages) everywhere: our files and rows, then the drawing store.
+    A tombstone per page is kept until the store side is done, so a delete while Postgres is down
+    (or while the page is still being registered) is finished by the store sweep."""
+    removing = {drawing_id}
+    if s.store is not None and not re.search(r"-p\d+$", drawing_id):
+        removing |= {r["id"] for r in s.store.upload_rows() if r["id"].startswith(f"{drawing_id}-p")}
+    refs = _store_file_ids(s, removing)
+    fids = sorted(refs)
+    if ds is not None:
+        for fid, rows in refs.items():
+            for rid in rows:
+                await ds.tombstone(rid, fid)
+    await _remove_upload_rows(s, drawing_id)
+    if ds is not None and ds.available() and fids:
+        await ds.forget(fids)  # keeps bytes a live upload or the bundled dataset still uses
+        for rid in removing:
+            await s.writer.execute("DELETE FROM store_tombstones WHERE drawing_id=?", (rid,))  # type: ignore[union-attr]
+
+
+async def _remove_upload_rows(s: Services, drawing_id: str) -> None:
     await _remove_single_upload(s, drawing_id)
     # If this is the primary page of a multi-page PDF (`up-<tok>`), also remove sibling pages & auto-bundle
     if not re.search(r"-p\d+$", drawing_id) and s.store is not None:
@@ -1006,12 +1265,12 @@ async def _remove_upload(s: Services, drawing_id: str) -> None:
             await s.writer.execute("DELETE FROM projects WHERE id=?", (proj_id,))
 
 
-async def cleanup_once(s: Services, now: float | None = None) -> int:
+async def cleanup_once(s: Services, now: float | None = None, ds: DrawingStore | None = None) -> int:
     """Delete expired uploads (files, rows) and answers/conversations past the TTL."""
     now = time.time() if now is None else now
     expired = [r["id"] for r in s.store.upload_rows() if r["expires_at"] and r["expires_at"] < now]
     for did in expired:
-        await _remove_upload(s, did)
+        await _remove_upload(s, did, ds)
     cutoff = now - s.settings.upload_ttl_s
     for table in ("answers", "turns", "conversations", "answer_cache"):
         await s.writer.execute(f"DELETE FROM {table} WHERE t < ?", (cutoff,))  # type: ignore[union-attr]
@@ -1033,11 +1292,11 @@ async def cleanup_once(s: Services, now: float | None = None) -> int:
     return len(expired)
 
 
-async def _cleanup_loop(s: Services) -> None:
+async def _cleanup_loop(s: Services, ds: DrawingStore | None = None) -> None:
     while True:
         await asyncio.sleep(s.settings.cleanup_every_s)
         try:
-            await cleanup_once(s)
+            await cleanup_once(s, ds=ds)
         except Exception:
             log.exception("cleanup failed")
 

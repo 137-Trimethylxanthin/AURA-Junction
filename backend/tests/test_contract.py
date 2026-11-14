@@ -305,8 +305,10 @@ def test_modal_image_is_pinned_to_the_lockfile():
 
     from tests.conftest import BACKEND
 
+    # jstore (the drawing store) is a local path package; Modal runs quick mode without it.
     want = subprocess.run(["uv", "export", "--frozen", "--no-dev", "--no-hashes",
-                           "--no-emit-project", "--no-header"], cwd=BACKEND, capture_output=True,
+                           "--no-emit-project", "--no-header", "--no-emit-package", "jstore"],
+                          cwd=BACKEND, capture_output=True,
                           text=True, check=True).stdout
     assert (BACKEND / "requirements-modal.txt").read_text() == want
     assert "requirements-modal.txt" in (BACKEND / "modal_app.py").read_text()

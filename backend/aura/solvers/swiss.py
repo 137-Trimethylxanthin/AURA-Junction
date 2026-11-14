@@ -44,6 +44,10 @@ GARDEN = re.compile(r'(?<!winter)garten|patio|jardin|giardino', re.IGNORECASE)
 WINTERGARDEN = re.compile(r'wintergarten|jardin d.hiver|giardino d.inverno', re.IGNORECASE)
 
 
+
+class NoPlanGeometry(ValueError):
+    """The DXF has no outlines this reader can turn into a floor plan (a detail or profile sheet)."""
+
 def is_outdoor(name: str | None) -> bool:
     if not name:
         return False
@@ -307,6 +311,8 @@ def load(dxf_path: str | Path, drawing_id: str | None = None) -> SwissModel:
 
     # --- frame: LWPOLYLINE extents (extract_plan.py) ---
     pts = [p for e in msp.query('LWPOLYLINE') for p in e.get_points('xy')]
+    if not pts:
+        raise NoPlanGeometry('no closed outlines (LWPOLYLINE) in model space')
     mn = [min(p[0] for p in pts), min(p[1] for p in pts)]
     mx = [max(p[0] for p in pts), max(p[1] for p in pts)]
     W = round((float(mx[0]) - float(mn[0]) + 2 * MARGIN) * SCALE)

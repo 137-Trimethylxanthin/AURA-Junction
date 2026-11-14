@@ -32,6 +32,13 @@ class Jobs:
         # async (drawing_id, out_dir, ctx) -> error str | None; runs after a raster parse
         # (vision detection). Never inside a web request.
         self.after_raster = None
+        # (drawing_id, page_ids) after a successful parse: hands the pages to the drawing store.
+        # Must return at once (it only schedules work); the parse slot is not held for it.
+        self.on_ready = None
+        # () -> bool: the drawing store indexes uploads (full mode). Then our own image detection
+        # is skipped in the parse slot (the store took 20-35 s per page and measured more accurate,
+        # M2/M3); it runs later only if the store fails (see detect_later).
+        self.store_on = None
 
     def submit(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict,
                ctx: dict | None = None) -> None:
@@ -101,6 +108,17 @@ class Jobs:
                 ),
             )
 
+    async def _detect(self, drawing_id: str, out: Path, ctx: dict) -> str | None:
+        """One image-detection pass on a rendered page (raster.json); returns an error or None."""
+        try:
+            async with asyncio.timeout(DETECT_TIMEOUT_S):
+                return await self.after_raster(drawing_id, out, ctx)
+        except TimeoutError:
+            return f"Detection took longer than {int(DETECT_TIMEOUT_S)} s."
+        except Exception as e:
+            log.exception("raster detection failed")
+            return f"Detection failed ({type(e).__name__})."
+
     async def _run(self, drawing_id: str, kind: str, src: Path, out: Path, meta: dict,
                    ctx: dict) -> None:
         async with self.sem:
@@ -124,21 +142,31 @@ class Jobs:
                     return
                 res = conn.recv() if conn.poll() else {
                     "ok": False, "error": "The parser stopped unexpectedly (memory or CPU limit)."}
-                if res.get("ok") and kind == "raster" and self.after_raster is not None:
+                note = None
+                store_indexes = self.store_on is not None and self.store_on()
+                if (res.get("ok") and kind in ("raster", "pdf") and self.after_raster is not None
+                        and not store_indexes):
                     await self._set(drawing_id, "processing", 0.5)
-                    try:
-                        async with asyncio.timeout(DETECT_TIMEOUT_S):
-                            err = await self.after_raster(drawing_id, out, ctx)
-                    except TimeoutError:
-                        err = f"Detection took longer than {int(DETECT_TIMEOUT_S)} s."
-                    except Exception as e:
-                        log.exception("raster detection failed")
-                        err = f"Detection failed ({type(e).__name__})."
-                    if err:
-                        res = {"ok": False, "error": err}
+                    # PDF: every page of a multi-page bundle (siblings sit next to `out`).
+                    pages = [(drawing_id, out)] + ([(sib["id"], out.parent / sib["id"])
+                                                    for sib in res.get("siblings") or []]
+                                                   if kind == "pdf" else [])
+                    errs = await asyncio.gather(*(self._detect(d, o, ctx) for d, o in pages))
+                    if errs[0] and kind == "raster":
+                        res = {"ok": False, "error": errs[0]}
+                    elif kind == "pdf" and any(errs):
+                        # Non-fatal for PDFs: the pages stay usable, just not indexed.
+                        log.warning("pdf detection skipped on %d page(s): %s",
+                                    sum(1 for e in errs if e), next(e for e in errs if e))
+                        note = f"Not indexed: {next(e for e in errs if e)}"[:300]
                 if res.get("ok"):
                     await self._register_pdf_bundle(drawing_id, meta, ctx, res)
-                    await self._set(drawing_id, "ready", 1.0)
+                    await self._set(drawing_id, "ready", 1.0, note)
+                    if self.on_ready is not None:
+                        try:
+                            self.on_ready(drawing_id, [drawing_id, *(s["id"] for s in res.get("siblings") or [])])
+                        except Exception:
+                            log.exception("on_ready hook failed")  # the parse result stands
                 else:
                     await self._set(drawing_id, "failed", None, str(res.get("error"))[:300])
             finally:
@@ -147,6 +175,16 @@ class Jobs:
                 conn.close()
                 if self.on_done:
                     self.on_done(drawing_id)
+
+    async def detect_later(self, drawing_id: str, out: Path, ctx: dict | None = None) -> None:
+        """Our image detection as the fallback when the drawing store could not index a page."""
+        if self.after_raster is None:
+            return
+        err = await self._detect(drawing_id, out, ctx or {})
+        if err:
+            log.warning("fallback detection on %s: %s", drawing_id, err)
+        if self.on_done:
+            self.on_done(drawing_id)
 
     async def cancel_all(self) -> None:
         for t in list(self.tasks):

@@ -18,8 +18,8 @@ import sys
 from pathlib import Path
 
 AS_LIMIT = 4096 * 1024 * 1024
+WORK_PIXELS = 80_000_000  # served copy of an uploaded image; below Pillow's own bomb warning (89 MP)
 CPU_LIMIT_S = 60
-MAX_PIXELS = 40_000_000
 
 
 FSIZE_LIMIT = 200 * 1024 * 1024  # no single output file (plan.svg, model.json) past 200 MB
@@ -88,12 +88,19 @@ def parse_dxf(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
 def parse_raster(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
     from PIL import Image
 
-    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+    # No pixel limit on what is uploaded: this child (memory and CPU limited) decodes any size. The copy the
+    # app serves and the main process reopens is scaled down to WORK_PIXELS, so nothing outside this child
+    # ever decodes an unbounded image. `w, h` stay the source size; `px` is the size of the served copy.
+    Image.MAX_IMAGE_PIXELS = None
     with Image.open(src) as im:
         w, h = im.size
-        if w * h > MAX_PIXELS:
-            raise ValueError("image larger than 40 MP")
-        im = im.convert("RGB")
+        if w * h > WORK_PIXELS:
+            im.draft("RGB", (w, h))
+            k = (WORK_PIXELS / (w * h)) ** 0.5
+            im = im.convert("RGB").resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
+        else:
+            im = im.convert("RGB")
+        pw, ph = im.size
         im.save(out / "original.png", optimize=True)
         t = im.copy()
         t.thumbnail((480, 1920))
@@ -104,7 +111,7 @@ def parse_raster(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
         "kind": "raster", "status": "ready", "source": "upload", "capabilities": [],
         "thumbnail": f"{base}/thumb.png",
         "frame": {"dxf_min": [0, 0], "dxf_max": [w, h], "margin_m": 0, "m_per_unit": 1,
-                  "y_flip": True, "px": [w, h]},
+                  "y_flip": True, "px": [pw, ph]},
         "m_per_pct_x": 0, "m_per_pct_y": 0,
         "images": {"rebuilt": f"{base}/original.png", "original": f"{base}/original.png",
                    "original_alignment": "exact"},
@@ -113,7 +120,7 @@ def parse_raster(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
         **meta,
     }
     _write_json(out / "drawing.json", drawing)
-    return {"px": [w, h]}
+    return {"px": [pw, ph], "source_px": [w, h]}
 
 
 def parse_pdf(src: Path, out: Path, drawing_id: str, meta: dict) -> dict:
@@ -166,6 +173,10 @@ def _child(kind: str, src: str, out: str, drawing_id: str, meta: dict, conn) -> 
         conn.send({"ok": False, "error": (f"This drawing has more than {MAX_ITEMS:,} objects or "
                                           f"{MAX_TEXTS:,} texts; uploads are limited to one floor plan.")})
     except Exception as e:  # noqa: BLE001 - report any parse failure to the parent
+        if type(e).__name__ == "NoPlanGeometry":
+            conn.send({"ok": False, "error": "This DXF has no room outlines to read: it looks like a detail or "
+                                             "profile sheet, not a floor plan."})
+            return
         conn.send({"ok": False, "error": f"Could not read this file ({type(e).__name__})."})
     finally:
         conn.close()

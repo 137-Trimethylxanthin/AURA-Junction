@@ -266,13 +266,104 @@ export interface DrawingList {
   dropped?: number
 }
 
-/** `GET /drawings/:id/status` body (1.1). */
+/**
+ * Fine-grained upload stage (store ingest). `status` keeps its four values; `stage` says where inside them a file is.
+ * Unknown future stages are tolerated (the upload page shows them as "working").
+ */
+export type UploadStage =
+  | 'queued'
+  | 'parsing'
+  | 'reading'
+  | 'interpreting'
+  | 'materialising'
+  | 'indexed'
+  | 'indexed_ours'
+  | 'indexed_store'
+  | 'ready_unindexed'
+  | 'partial'
+  | 'store_failed'
+  | 'failed'
+
+/** Counts the store or our parse found so far; each absent until reported. */
+export interface UploadCounts {
+  pages?: number
+  rooms?: number
+  apartments?: number
+  doors?: number
+  windows?: number
+  fixtures?: number
+  texts?: number
+}
+
+/** How each subject was found: "vision" is a model estimate; the others are read from the file. */
+export type UploadMethods = Partial<Record<'rooms' | 'doors' | 'windows' | 'fixtures', 'cad_geometry' | 'pdf_vector' | 'ocr' | 'vision' | string>>
+
+/** One page of a multi-page upload (a PDF page is read separately). */
+export interface UploadPage {
+  /** 1-based page number. */
+  page?: number
+  /** Floor label when one was found (e.g. "EG"). */
+  label?: string
+  file_id?: string
+  stage?: string
+  /** 0-1, only when the backend measures it. */
+  progress?: number
+  counts?: UploadCounts
+  methods?: UploadMethods
+  error?: string
+  /** The drawing made from this page, once there is one. */
+  drawing_id?: string
+}
+
+/** `GET /drawings/:id/status` body (1.1; the store fields are optional extras the page tolerates missing). */
 export interface DrawingStatusBody {
   contract_version: string
   id: string
   status: DrawingStatus
   progress?: number
   error?: string
+  stage?: string
+  pages?: UploadPage[]
+  counts?: UploadCounts
+  /** How each subject was found (per page in pages[].methods). */
+  methods?: UploadMethods
+  /** Subjects whose count is a model estimate (e.g. ["doors", "windows"]). */
+  estimates?: string[]
+  mode?: 'full' | 'quick'
+  /** A short reason or remark from the server (e.g. why the store failed). */
+  note?: string
+  ingest_calls?: number
+  /** Absent when the token usage is unknown. */
+  ingest_cost_usd?: number
+  /** Seconds since the upload was accepted. */
+  elapsed_s?: number
+  /** Seconds in the current stage. */
+  stage_s?: number
+}
+
+/** One accepted upload type of `GET /uploads/accepted`. */
+export interface AcceptedType {
+  type: string
+  ext: string[]
+  max_mb: number
+  presenter_only?: boolean
+}
+
+/** `GET /uploads/accepted`: what this server takes, in its current mode. */
+export interface AcceptedUploads {
+  contract_version?: string
+  mode?: 'full' | 'quick'
+  types: AcceptedType[]
+  ttl_hours?: number
+}
+
+export function isAcceptedUploads(v: unknown): v is AcceptedUploads {
+  if (typeof v !== 'object' || v === null || !Array.isArray((v as AcceptedUploads).types)) return false
+  return (v as AcceptedUploads).types.every(
+    (t) =>
+      typeof t === 'object' && t !== null && typeof t.type === 'string' && Array.isArray(t.ext) &&
+      t.ext.every((e) => typeof e === 'string') && typeof t.max_mb === 'number' && Number.isFinite(t.max_mb),
+  )
 }
 
 /** `POST /uploads` (multipart, field `file`) response (1.1). */
@@ -313,6 +404,12 @@ export interface AskRequest {
   scope?: Scope
   overrides?: Override[]
   lang_hint?: Lang
+  /**
+   * 1.2: a sheet of a multi-plan building is answered for the WHOLE building unless the question names a floor
+   * ("this floor", "ground floor", "level 2") or `sheet_ids` selects some sheets (default: all sheets).
+   */
+  project_id?: string
+  sheet_ids?: string[]
 }
 
 export type TraceKind = 'exact' | 'model' | 'warn' | 'info'
@@ -328,6 +425,7 @@ export type ToolName =
   | 'what_if'
   | 'find_text'
   | 'deep_agent'
+  | 'sql'
 export const TOOL_NAMES: readonly ToolName[] = [
   'count_objects',
   'room_areas',
@@ -339,6 +437,7 @@ export const TOOL_NAMES: readonly ToolName[] = [
   'what_if',
   'find_text',
   'deep_agent',
+  'sql',
 ]
 
 /** A tool call made while answering (1.1). */
@@ -362,11 +461,16 @@ export interface TraceNode {
   /** 1.1: present when this node is a tool call. */
   tool?: ToolCall
   /** Tool-step answerer stage; `detail` has one shape per stage (read defensively, see features/trace/detail.ts). */
-  stage?: 'resources' | 'decision' | 'filter' | 'answer'
+  stage?: 'resources' | 'decision' | 'filter' | 'answer' | 'scope'
   detail?: Record<string, unknown>
 }
 
-export type AbstainReason = 'not_on_drawing' | 'not_supported_yet' | 'unclear_question' | 'low_confidence'
+export type AbstainReason =
+  | 'not_on_drawing'
+  | 'not_supported_yet'
+  | 'unclear_question'
+  | 'low_confidence'
+  | 'not_answerable'
 
 /** 1.2: open-ended answer from the deep agent (unmapped unit, text/comparison, or open subject). */
 export interface AnswerNote {
@@ -479,8 +583,25 @@ export interface Gold {
   match: boolean
 }
 
-export type Method = 'cad_geometry' | 'ocr' | 'detector' | 'vision' | 'agent_estimate' | 'none'
-export const METHODS: readonly Method[] = ['cad_geometry', 'ocr', 'detector', 'vision', 'agent_estimate', 'none']
+export type Method =
+  | 'cad_geometry'
+  | 'ocr'
+  | 'detector'
+  | 'vision'
+  | 'agent_estimate'
+  | 'pdf_vector'
+  | 'store_sql'
+  | 'none'
+export const METHODS: readonly Method[] = [
+  'cad_geometry',
+  'ocr',
+  'detector',
+  'vision',
+  'agent_estimate',
+  'pdf_vector',
+  'store_sql',
+  'none',
+]
 
 export interface AskResponse {
   contract_version: string
@@ -514,7 +635,23 @@ export interface AskResponse {
    * `measured` = how often such answers were right. Below 0.6: abstain 'low_confidence' with `probabilities`.
    */
   estimate?: { confidence: number; probabilities?: Record<string, number>; measured?: { correct: number; n: number; source: string } }
+  /** Set only on the abstain of a failed deep-agent run: service down, deadline, or the run returned no answer. */
+  agent_failure?: AgentFailure
+  /** 1.2: per-sheet shares of a whole-building answer (`scope` is then the project scope of the sheets asked). */
+  breakdown?: BreakdownItem[]
 }
+
+/** One sheet's share of a whole-building answer ("ground floor 14"); evidence items carry their sheet in `drawing_id`. */
+export interface BreakdownItem {
+  drawing_id: string
+  label: string
+  status: 'ok' | 'abstain' | 'error'
+  /** The sheet's count / area / quantity when it is summable. */
+  value?: number
+  unit?: string
+}
+
+export type AgentFailure = 'unavailable' | 'timeout' | 'error'
 
 /** `POST /chat` body (1.1); the response is `text/event-stream`. */
 export interface ChatRequest {
@@ -524,6 +661,9 @@ export interface ChatRequest {
   scope?: Scope
   overrides?: Override[]
   lang_hint?: Lang
+  /** See `AskRequest`. */
+  project_id?: string
+  sheet_ids?: string[]
 }
 
 /** Server-sent events of `POST /chat`, in order: turn, progress*, understood, (tool_call, tool_result)*, check?, answer | error, done. */
@@ -668,6 +808,8 @@ export interface Health {
   answerer?: AnswererMode
   /** 1.2: whether the deep-agent sidecar responded healthy on its last probe. */
   agent_ok?: boolean
+  /** Drawing store (Postgres) availability: "on" = full mode, "off" = quick mode. */
+  store?: 'on' | 'off' | boolean
 }
 
 /** Evidence subjects that have boxes in the bundled drawing file (wc/bathtub/shower since the regenerated file). */
@@ -796,7 +938,7 @@ function isAnswer(v: unknown): v is Answer {
   if (v.kind === 'note') return isStr(v.value) && optNum(v.number) && optStr(v.unit)
   if (v.kind === 'abstain')
     return (
-      isOneOf(v.reason, ['not_on_drawing', 'not_supported_yet', 'unclear_question', 'low_confidence'] as const) &&
+      isOneOf(v.reason, ['not_on_drawing', 'not_supported_yet', 'unclear_question', 'low_confidence', 'not_answerable'] as const) &&
       (v.where_to_find === undefined || isStr(v.where_to_find))
     )
   return false
@@ -884,7 +1026,8 @@ export function isAskResponse(v: unknown): v is AskResponse {
     optStr(v.conversation_id) &&
     optStr(v.turn_id) &&
     (v.route === undefined || isOneOf(v.route, ['template', 'choice', 'agent', 'cache'] as const)) &&
-    optStr(v.explanation)
+    optStr(v.explanation) &&
+    (v.agent_failure === undefined || isOneOf(v.agent_failure, ['unavailable', 'timeout', 'error'] as const))
   )
 }
 

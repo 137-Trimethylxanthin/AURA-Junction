@@ -20,9 +20,19 @@ if [[ -z "${AURA_BUILD_DIR:-}" && -d "$root/backend/build/drawings-live" ]]; the
 fi
 
 # Wire the local agent-service sidecar (scripts/agent-service.sh: 127.0.0.1:8090, token in .data/token).
-export AURA_SIDECAR_URL="${AURA_SIDECAR_URL:-http://127.0.0.1:${JUNCTION_PORT:-8090}}"
+# Set AURA_SIDECAR_URL to an empty string to run without it (scripts/dev.sh does).
+export AURA_SIDECAR_URL="${AURA_SIDECAR_URL-http://127.0.0.1:${JUNCTION_PORT:-8090}}"
 export AURA_SIDECAR_TOKEN_FILE="${AURA_SIDECAR_TOKEN_FILE:-${JUNCTION_TOKEN_FILE:-$root/agent-service/.data/token}}"
 export AURA_SIDECAR_MODEL="${AURA_SIDECAR_MODEL:-${JUNCTION_MODEL:-gemini-3.8-flash}}"
+
+# Local dev and demo run without request/upload caps (spend is still counted in /budget).
+# The code defaults stay bounded, so a deploy that forgets this is safe. Set AURA_UNLIMITED=0 to test caps.
+export AURA_UNLIMITED="${AURA_UNLIMITED:-1}"
+
+# --reload restarts the process on every code save, which kills the drawing store's ingest workers;
+# scripts/dev.sh sets AURA_RELOAD=0.
+reload_flag=(--reload)
+[[ "${AURA_RELOAD:-1}" == "0" ]] && reload_flag=()
 
 host="${HOST:-127.0.0.1}"
 port="${PORT:-8000}"
@@ -31,7 +41,7 @@ echo "Starting AURA backend on http://${host}:${port} (build_dir=${AURA_BUILD_DI
 cd "$root/backend"
 exec uv run --extra ifc uvicorn aura.main:create_app \
   --factory \
-  --reload \
+  "${reload_flag[@]}" \
   --host "$host" \
   --port "$port" \
   --no-proxy-headers \

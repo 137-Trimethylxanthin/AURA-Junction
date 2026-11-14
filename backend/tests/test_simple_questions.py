@@ -6,6 +6,8 @@ exact-answerable question never waits on gemini-decision-1, the image check or t
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -111,3 +113,220 @@ def test_cached_agent_answer_never_outranks_an_exact_route(tmp_path):
         again = c.post("/ask", json={"drawing_id": SWISS, "question": "what is the biggest room"}).json()
         assert first["method"] == again["method"] == "cad_geometry"
         assert again["route"] == "template"
+
+
+def test_cached_sidecar_answer_never_outranks_the_tool_tier(tmp_path, monkeypatch):
+    """A cached agent_estimate (sidecar) is replayed only after the tool-step answerer declined."""
+    import aura.pipeline as P
+    from aura import answer as A
+    from aura import tools
+
+    q = "show only doors that are in rooms that have toilets"
+    sc = MockSidecarState()
+
+    async def declines(*a, **k):
+        return None
+
+    async def answers(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        stats["route"] = "choice"
+        tr = tools.count_objects(d, "door", {"kind": "floor"})
+        return A.count(question, lang, d, tr, {"kind": "floor"}, None, intent_tag="tool steps")
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc)) as c:
+        monkeypatch.setattr(P, "answer_with_tools", declines)
+        first = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
+        assert first["method"] == "agent_estimate" and len(sc.runs) == 1
+
+        monkeypatch.setattr(P, "answer_with_tools", answers)
+        tools_r = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
+        assert tools_r["method"] == "cad_geometry" and tools_r["route"] == "choice"
+
+        monkeypatch.setattr(P, "answer_with_tools", declines)
+        replay = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
+        assert replay["route"] == "cache" and replay["method"] == "agent_estimate"
+        assert len(sc.runs) == 1  # the cached sidecar answer replaced a new sidecar run
+
+
+def test_without_sidecar_tools_answer_and_the_rest_abstains_honestly(tmp_path, monkeypatch):
+    """The plan's path with the sidecar retired: tool steps answer; else an honest abstain."""
+    import aura.pipeline as P
+    from aura import answer as A
+    from aura import tools
+
+    sc = MockSidecarState()
+
+    async def answers(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        stats["route"] = "choice"
+        tr = tools.count_objects(d, "door", {"kind": "floor"})
+        return A.count(question, lang, d, tr, {"kind": "floor"}, None, intent_tag="tool steps")
+
+    async def declines(*a, **k):
+        return None
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc)) as c:
+        c.app.state.svc.agent = None  # AURA_SIDECAR_URL unset
+        c.app.state.drawing_store.ok = True  # full mode (the store's own calls are not reached here)
+        monkeypatch.setattr(P, "answer_with_tools", answers)
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "doors next to something odd"}).json()
+        assert r["route"] == "choice" and r["method"] == "cad_geometry"
+        monkeypatch.setattr(P, "answer_with_tools", declines)
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "what colour is the front door"}).json()
+        assert r["answer"]["kind"] == "abstain" and "agent_failure" not in r
+        assert r["answer"]["reason"] in ("not_answerable", "not_on_drawing")
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "how many lifts lead to the roof garden"}).json()
+        assert r["answer"] == {"kind": "abstain", "reason": "not_answerable"} or r["answer"]["kind"] == "abstain"
+        assert sc.runs == []  # no agent run at all
+        for q, kind, _ in BATTERY:  # exact questions are unchanged without the sidecar
+            b = c.post("/ask", json={"drawing_id": SWISS, "question": q}).json()
+            assert b["route"] in ("template", "cache") and b["answer"]["kind"] == kind, (q, b["answer"])
+
+
+@pytest.mark.parametrize("q", ["which rooms have a door wider than 0.92 m",
+                               "which of them are wider than 0.95 m",
+                               "which rooms are larger than 15.5 m²",
+                               "which bedrooms are bigger than 11 m2 on this plan",
+                               "show only doors that are in rooms that have toilets"])
+def test_qualified_filters_are_for_the_tool_tier_not_a_template_abstain(q):
+    r = route(q)
+    assert r.intent == "unknown", (q, r.intent, r.matched)
+
+
+def test_gate_off_drawing_verdict_does_not_stop_the_tool_tier_on_an_indexed_drawing(tmp_path, monkeypatch):
+    """gemini-decision-1 said 'not shown on the drawing' (p = 0.24) on an answerable filter: the
+    tool steps still try first, because the drawing has rooms indexed."""
+    import aura.pipeline as P
+    from aura import answer as A
+    from aura import tools
+
+    def off(path, body):
+        q = body.get("questions") or {}
+        if "on_drawing" not in q:
+            return None
+        ans = {k: {"choice": "other", "confidence": 0.9, "probabilities": {"other": 0.9}}
+               for k in ("intent", "subject", "scope", "cache_match") if k in q}
+        ans |= {"on_drawing": {"noul": 0.24}, "exact_sufficient": {"noul": 0.05}}
+        return 200, {"answers": ans, "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1}}
+
+    async def answers(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        stats["route"] = "choice"
+        tr = tools.room_areas(d, {"kind": "floor"})
+        return A.area(question, lang, d, tr, {"kind": "floor"}, None, intent_tag="tool steps")
+
+    sc = MockSidecarState()
+    with TestClient(make_hybrid_app(tmp_path, sidecar=sc, gemini=MockGeminiDecisionsTransport(off))) as c:
+        monkeypatch.setattr(P, "answer_with_tools", answers)
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "which rooms are larger than 15.5 m²"}).json()
+        assert r["route"] == "choice" and r["answer"]["kind"] == "area"
+        assert sc.runs == []
+
+
+def test_cached_abstains_are_never_offered_as_the_same_question(tmp_path):
+    """The gate's semantic cache sees only real answers of the current router version."""
+    with TestClient(make_hybrid_app(tmp_path, sidecar=MockSidecarState())) as c:
+        svc = c.app.state.svc
+        from aura.router import ROUTER_VERSION
+        old = f'["{SWISS}", "q old", null, null, null, true]|router:{ROUTER_VERSION - 1}'
+        cur_abs = f'["{SWISS}", "q abs", null, null, null, true]|router:{ROUTER_VERSION}'
+        svc.answers.put(old, {"answer": {"kind": "count", "value": 1}}, drawing_id=SWISS, question="q old")
+        svc.answers.put(cur_abs, {"answer": {"kind": "abstain", "reason": "x"}}, drawing_id=SWISS, question="q abs")
+        gem = c.app.state.svc.client.transport
+        before = len(gem.calls)
+        c.post("/ask", json={"drawing_id": SWISS, "question": "tell me something unusual about the doors"})
+        sent = [b for _, b in gem.calls[before:] if "cache_match" in (b.get("questions") or {})]
+        assert all("q old" not in json.dumps(b) and "q abs" not in json.dumps(b) for b in sent)
+
+
+@pytest.mark.parametrize("q", ["which rooms are larger than 15.5 m²", "which rooms have a door wider than 0.92 m",
+                               "which of them are wider than 0.95 m", "rooms over 12.5"])
+def test_measurements_are_never_read_as_room_ids(q):
+    """'15.5 m²' is a threshold, not room 15.5: a room scope that does not exist would make the tool
+    steps decline (measured live)."""
+    ctx = DrawingCtx(labels=["Bad"], room_ids=["3.05"], units=["A"])
+    assert route(q, ctx).scope is None
+    assert route("what is the area of room 3.05", ctx).scope == {"kind": "room", "room_id": "3.05"}
+
+
+def test_tool_tier_abstain_is_not_answerable_and_router_topics_stay_not_on_drawing(tmp_path, monkeypatch):
+    """Rule: tools tried and empty -> not_answerable; a router topic (ceiling height) that never
+    reaches the tools -> not_on_drawing."""
+    import aura.pipeline as P
+    from aura import answer as A
+
+    async def tool_abstain(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        stats["route"] = "choice"
+        return A.abstain(question, lang, {"kind": "floor"}, "not_on_drawing", question,
+                         "I cannot answer this from the drawing's data: nothing matched.")
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=MockSidecarState())) as c:
+        c.app.state.svc.agent = None
+        c.app.state.drawing_store.ok = True
+        monkeypatch.setattr(P, "answer_with_tools", tool_abstain)
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "how far is it to walk from the kitchen to the bath"}).json()
+        assert r["answer"] == {"kind": "abstain", "reason": "not_answerable"}
+        h = c.post("/ask", json={"drawing_id": SWISS, "question": "what is the ceiling height in the kitchen"}).json()
+        assert h["answer"]["reason"] == "not_on_drawing"
+
+
+@pytest.mark.parametrize("q", [
+    "how many distinct IFC property set names are recorded for the doors",
+    "which property sets do the windows have",
+    "how many layers contain walls",
+    "combien de calques contiennent des portes",
+    "welche Eigenschaften haben die Türen",
+    "quali proprietà hanno le porte",
+    "mitkä ominaisuudet ovilla on",
+])
+def test_metadata_of_objects_is_never_an_object_count(q):
+    """Counting properties/layers/classes OF doors is not counting doors (tool steps / sql)."""
+    r = route(q)
+    assert r.intent != "count", (q, r.intent, r.matched)
+
+
+@pytest.mark.parametrize(("q", "subject"), [("how many doors", "door"), ("combien de portes", "door"),
+                                            ("wie viele Türen", "door"), ("show all windows", "window"),
+                                            ("how many rooms are named Bad", "room")])
+def test_plain_counts_stay_exact(q, subject):
+    r = route(q)
+    assert (r.intent, r.subject) == ("count", subject)
+
+
+@pytest.mark.parametrize("q", [
+    "i will install wood floor on the kitchens, get the price of the whole plan if i get 1m² of wood floor for 2.5$",
+    "what does it cost to paint the bedrooms at 12 CHF per m²",
+    "combien coûte un parquet pour la cuisine à 30 € le m²",
+])
+def test_prices_are_calculations_for_the_tools_and_money_is_never_a_room(q):
+    ctx = DrawingCtx(labels=["Cuisine", "Chambre à coucher"], room_ids=["2.16"], units=["A"])
+    r = route(q, ctx)
+    assert r.intent == "unknown" and "calculation" in r.matched
+    assert (r.scope or {}).get("kind") != "room"
+
+
+def test_topic_questions_reach_the_tool_tier_before_the_topic_abstain(tmp_path, monkeypatch):
+    """Ceiling height: the tools (and their reasoning step) get it first; their decline ends in
+    the topic's own abstain with where to find it."""
+    import aura.pipeline as P
+
+    seen = []
+
+    async def declines(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        seen.append(question)
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=MockSidecarState())) as c:
+        c.app.state.svc.agent = None
+        c.app.state.drawing_store.ok = True
+        monkeypatch.setattr(P, "answer_with_tools", declines)
+        h = c.post("/ask", json={"drawing_id": SWISS, "question": "what is the ceiling height in the kitchen"}).json()
+        assert seen == ["what is the ceiling height in the kitchen"]
+        assert h["answer"]["reason"] == "not_on_drawing" and h["answer"].get("where_to_find")
+
+
+def test_store_map_entries_give_bundled_drawings_a_sql_scope(tmp_path, monkeypatch):
+    from aura import store_sql
+    from aura.tools import BundleEngine, LoadedDrawing
+
+    d = LoadedDrawing(id="ifc-x", dir=None, drawing={"rooms": []}, engine=BundleEngine({"rooms": []}))
+    entry = {"files": [{"sha256_16": "70cc8ff245fc0894", "drawing_key": "kit"}], "project": "p"}
+    monkeypatch.setattr(store_sql, "_store_map", lambda base: {"ifc-x": entry})
+    sc = store_sql.scope_for(d)
+    assert sc is not None and sc.files == ("70cc8ff245fc0894",)

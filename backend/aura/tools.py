@@ -128,6 +128,15 @@ class BundleEngine:
         self.evidence: dict[str, list[dict]] = data.get("evidence", {}) or {}
         self.texts: list[dict] = data.get("texts", []) or []
         self.unit_ids = [u["id"] for u in data.get("units", [])]
+        # Set on drawings materialised from the drawing store: how each subject was found.
+        self.methods: dict[str, str] = data.get("evidence_method") or {}
+
+    def _method(self, family: str) -> dict:
+        """method/estimate fields for a result; nothing from the store is ever cad_geometry."""
+        m = self.methods.get("room" if family in ("room", "apartment", "area") else family)
+        if not m:
+            return {}
+        return {"method": m} | ({"estimate": True} if m == "vision" else {})
 
     def supports(self, subject: str) -> bool:
         if subject in BOX_SUBJECTS:
@@ -193,7 +202,11 @@ class BundleEngine:
             n = len(boxes)
             layer = self.evidence.get(family, [])
             doubles = sum(1 for b in layer if b.get("note")) // 2
-            summary = f"{len(layer)} {noun(family, len(layer))} on the DXF {family} layer."
+            how = self.methods.get(family)
+            summary = (f"{len(layer)} {noun(family, len(layer))} on the DXF {family} layer." if not how else
+                       f"{len(layer)} {noun(family, len(layer))} found by the drawing store's symbol "
+                       "detection (a model estimate)." if how == "vision" else
+                       f"{len(layer)} {noun(family, len(layer))} read from the PDF's vectors.")
             if family == "door" and doubles:
                 summary += (f" {doubles * 2} are drawn twice at the same spot in the CAD file; "
                             "the dataset counts both.")
@@ -201,7 +214,7 @@ class BundleEngine:
                 summary += f" {n} {where}."
             return {"answer": {"kind": "count", "value": n, "subject": family}, "value": n,
                     "numbers": [n, len(layer)], "evidence": {"boxes": boxes, "rooms": []},
-                    "summary": summary}
+                    "summary": summary} | self._method(family)
         rooms = self._rooms(scope)
         explicit = scope.get("kind") in ("label", "room")
         if family in ("room", "apartment"):
@@ -237,7 +250,7 @@ class BundleEngine:
                 ev_dict["groups"] = groups
             return {"answer": {"kind": "count", "value": n, "subject": family}, "value": n,
                     "numbers": [n, len(rooms)], "evidence": ev_dict,
-                    "summary": summary}
+                    "summary": summary} | self._method(family)
         if family == "area":
             ev, parts = [], []
             for r in rooms:
@@ -270,7 +283,7 @@ class BundleEngine:
                            + ".")
             return {"answer": {"kind": "area", "value": value, "unit": "m2"}, "value": value,
                     "numbers": [value, *parts], "evidence": {"boxes": [], "rooms": ev},
-                    "summary": summary}
+                    "summary": summary} | self._method(family)
         raise ValueError(f"unknown family {family!r}")
 
     def find_text(self, pattern: str) -> dict:

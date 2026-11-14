@@ -1,0 +1,53 @@
+# Packaging so AURA's backend can use jstore as a library (path dependency in backend/pyproject.toml).
+# Felix's standalone service keeps installing from requirements.txt (api/Dockerfile); this file only adds
+# the package metadata. Pins follow requirements.txt. Not here: pytesseract (never imported) and pytest.
+[project]
+name = "jstore"
+version = "0.1.0"
+description = "Lossless project store: Postgres mirror of DXF/IFC/PDF/raster plans plus an interpretation layer"
+requires-python = ">=3.12"
+dependencies = [
+    "pg8000==1.31.6",
+    "fastapi==0.162.7",
+    "uvicorn==0.54.0",
+    "python-multipart==0.0.33",
+    "httpx==0.28.1",
+    "pydantic==2.14.3",
+    "ezdxf==1.4.5",
+    "shapely==2.2.0",
+    "numpy==2.5.4",
+    "scipy==1.18.1",
+    "networkx==3.7",
+    "pillow==13.0.0",
+    "pypdfium2==5.15.2",
+    "pdfplumber==0.11.10",
+    "opencv-python-headless==5.0.0.93",
+    "scikit-image==0.26.0",
+    "matplotlib==3.11.2",
+    "ifcopenshell==0.9.0.post1",
+    # OCR of raster plans. Its own requirement on opencv-python (non-headless, needs libGL) is dropped by
+    # the consumer (backend/pyproject.toml [tool.uv] override-dependencies); the headless wheel above serves it.
+    "rapidocr-onnxruntime==1.4.4",
+    "onnxruntime==1.32.0",
+    "pyclipper==1.4.0",
+    "pyyaml==6.0.3",
+    "six==1.17.0",
+    "tqdm==4.70.1",
+]
+
+[project.optional-dependencies]
+# Felix's agent and API runs (service/agent.py, runs.py, tools.py, app.py); not used by AURA.
+agent = [
+    "openai==3.51.0",
+    "openai-agents==0.24.0",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["jstore*"]
+
+[tool.setuptools.package-data]
+jstore = ["*.sql", "sql/*.sql", "service/ui/**/*"]

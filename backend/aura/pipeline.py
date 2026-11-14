@@ -83,6 +83,7 @@ class Services:
     answers: AnswerCache
     checks: CheckCache
     agent: AgentClient | None = None
+    drawing_store: Any = None  # aura.drawing_store.DrawingStore; available() = Postgres up and ready
     heartbeat_s: float = HEARTBEAT_INTERVAL_S
     check_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     check_failures: dict[str, float] = field(default_factory=dict)  # key → time of last failure
@@ -589,7 +590,10 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
             r.scope = context["scope"] if context["scope"].get("kind") != "region" else None
             r.matched.append("follow-up")
 
-    if d.drawing.get("kind") == "raster" and (family := score_family_of(question)) is not None:
+    # An image upload without an index is scored on the image; one the drawing store indexed
+    # (evidence_method set) answers from its rooms and items like any other drawing.
+    if (d.drawing.get("kind") == "raster" and not d.drawing.get("evidence_method")
+            and (family := score_family_of(question)) is not None):
         return await _score(svc, d, question, lang, caller, stats, family)
 
     ref = resolve_reference(r, question, history, d)
@@ -970,20 +974,30 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     elif context:
         key += json.dumps(context, sort_keys=True)
 
-    hit = svc.answers.get(key)
-    if hit is not None and hit.get("method") == "agent_estimate" and r_pre.intent in EXACT_INTENTS:
-        hit = None  # an exact route always wins over a cached model estimate
-    if hit is not None:
+    def replay(cached: dict) -> list[tuple[str, dict]]:
         # A fresh answer id, persisted: its CSV link and /stats see this answer too.
-        body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
-                            "answer_id": "a-" + uuid.uuid4().hex,
-                            "latency_ms": int((time.perf_counter() - t0) * 1000)}
+        body = dict(cached) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
+                               "answer_id": "a-" + uuid.uuid4().hex,
+                               "latency_ms": int((time.perf_counter() - t0) * 1000)}
         _persist(svc, d.id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
-        yield "understood", {"detected_lang": body["detected_lang"],
-                             "canonical_en": body["canonical_en"], "route": "cache"}
+        evs: list[tuple[str, dict]] = [("understood", {"detected_lang": body["detected_lang"],
+                                                       "canonical_en": body["canonical_en"], "route": "cache"})]
         if "check" in body:
-            yield "check", {"check": body["check"]}
-        yield "answer", {"response": body}
+            evs.append(("check", {"check": body["check"]}))
+        return [*evs, ("answer", {"response": body})]
+
+    hit = svc.answers.get(key)
+    deferred_agent_hit: dict | None = None
+    if hit is not None and hit.get("method") == "agent_estimate":
+        if r_pre.intent in EXACT_INTENTS:
+            hit = None  # an exact route always wins over a cached model estimate
+        elif svc.agent is not None:
+            # A cached sidecar estimate is replayed only once the cheaper, verifiable tool-step
+            # tier has declined this question (step 4b), in place of a new sidecar run.
+            deferred_agent_hit, hit = hit, None
+    if hit is not None:
+        for ev in replay(hit):
+            yield ev
         return
 
     stats = {"route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
@@ -991,7 +1005,12 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
     # ---- Sidecar-enabled `hybrid` / `agent` modes ----
     mode = svc.settings.answerer
-    if svc.agent is not None and mode in ("hybrid", "agent"):
+    # The single answering path: router -> exact -> gate -> tool steps -> (sidecar, only when one is
+    # configured) -> abstain. Without a sidecar it runs in full mode (the drawing store is on: the
+    # merged backend). Quick mode without a sidecar (e.g. Modal) keeps the legacy path below, which
+    # has its own choice step, in-backend agent and image scoring.
+    full = svc.drawing_store is not None and svc.drawing_store.available()
+    if mode in ("hybrid", "agent") and (svc.agent is not None or full):
         lang = r_pre.lang if r_pre.lang_signal else (req.lang_hint or "en")
 
         # 1. `<2ms` deterministic color-coding follow-up on prior rooms (`0` model calls)
@@ -1026,6 +1045,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         overrides = [o.model_dump() for o in req.overrides or []]
         is_project = eff_scope.get("kind") == "project"
         dkind = d.drawing.get("kind")
+        # A PDF/image the drawing store indexed answers exact templates from its index like CAD.
+        indexed = dkind in ("cad_dxf", "ifc") or bool(d.drawing.get("evidence_method"))
         is_pdf = d.drawing.get("source_ext") == ".pdf"
         is_deictic_region = eff_scope.get("kind") == "region" and bool(DEICTIC_SIMILARITY.search(question))
 
@@ -1033,8 +1054,12 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         # A count across a building's floors is exact too (each floor counted, then summed): no model needed.
         exact_project = is_project and r.intent == "count"
         if mode == "hybrid" and (not is_project or exact_project) and not has_followup_semantics:
-            if dkind in ("cad_dxf", "ifc") and r.intent in (
-                    "count", "area", "quantity", "find_text", "room_rank", "adjacent"):
+            if (indexed and r.intent in (
+                    "count", "area", "quantity", "find_text", "room_rank", "adjacent")) or (
+                    # Detected image/PDF page: door/window counts (and show/list variants) come from
+                    # raster.json at 0 calls, as a model estimate; never the sidecar.
+                    isinstance(d.engine, tools.RasterEngine) and r.intent == "count"
+                    and d.engine.supports(r.subject or "")):
                 tag = ("router · reference" if ref else
                        "router · follow-up" if "follow-up" in r.matched else "router")
                 exact_built, ok_exact = await _execute_exact_intent(
@@ -1049,7 +1074,10 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                     async for ev in _finalize_and_emit(svc, d, req, exact_built, caller, stats, meters, t0, key, allow_cache=True):
                         yield ev
                     return
-            elif dkind == "cad_dxf" and r.intent == "abstain" and r.topic in ("height", "material"):
+            elif (dkind == "cad_dxf" and r.intent == "abstain" and r.topic in ("height", "material")
+                  and not (svc.models_usable() and d.drawing.get("rooms"))):
+                # 0-call topic abstain only when the tool steps cannot run; otherwise their reasoning
+                # step gets the question first and can say what is missing or compute around it.
                 abs_built = A.abstain_topic(question, lang, r.topic, intent_tag="router")
                 yield "understood", {"detected_lang": abs_built.body["detected_lang"],
                                      "canonical_en": abs_built.body["canonical_en"], "route": "template"}
@@ -1085,12 +1113,17 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             or r.topic == "length"
             or bool({"qualifier_guard", "stair_escalate", "deictic_similarity", "needs_model"} & set(r.matched))
         )
-        check_exact = (not hard_guard) and dkind in ("cad_dxf", "ifc")
+        check_exact = (not hard_guard) and indexed
         skip_on_drawing = has_followup_semantics or is_deictic_region
         cached_candidates = (
             [] if (has_followup_semantics or is_deictic_region or ov_dump)
             else svc.answers.entries_for_drawing(d.id, scope=scope_dump, overrides=ov_dump, models_on=models_enabled())
         )
+        # Only answers written by the current router, and only real answers: an old abstain must
+        # never come back as "the same question" once routing or the index improved.
+        cur = f"|router:{ROUTER_VERSION}"
+        cached_candidates = [(k, q) for k, q in cached_candidates if cur in k
+                             and ((svc.answers.get(k) or {}).get("answer") or {}).get("kind") != "abstain"]
 
         intent_tag = f"router · {mode}"
         if svc.client is not None and svc.client.available():
@@ -1114,7 +1147,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 if hd.on_drawing is not None:
                     intent_tag = f"Decisions API · {hd.on_drawing:.2f}"
                 stats["decision_node"] = decision_node(hd, "agent")  # refined below
-                if hd.off_drawing:
+                # On a drawing with an index the tool steps try first: the gate looks at a picture
+                # and was measured to reject answerable filters ("rooms larger than 15.5 m²").
+                if hd.off_drawing and not d.drawing.get("rooms"):
                     stats["decision_node"] = decision_node(hd, "abstain")
                     stats["route"] = "choice"
                     off_b = A.abstain(
@@ -1135,7 +1170,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
                 if hd.cache_key:
                     sem_hit = svc.answers.get(hd.cache_key)
-                    if sem_hit is not None:
+                    if sem_hit is not None and (sem_hit.get("answer") or {}).get("kind") != "abstain":
                         sem_trace = _with_decision(
                             [n for n in sem_hit.get("trace") or [] if n.get("stage") != "decision"],
                             decision_node(hd, "cache"))
@@ -1190,7 +1225,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                             yield ev
                         return
             except (BudgetError, GeminiError, TimeoutError) as e:
-                log.warning("hybrid decision gate skipped (%s); escalating to sidecar agent", e or "timeout")
+                log.warning("decision gate skipped (%s); continuing with the tool steps", e or "timeout")
 
         # 4b. Tool-step answerer: fixed read-only tools over the indexed drawing, a few model calls, no generated code.
         #     Returns None when it cannot answer; only then does the turn go to the sidecar agent.
@@ -1202,6 +1237,16 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             except Exception:  # the tool path must never take the turn down; the agent still runs
                 log.exception("tool-step answerer failed; escalating to sidecar agent")
             if tools_built is not None:
+                ans = tools_built.body.get("answer") or {}
+                if ans.get("kind") == "abstain" and r.intent == "abstain" and r.topic:
+                    # a known off-plan topic (ceiling height, material): the tools and their reasoning
+                    # step tried; the answer keeps the topic's reason and where to find it
+                    tools_built.body["answer"] = A.abstain_topic(question, lang, r.topic).body["answer"]
+                    ans = tools_built.body["answer"]
+                elif ans.get("kind") == "abstain" and ans.get("reason") == "not_on_drawing":
+                    # The rule: not_on_drawing only when the tools were NOT tried (router topic or
+                    # a confident gate on a drawing without an index); tried and empty = not_answerable.
+                    ans["reason"] = "not_answerable"
                 if gate_node:
                     tools_built.body["trace"] = [gate_node, *tools_built.body.get("trace", [])]
                 yield "understood", {"detected_lang": tools_built.body["detected_lang"],
@@ -1213,6 +1258,38 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                                                    allow_cache=not history):
                     yield ev
                 return
+
+        if deferred_agent_hit is not None:  # tools declined: the cached sidecar answer stands
+            for ev in replay(deferred_agent_hit):
+                yield ev
+            return
+
+        if svc.agent is None and r.intent == "abstain" and r.topic:
+            # the router knew the topic (height, material): tools tried, the topic's own abstain
+            # with where to find it is the honest last word
+            stats["no_cache"] = True
+            topic_built = A.abstain_topic(question, lang, r.topic, intent_tag=intent_tag)
+            yield "understood", {"detected_lang": topic_built.body["detected_lang"],
+                                 "canonical_en": topic_built.body["canonical_en"], "route": stats["route"]}
+            async for ev in _finalize_and_emit(svc, d, req, topic_built, caller, stats, meters, t0, key,
+                                               allow_cache=False):
+                yield ev
+            return
+        if svc.agent is None:  # no sidecar: what the drawing's data cannot answer is said plainly
+            stats["no_cache"] = True
+            nothing = A.abstain(
+                question, lang, eff_scope, "not_answerable", question,
+                "Tried: the exact templates and the tool steps over this drawing's indexed rooms, "
+                "openings and texts. None of them gives this answer.",
+                intent_body="abstain · not answerable from the drawing's data",
+                intent_tag=intent_tag)
+            nothing.body["trace"][-1]["body"] = "I cannot answer this from the drawing's data."
+            yield "understood", {"detected_lang": nothing.body["detected_lang"],
+                                 "canonical_en": nothing.body["canonical_en"], "route": stats["route"]}
+            async for ev in _finalize_and_emit(svc, d, req, nothing, caller, stats, meters, t0, key,
+                                               allow_cache=False):
+                yield ev
+            return
 
         # 5. Escalate directly to `agent_client` (`deep_agent`) — NEVER fall back to legacy `understand` or `flash-lite`!
         agent_deadline = max(turn_deadline, agent_deadline_s or 0.0)
@@ -1283,15 +1360,17 @@ def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: d
 
 
 async def ask(svc: Services, req: AskRequest, caller: Caller,
-              meters: dict[str, Meter] | None = None) -> dict:
-    async for event, data in run(svc, req, caller, meters=meters, deadline_s=float(svc.settings.turn_deadline_s)):
+              meters: dict[str, Meter] | None = None, run_fn=None) -> dict:
+    # `run_fn`: a drop-in for `run` (whole-building answers, aura/building.py); default `run`.
+    async for event, data in (run_fn or run)(svc, req, caller, meters=meters,
+                                             deadline_s=float(svc.settings.turn_deadline_s)):
         if event == "answer":
             return data["response"]
     raise PipelineError("internal", "The pipeline ended without an answer.", 500)
 
 
 async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
-                      deadline_s: float) -> AsyncIterator[tuple[str, dict]]:
+                      deadline_s: float, run_fn=None) -> AsyncIterator[tuple[str, dict]]:
     """/chat: turn, progress*, understood, (tool_call, tool_result)*, check?, answer | error, done.
 
     The pipeline runs in its own task so the turn deadline is exact; on timeout the task is
@@ -1320,8 +1399,9 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
 
     async def produce() -> None:
         try:
-            async for item in run(svc, req, caller, context, history, meters, deadline_s=deadline_s,
-                                  agent_deadline_s=svc.settings.agent_deadline_s):
+            async for item in (run_fn or run)(svc, req, caller, context, history, meters,
+                                              deadline_s=deadline_s,
+                                              agent_deadline_s=svc.settings.agent_deadline_s):
                 await queue.put(item)
         except PipelineError as e:
             await queue.put(("error", {"error": str(e), "code": e.code}))

@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Link } from "react-router"
-import { CheckIcon, FileIcon } from "lucide-react"
+import { CheckIcon, FileIcon, Trash2Icon } from "lucide-react"
 import type { DrawingSummary } from "@/api/contract"
 import {
   apiUrl,
@@ -9,7 +9,19 @@ import {
   factsRatio,
   kindText,
 } from "@/api/library"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardAction,
@@ -22,6 +34,7 @@ import {
 import { Progress } from "@/components/ui/progress"
 import { useUi } from "@/i18n/uiLang"
 import { cn } from "@/lib/utils"
+import { fileTypeOf } from "./ownUploads"
 
 function CardBody({
   d,
@@ -29,17 +42,22 @@ function CardBody({
   selectionMode,
   selectedOrder,
   floorLabel,
+  badge,
 }: {
   d: DrawingSummary
   offline?: boolean
   selectionMode?: boolean
   selectedOrder?: number | null
   floorLabel?: string | null
+  badge?: React.ReactNode
 }) {
   const { tu } = useUi()
   const title = displayDrawingTitle(d)
   const sourceExt = (d as DrawingSummary & { source_ext?: string }).source_ext
-  const kindLabel = kindText(d.kind, tu, sourceExt)
+  const own = d.source === "upload"
+  // Own uploads name their file type (PNG, JPG, SVG ...); bundled drawings their kind.
+  const ownType = own ? fileTypeOf(d) : null
+  const kindLabel = ownType && ownType !== "IMAGE" && ownType !== "DXF" ? ownType : kindText(d.kind, tu, sourceExt)
   const ready = d.status === "ready"
   const facts = factsRatio(d)
   const [broken, setBroken] = useState(false)
@@ -84,6 +102,7 @@ function CardBody({
             </span>
           </div>
         )}
+        {badge ? <span className="absolute bottom-2 left-2.5 max-w-[calc(100%-1.25rem)]">{badge}</span> : null}
         {selectionMode && ready ? (
           <span
             aria-hidden
@@ -160,14 +179,20 @@ function CardBody({
       </CardContent>
       <CardFooter className="mt-auto border-t-0 bg-transparent pt-0">
         {/* Compact 1-line attribution keeping the licence badge visible; full dataset credit sits in the page footnote and tooltip. */}
-        <p
-          className="min-w-0 truncate text-xs text-muted-foreground"
-          title={d.credit.text}
-          data-credit
-        >
-          <span className="text-foreground">{licHead}</span>
-          {creditRest ? ` · ${creditRest}` : ""}
-        </p>
+        {own ? (
+          <p className="min-w-0 truncate text-xs text-muted-foreground" data-own-upload>
+            {tu("lib_own_upload")}
+          </p>
+        ) : (
+          <p
+            className="min-w-0 truncate text-xs text-muted-foreground"
+            title={d.credit.text}
+            data-credit
+          >
+            <span className="text-foreground">{licHead}</span>
+            {creditRest ? ` · ${creditRest}` : ""}
+          </p>
+        )}
       </CardFooter>
     </Card>
   )
@@ -181,6 +206,8 @@ export function DrawingCard({
   floorLabel = null,
   onToggleSelect,
   onOpen,
+  badge,
+  onDelete,
 }: {
   d: DrawingSummary
   offline?: boolean
@@ -189,6 +216,10 @@ export function DrawingCard({
   floorLabel?: string | null
   onToggleSelect?: (d: DrawingSummary) => void
   onOpen?: (d: DrawingSummary) => void
+  /** A small badge over the preview (an upload's indexing stage). */
+  badge?: React.ReactNode
+  /** Own uploads: delete through the stored token (a confirm dialog first). */
+  onDelete?: () => void
 }) {
   const { tu } = useUi()
   const title = displayDrawingTitle(d)
@@ -217,13 +248,14 @@ export function DrawingCard({
             selectionMode
             selectedOrder={selectedOrder}
             floorLabel={floorLabel}
+            badge={badge}
           />
         </button>
       </article>
     )
   }
   return (
-    <article className="h-full" data-drawing-card={d.id}>
+    <article className="relative h-full" data-drawing-card={d.id}>
       {/* Press feedback on pointer-down (scale), a gentle lift for fine pointers only. */}
       <Link
         to={`/d/${encodeURIComponent(d.id)}`}
@@ -235,8 +267,37 @@ export function DrawingCard({
         }
         className="group/drawing block h-full rounded-xl transition-transform duration-200 ease-out active:scale-[0.985] active:duration-75 motion-reduce:transition-none [@media(hover:hover)_and_(pointer:fine)]:hover:-translate-y-0.5"
       >
-        <CardBody d={d} offline={offline} floorLabel={floorLabel} />
+        <CardBody d={d} offline={offline} floorLabel={floorLabel} badge={badge} />
       </Link>
+      {onDelete ? (
+        // A sibling of the link (never a button inside a link), over the preview's corner.
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              className="absolute top-2 right-2 bg-background/90 text-muted-foreground shadow-xs backdrop-blur-sm hover:text-destructive"
+              aria-label={tu("up_delete_aria", { name: title })}
+              title={tu("up_delete_tip")}
+              data-delete-upload
+            >
+              <Trash2Icon />
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{tu("up_delete_title", { name: title })}</AlertDialogTitle>
+              <AlertDialogDescription>{tu("up_delete_desc")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{tu("up_keep")}</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={onDelete}>
+                {tu("up_delete")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
     </article>
   )
 }

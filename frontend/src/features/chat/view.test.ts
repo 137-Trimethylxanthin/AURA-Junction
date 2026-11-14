@@ -786,25 +786,28 @@ describe('1.2 BoxCropThumb, AgentCard, and DrawingTitle DOM verification', () =>
 })
 
 describe('agentFailure', () => {
-  const failed = (look: string, extra: Record<string, unknown> = {}) =>
+  const failed = (extra: Record<string, unknown> = {}) =>
     ({
       answer: { kind: 'abstain', reason: 'low_confidence' },
       method: 'none',
       route: 'agent',
-      trace: [{ id: 'look', title: 'Look for the data', tag: 'drawing', body: look, kind: 'warn' }],
+      trace: [{ id: 'look', title: 'Look for the data', tag: 'drawing', body: 'The deep agent service is unavailable.', kind: 'warn' }],
       ...extra,
     }) as unknown as AskResponse
 
-  it('tells unavailable, timeout and run errors apart without exposing the text', () => {
-    expect(agentFailure(failed('The deep agent service is unavailable (ConnectError http://x); nothing guessed.'))).toBe('unavailable')
-    expect(agentFailure(failed('The agent did not finish in 61 s; nothing guessed.'))).toBe('timeout')
-    expect(agentFailure(failed('The deep agent could not complete this run (boom).'))).toBe('error')
-    expect(agentFailure(failed('anything', { agent_failure: 'timeout' }))).toBe('timeout')
+  it('reads the backend label, for each failure kind', () => {
+    for (const kind of ['unavailable', 'timeout', 'error'] as const) expect(agentFailure(failed({ agent_failure: kind }))).toBe(kind)
   })
 
-  it('leaves real low-confidence abstains alone', () => {
-    expect(agentFailure(failed("The agent's confidence (0.31) is below the 0.50 threshold; nothing guessed."))).toBeNull()
-    expect(agentFailure(failed('x', { estimate: { confidence: 0.4 } }))).toBeNull()
+  it('never parses the trace wording: no field, no failure card', () => {
+    expect(agentFailure(failed())).toBeNull()
+    expect(agentFailure(failed({ estimate: { confidence: 0.4 } }))).toBeNull()
+  })
+
+  it('the contract accepts the field and rejects unknown values', () => {
+    const r = askLocalForFooter({ drawing_id: bundledDrawing.id, question: 'how many windows' })
+    expect(isAskResponse({ ...r, agent_failure: 'timeout' })).toBe(true)
+    expect(isAskResponse({ ...r, agent_failure: 'exploded' })).toBe(false)
   })
 })
 
@@ -841,5 +844,58 @@ describe('note answers are labelled by their method, not by their kind', () => {
     expect(chips(r, d, 'en')[0]).toMatchObject({ text: 'Model estimate · agent', tone: 'info' })
     expect(footerParts(r, 'en')[0]).toBe('answer: Model estimate · agent')
     expect(sentence(r, d, bundledDrawing, 'en')).toBe('Estimated from the drawing by the blueprint agent.')
+  })
+})
+
+describe('pdf_vector and store_sql methods', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+  for (const [method, label] of [
+    ['pdf_vector', 'Read from the PDF'],
+    ['store_sql', 'Computed by SQL'],
+  ] as const) {
+    it(`${method} is accepted and rendered as an exact-style chip`, () => {
+      const r = { ...base, method } as AskResponse
+      expect(isAskResponse(r)).toBe(true)
+      const d = deriveAnswer(r, emptyToggles())
+      expect(chips(r, d, 'en')[0]).toMatchObject({ key: 'method', text: label, tone: 'success' })
+      expect(footerParts(r, 'en')[0]).toBe(`answer: ${label}`)
+    })
+    it(`${method} with an estimate keeps the estimate styling`, () => {
+      const r = { ...base, method, estimate: { confidence: 0.7 } } as AskResponse
+      const d = deriveAnswer(r, emptyToggles())
+      expect(chips(r, d, 'en')[0]).toMatchObject({ key: 'method', tone: 'neutral' })
+    })
+  }
+})
+
+import { announce, triedText } from '@/features/chat/view'
+
+describe('not_answerable abstain', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+  // Trace and answer node as returned by the live backend on swiss-4397 (walking-distance question).
+  const r = {
+    ...base,
+    answer: { kind: 'abstain', reason: 'not_answerable' },
+    method: 'none',
+    evidence: { boxes: [], rooms: [] },
+    trace: [
+      { id: 'q', title: 'Question', tag: 'English · detected', body: '“distance by walking route”', kind: 'info' },
+      {
+        id: 'look',
+        parent: 'q',
+        title: 'Look for the data',
+        tag: 'drawing',
+        body: "I cannot answer this from the drawing's data: the tools found no answer within their limits.",
+        kind: 'warn',
+      },
+      { id: 'answer', parent: 'q', title: 'Answer', tag: 'abstain', body: 'Abstained. Nothing guessed.', kind: 'warn' },
+    ],
+  } as unknown as AskResponse
+
+  it('is accepted, announced neutrally, and reports what was tried', () => {
+    expect(isAskResponse(r)).toBe(true)
+    expect(announce(r, deriveAnswer(r, emptyToggles()))).toBe('Not in this drawing’s data. Nothing guessed.')
+    expect(triedText(r)).toBe('the tools found no answer within their limits.')
+    expect(triedText({ ...r, trace: [] })).toBeNull()
   })
 })

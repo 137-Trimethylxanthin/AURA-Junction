@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS answer_cache (
   question TEXT, response TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS answer_cache_drawing ON answer_cache(drawing_id);
+CREATE TABLE IF NOT EXISTS store_tombstones (  -- deleted uploads whose store data must go too
+  drawing_id TEXT PRIMARY KEY, file_id TEXT, t REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY, t REAL NOT NULL, title TEXT NOT NULL,
   floors TEXT NOT NULL, auto_matched INTEGER DEFAULT 0, body TEXT NOT NULL,

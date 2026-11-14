@@ -602,3 +602,22 @@ The table also includes FR, FI and DE phrasings of the window, door and apartmen
   - `ProjectFloor`: `{ drawing_id: string; label: string; order: number }`.
   - `ProjectBundle`: `{ id: string; title: string; floors: ProjectFloor[]; auto_matched?: boolean; created_at?: string }`.
   - `GET /projects` returns `ProjectList` (`{ contract_version, projects: ProjectBundle[] }`); `POST /projects` saves a `ProjectBundle`; `DELETE /projects/:id` ungroups it.
+
+### Whole-building answers (additive within 1.2; the version number is unchanged)
+
+A drawing that is a sheet of a multi-sheet project (`GET /projects`) is answered for the **whole building** by default.
+It is limited to fewer sheets only when the question names a floor ("this floor", "ground floor", "first floor",
+"level 2", "EG", "1. OG", "rez-de-chaussée", "1er étage", "2. kerros", ...), when the request selects sheets, or when the
+scope is a `room` / `region` drawn on one sheet.
+- `AskRequest` and `ChatRequest` add optional `project_id?: string` and `sheet_ids?: string[]` (default: every sheet of the
+  project the drawing belongs to). An explicit `scope: { kind: 'project' }` keeps the deep-agent multi-plan path.
+- Each sheet in scope is answered by the normal per-drawing path (concurrently, at most 3 at a time) and combined in code:
+  counts, areas and quantities are summed; text and lists are concatenated with the sheet label; `method` is the weakest
+  method among the sheets; the answer abstains only when no sheet can answer (and names the sheets that could not).
+- `AskResponse` adds optional `breakdown?: { drawing_id, label, status: 'ok' | 'abstain' | 'error', value?, unit? }[]`
+  (sheets in scope, ordered by floor). `scope` is `{ kind: 'project', project_id, drawing_ids }` of the sheets asked.
+  Evidence items carry their sheet in `drawing_id`; an id that two sheets share (`door-01`) is `<sheet id>:<id>` on the
+  later sheet, so evidence ids stay unique across the answer.
+- `TraceNode.stage` adds `'scope'`: node `scope` (parent `q`) with `detail: { decider: 'explicit words' | 'user selection' |
+  'default whole building', project_id, sheets: [{ id, label }] }`, one branch node `sheet-<i>` per sheet (its own nodes are
+  `<i>:<id>`), and a final `answer` node with the per-floor sum.

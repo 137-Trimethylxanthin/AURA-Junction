@@ -1,6 +1,8 @@
 import {
   CONTRACT_VERSION,
+  isAcceptedUploads,
   isAskResponse,
+  type AcceptedUploads,
   salvageAskResponse,
   salvageDrawing,
   salvageDrawingList,
@@ -197,6 +199,26 @@ export async function getDrawingStatus(opts: ClientOptions, id: string, timeoutM
   if (!isDrawingStatusBody(body)) throw new ApiError('The drawing status does not match the contract', 200, 'invalid_response', body)
   checkVersion(body.contract_version, body)
   return body
+}
+
+/** `GET /uploads/accepted`; null on an older backend without it (the caller keeps its built-in list). */
+export async function getAcceptedUploads(opts: ClientOptions, timeoutMs = 10_000): Promise<AcceptedUploads | null> {
+  const body = await request(opts, '/uploads/accepted', { method: 'GET' }, timeoutMs).catch((e) => {
+    if (e instanceof ApiError && (e.status === 404 || e.status === 405)) return null
+    throw e
+  })
+  return isAcceptedUploads(body) ? body : null
+}
+
+/** `POST /drawings/:id/reindex` (the upload's delete token): restarts the drawing store for every page; 202 + status. */
+export async function reindexDrawing(opts: ClientOptions, id: string, deleteToken: string, timeoutMs = 15_000): Promise<DrawingStatusBody | null> {
+  const body = await request(
+    opts,
+    `/drawings/${encodeURIComponent(id)}/reindex`,
+    { method: 'POST', headers: { 'X-Delete-Token': deleteToken } },
+    timeoutMs,
+  )
+  return isDrawingStatusBody(body) ? body : null
 }
 
 export async function deleteDrawing(opts: ClientOptions, id: string, deleteToken: string, timeoutMs = 15_000): Promise<void> {

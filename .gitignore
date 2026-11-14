@@ -8,6 +8,8 @@ node_modules/
 dist/
 .env
 .env.*
+# Public, no secrets: the dev build hides the bundled demo drawings from the library.
+!frontend/.env.development
 !.env.example
 frontend/e2e/__screens__/
 frontend/test-results/
@@ -34,3 +36,8 @@ backend/.data/
 agent-service/.venv/
 agent-service/.data/
 agent-service/runs/
+
+# build metadata and local browser captures
+*.egg-info/
+.playwright-mcp/
+frontend/public/dev-uploads.json
