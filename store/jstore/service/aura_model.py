@@ -207,6 +207,8 @@ class Model:
     storeys: list = field(default_factory=list)           # every storey view of the drawing, in library order
     elsewhere: dict[int, dict] = field(default_factory=dict)   # entities of the other storeys: {kind, storey}
     n_dimensions: int = 0                                      # printed dimensions an answer may cite
+    dimensions: list = field(default_factory=list)             # ... each with its box and line in percent
+    extent: dict | None = None                                 # the plan's own width and depth in metres (walls, else rooms)
     shapes: list = field(default_factory=list)            # (style, geometry in percent): footprints of the storey's elements
     pages: set | None = None                              # a storey view: the (file_id, page_no) of the model that show it,
     page_files: set = field(default_factory=set)          # and the files that show it on every page; None: any page
@@ -547,8 +549,14 @@ def load(db: DB, key: str) -> dict | None:
     d["items"] = db.run("""select entity_id, storey, kind, ifc_class, tag, label, room, apartment, width_m, height_m, n_sources,
                                   is_duplicate, duplicate_of, geom from q.items order by kind, entity_id""")
     # printed dimensions: not drawn or counted with the items, but an answer may cite them (boxes of its evidence)
-    d["dimensions"] = db.run("""select entity_id, kind as dim_kind, text, value_m, room, page_no, geom from q.dimensions
-                                order by entity_id""")
+    d["dimensions"] = db.run("""select d.entity_id, d.kind as dim_kind, d.text, d.value_m, d.unit, d.orientation, d.a_m, d.b_m,
+                                       d.room, d.page_no, d.file_id, d.geom, e.attrs->'px' as px
+                                from q.dimensions d join jstore.entity e using (entity_id) order by d.entity_id""")
+    # the printed (else measured: the smallest rotated rectangle around the outline) length and width of each room
+    d["room_sizes"] = {}
+    if db.one("select to_regclass('q.room_sizes') as v")["v"]:
+        d["room_sizes"] = {r["entity_id"]: r for r in db.run(
+            "select entity_id, length_m, width_m, size_source, size_text from q.room_sizes where length_m is not null")}
     d["apartments"] = db.run("""select entity_id, storey, apartment, label, rooms, net_area_m2::float8 as net_area_m2
                                 from q.apartments order by apartment nulls last, entity_id""")
     d["issues"] = db.run("select issue_id, entity_id, property, kind, detail, status from q.issues order by issue_id limit 1000")
@@ -692,6 +700,7 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
         return transform(make_box(*u), to_pct)
 
     # ---- rooms
+    sizes = data.get("room_sizes") or {}
     seen: dict[str, int] = {}
     for r in rooms:
         num = (r["number"] or "").strip()
@@ -720,7 +729,8 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
                                  "outline" if str(r["area_source"] or "").startswith("measured") else "printed"),
                     entity_id=r["entity_id"], room_type=r["room_type"], storey=r["storey"], area_method=r["area_source"],
                     n_sources=r["n_sources"], agreement=r["agreement"], is_duplicate=r["is_duplicate"],
-                    sources=values.get(r["entity_id"], []), evidence_id=f"room-{rid}", kind="room")
+                    sources=values.get(r["entity_id"], []), evidence_id=f"room-{rid}", kind="room",
+                    size=_room_size(sizes.get(r["entity_id"]), base))
         m.rooms.append(room)
         m.by_entity[r["entity_id"]] = room
     room_ids = {r["num"]: r["room_id"] for r in m.rooms if r["num"]}
@@ -751,12 +761,36 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
     dims = [dict(x) for x in data.get("dimensions") or []]
     m.n_dimensions = len(dims)
     for n, x in enumerate(dims, 1):
+        px = x.get("px") if isinstance(x.get("px"), dict) else {}
         g = place(x)
+        # the dimension line and the box of its printed text, in percent of the page shown: from the geometry in
+        # the drawing's frame, else (a page without a frame) from where the reader saw them on the page itself
+        line = None
+        if g is not None and g.geom_type == "LineString":
+            line = [[_r(a), _r(b)] for a, b in g.coords]
+        on_page = base is not None and to_pct is not None and any(
+            s["file_id"] == base.file_id and s["page_no"] == base.page_no for s in srcs.get(x["entity_id"], []))
+        if on_page:
+            try:
+                if line is None and px.get("line") and len(px["line"]) >= 2:
+                    line = [[_r(v) for v in apply(to_pct, float(a), float(b))] for a, b in px["line"]]
+                if px.get("box") and len(px["box"]) >= 4:
+                    tb = transform(make_box(*[float(v) for v in px["box"][:4]]), to_pct)
+                    g = tb if g is None else shapely.union_all([g, tb])
+                if line is not None and len(line) >= 2:
+                    ln = shapely.LineString(line)
+                    g = ln if g is None else shapely.union_all([g, ln])
+            except (TypeError, ValueError):
+                pass
         item = dict(id=f"dim-{n:0{max(2, len(str(len(dims))))}d}", subject="label", kind="dimension",
                     entity_id=x["entity_id"], box=_rect(g, 0.3) if g is not None else None, shape=g,
                     room_id=room_ids.get((x["room"] or "").strip()), unit=None, duplicate_of=None,
-                    note=f"{x['dim_kind'] or 'dimension'} {x['text']}"[:120], tag=x["text"], label=x["text"])
+                    note=f"{x['dim_kind'] or 'dimension'} {x['text']}"[:120], tag=x["text"], label=x["text"],
+                    dim_kind=x["dim_kind"], value_m=x["value_m"], dim_unit=x.get("unit"), orientation=x.get("orientation"),
+                    a_m=x.get("a_m"), b_m=x.get("b_m"), line=line, page_no=x.get("page_no"))
         m.by_entity[x["entity_id"]] = item
+        m.dimensions.append(item)
+    m.extent = _extent(m, data, srcs, frame_to_pct)
     for a in m.apartments:
         m.by_entity[a["entity_id"]] = dict(kind="apartment", entity_id=a["entity_id"], unit=a["apartment"], label=a["label"])
     m.linework = None if m.synthetic else _linework(db, m)
@@ -883,9 +917,56 @@ def _clean(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
+def _room_size(row: dict | None, base) -> dict | None:
+    """A room's length and width in metres: as printed in it, else measured on its outline (an estimate when the
+    page states no scale)."""
+    if not row or row.get("length_m") is None or row.get("width_m") is None:
+        return None
+    printed = row.get("size_source") == "printed"
+    source = "printed" if printed else "estimate" if base is not None and base.frame_method == "nominal_scale" else "measured"
+    return _clean(dict(length_m=round(float(row["length_m"]), 3), width_m=round(float(row["width_m"]), 3), source=source,
+                       text=row.get("size_text") if printed else None))
+
+
+def _extent(m: Model, data: dict, srcs: dict, frame_to_pct) -> dict | None:
+    """Width (along the page's x) and depth (along y) in metres of what is drawn: the walls of an image plan, else
+    the room outlines. Only on a page with a frame (percent -> metres)."""
+    base = m.base
+    if base is None or not base.frame or not base.to_pct:
+        return None
+    geoms, source = list(m.walls), "walls"
+    if not geoms and frame_to_pct is not None:
+        for w in data.get("walls") or []:
+            g = _geom(w["geom"])
+            if g is not None and any(s["file_id"] == base.file_id for s in srcs.get(w["entity_id"], [])):
+                geoms.append(transform(g, frame_to_pct))
+    if not geoms:
+        source = "rooms"
+        geoms = [shapely.Polygon(r["points"]) for r in m.rooms if len(r.get("points") or []) >= 3 and not r.get("outdoor")]
+    geoms = [g for g in geoms if g is not None and not g.is_empty]
+    if not geoms:
+        return None
+    x0, y0, x1, y1 = shapely.union_all([g.envelope for g in geoms]).bounds
+    pct_to_m = mul(base.frame, inv(base.to_pct))
+    w = (x1 - x0) * math.hypot(pct_to_m[0], pct_to_m[3])
+    d = (y1 - y0) * math.hypot(pct_to_m[1], pct_to_m[4])
+    if not (math.isfinite(w) and math.isfinite(d) and w > 0 and d > 0):
+        return None
+    return dict(width_m=round(w, 2), depth_m=round(d, 2), source=source, estimate=base.frame_method == "nominal_scale",
+                box=dict(x=_r(x0), y=_r(y0), w=_r(x1 - x0), h=_r(y1 - y0)))
+
+
+def dimension_doc(it: dict) -> dict:
+    """A printed dimension as an answer cites it: what is printed, metres, and where it is on the page shown."""
+    return _clean(dict(id=it["id"], store_ref=it["entity_id"], kind=it["dim_kind"], text=it["label"], value_m=it["value_m"],
+                       unit=it["dim_unit"], orientation=it["orientation"], a_m=it["a_m"], b_m=it["b_m"],
+                       room_id=it["room_id"], page_no=it["page_no"], line=it["line"], **(it["box"] or {})))
+
+
 def room_poly(r: dict) -> dict:
     """The RoomPoly of the contract (`area_m2` stays null when unknown; every other absent field is omitted)."""
-    out = _clean({k: r[k] for k in ("room_id", "num", "name", "unit", "outdoor", "points", "label_at", "area_source")})
+    out = _clean({k: r.get(k) for k in ("room_id", "num", "name", "unit", "outdoor", "points", "label_at", "area_source",
+                                        "size")})
     out["area_m2"] = r["area_m2"]
     return out
 
@@ -948,6 +1029,7 @@ def drawing_doc(m: Model, project_meta: dict | None = None) -> dict:
         credit = dict(text="Uploaded file", license="LicenseRef-upload", license_name="Uploaded by you")
     return _clean(dict(
         printed_dimensions=m.n_dimensions or None,     # additive: lengths can be answered from the sheet
+        dimensions=[dimension_doc(x) for x in m.dimensions] or None, extent_m=m.extent,
         contract_version=CONTRACT_VERSION, id=did, title=m.title,
         subtitle=" · ".join(x for x in (project.split("/", 1)[0], " + ".join(f.upper() for f in formats), scale,
                                         storey_note(m.storey)) if x),
