@@ -16,19 +16,23 @@ import shutil
 import statistics
 import tempfile
 import time
+import uuid
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from aura import tools, uploads
+from aura.agent_client import AgentClient
 from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, Ledger, RequestRecord
 from aura.cache import AnswerCache, CheckCache
 from aura.config import Settings, get_settings, kill_file, models_enabled
@@ -37,6 +41,8 @@ from aura.contract import (
     AskRequest,
     ChatRequest,
     DrawingSummary,
+    ProjectBundle,
+    ProjectList,
     RewriteRequest,
 )
 from aura.csvout import evidence_csv
@@ -46,6 +52,7 @@ from aura.logging import AccessLogMiddleware, RequestLogFile, setup_logging
 from aura.mcp import build_mcp
 from aura.netutil import client_ip_hash, is_presenter
 from aura.pipeline import Caller, PipelineError, Services, ask, chat_events
+from aura.solvers.pdf import infer_floor_label_and_order
 from aura.store import Store, init_db
 from aura.writer import Writer
 
@@ -103,10 +110,138 @@ def _volume():
     return modal.Volume.from_name("aura-data")
 
 
+def _synthesize_projects(s: Services) -> list[ProjectBundle]:
+    """Merge persisted SQLite `projects` with auto-detected multi-floor groups (`project_id` / IFC stems)."""
+    persisted_rows = s.store.project_rows() if s.store else []
+    bundles: list[ProjectBundle] = []
+    seen_ids: set[str] = set()
+    claimed_drawings: set[str] = set()
+
+    for row in persisted_rows:
+        try:
+            floors = sorted(
+                row["floors"],
+                key=lambda f: (float(f.get("order", 0)), str(f.get("label", "")), str(f.get("drawing_id", ""))),
+            )
+            pb = ProjectBundle.model_validate({
+                "id": row["id"],
+                "title": row["title"],
+                "floors": floors,
+                "auto_matched": row["auto_matched"],
+                "created_at": _iso(float(row["t"])) if row.get("t") else None,
+            })
+        except ValidationError:
+            continue
+        bundles.append(pb)
+        seen_ids.add(pb.id)
+        for fl in pb.floors:
+            claimed_drawings.add(fl.drawing_id)
+
+    # Auto-synthesize bundles from library + ready upload drawings sharing explicit `project_id` or IFC stem
+    candidate_ids = list(s.registry.library_ids())
+    if s.store is not None:
+        for ur in s.store.upload_rows():
+            if ur.get("status") == "ready" and ur["id"] not in candidate_ids:
+                candidate_ids.append(ur["id"])
+
+    by_proj: dict[str, list[tools.LoadedDrawing]] = defaultdict(list)
+    by_ifc_stem: dict[str, list[tools.LoadedDrawing]] = defaultdict(list)
+    for did in candidate_ids:
+        if did in claimed_drawings:
+            continue
+        d = s.registry.get(did)
+        if d is None:
+            continue
+        pid = d.drawing.get("project_id")
+        if pid:
+            by_proj[str(pid)].append(d)
+        elif did.startswith("ifc-") and "--" in did:
+            stem = did.split("--", 1)[0]
+            by_ifc_stem[stem].append(d)
+
+    for pid, members in by_proj.items():
+        if pid in seen_ids or len(members) < 2:
+            continue
+        floors = []
+        for idx, m in enumerate(members, 1):
+            dr = m.drawing
+            lbl = dr.get("floor_label")
+            ord_v = dr.get("floor_order")
+            if lbl is None or ord_v is None:
+                inf_l, inf_o = infer_floor_label_and_order(f"{dr.get('title', '')} {dr.get('subtitle', '')}", idx)
+                lbl = lbl or inf_l
+                ord_v = inf_o if ord_v is None else ord_v
+            floors.append({"drawing_id": m.id, "label": str(lbl), "order": ord_v})
+        floors.sort(key=lambda f: (float(f["order"]), f["label"], f["drawing_id"]))
+        base_title = str(members[0].drawing.get("title") or pid).split(" · ")[0].strip() or pid
+        try:
+            pb = ProjectBundle.model_validate({
+                "id": pid,
+                "title": base_title[:200],
+                "floors": floors,
+                "auto_matched": True,
+            })
+            bundles.append(pb)
+            seen_ids.add(pid)
+        except ValidationError:
+            continue
+
+    for stem, members in by_ifc_stem.items():
+        pid = f"proj-{stem}"
+        if pid in seen_ids or len(members) < 2:
+            continue
+        floors = []
+        for idx, m in enumerate(members, 1):
+            dr = m.drawing
+            sub = str(dr.get("subtitle") or m.id.split("--", 1)[-1])
+            inf_l, inf_o = infer_floor_label_and_order(sub, idx)
+            floors.append({
+                "drawing_id": m.id,
+                "label": str(dr.get("floor_label") or inf_l),
+                "order": dr.get("floor_order") if dr.get("floor_order") is not None else inf_o,
+            })
+        floors.sort(key=lambda f: (float(f["order"]), f["label"], f["drawing_id"]))
+        base_title = str(members[0].drawing.get("title") or stem).split("—")[0].split("·")[0].strip() or stem
+        try:
+            pb = ProjectBundle.model_validate({
+                "id": pid,
+                "title": base_title[:200],
+                "floors": floors,
+                "auto_matched": True,
+            })
+            bundles.append(pb)
+            seen_ids.add(pid)
+        except ValidationError:
+            continue
+
+    return bundles
+
+
+def _same_project(s: Services, did_a: str, did_b: str, scope: Any) -> bool:
+    """Allow a multi-floor project conversation thread to switch floors without 400."""
+    if did_a == did_b:
+        return True
+    if scope is not None and getattr(scope, "kind", None) == "project":
+        dids = set(getattr(scope, "drawing_ids", None) or [])
+        if did_a in dids and did_b in dids:
+            return True
+    da, db = s.registry.get(did_a), s.registry.get(did_b)
+    if da is not None and db is not None:
+        pa, pb = da.drawing.get("project_id"), db.drawing.get("project_id")
+        if pa and pa == pb:
+            return True
+    for proj in _synthesize_projects(s):
+        member_ids = {f.drawing_id for f in proj.floors}
+        if did_a in member_ids and did_b in member_ids:
+            return True
+    return False
+
+
 def create_app(
     settings: Settings | None = None,
     *,
     transport: Transport | None = None,
+    sidecar_transport: Any | None = None,
     extra_drawings: list[tools.LoadedDrawing] | None = None,
     use_gemini: bool = True,
     job_options: dict | None = None,
@@ -149,10 +284,15 @@ def create_app(
             "UPDATE drawings SET status='failed', progress=NULL, error=? "
             "WHERE status IN ('queued','processing')",
             ("The server restarted while this file was being processed; upload it again.",))
+        now_ts = time.time()
         total, by_bucket, by_day = store.request_counts()
-        recent_ip, raster_used = store.recent_limits(time.time(), AGENT_PURPOSES, RASTER_PURPOSES)
+        recent_ip, raster_used = store.recent_limits(now_ts, AGENT_PURPOSES, RASTER_PURPOSES)
+        today_str = time.strftime("%Y-%m-%d", time.gmtime(now_ts))
+        recent_ip_runs, runs_today = store.recent_agent_runs(now_ts, today_str)
         budget = Budget(settings, persisted_total=total, persisted_by_bucket=by_bucket,
                         persisted_by_day=by_day, sink=sink, recent_ip_agent=recent_ip,
+                        recent_ip_agent_runs=recent_ip_runs,
+                        agent_runs_today=(today_str, runs_today),
                         raster_public_used=raster_used,
                         ledger=Ledger(settings.db_path,
                                       flush=volume.commit if volume else None))
@@ -160,13 +300,26 @@ def create_app(
         registry = tools.Registry(settings.drawing_dirs(),
                                   {d.id: d for d in extra_drawings or []},
                                   uploads_dir=settings.uploads_dir)
+        agent = (
+            AgentClient(settings, budget, client, registry, transport=sidecar_transport)
+            if (settings.sidecar_url or sidecar_transport is not None)
+            else None
+        )
         jobs = Jobs(writer, **(job_options or {}))
         jobs.on_done = registry.evict
         jobs.after_raster = _raster_hook(client)
         app.state.jobs = jobs
-        app.state.svc = Services(settings=settings, budget=budget, client=client,
-                                 registry=registry, store=store, writer=writer,
-                                 answers=AnswerCache(ttl_s=settings.upload_ttl_s), checks=CheckCache(store, writer))
+        app.state.svc = Services(
+            settings=settings,
+            budget=budget,
+            client=client,
+            registry=registry,
+            store=store,
+            writer=writer,
+            answers=AnswerCache(ttl_s=settings.upload_ttl_s, store=store, writer=writer),
+            checks=CheckCache(store, writer),
+            agent=agent,
+        )
         holder["svc"] = app.state.svc
         cleanup = asyncio.create_task(_cleanup_loop(app.state.svc), name="aura-cleanup")
         try:
@@ -180,6 +333,8 @@ def create_app(
             await writer.stop()
             if budget.ledger is not None:
                 budget.ledger.close()
+            if agent is not None:
+                await agent.aclose()
             closer = getattr(client.transport if client and client._transport else None,
                              "aclose", None)
             if closer:
@@ -226,11 +381,21 @@ def create_app(
         drawings = sum(1 for i in ids if s.registry.get(i) is not None)
         skipped = len(s.registry.skipped & set(ids))
         ok = db_ok and data_ok
-        body = {"ok": ok, "contract_version": CONTRACT_VERSION,
-                "checks": {"db": db_ok, "data_dir": data_ok, "drawings": drawings,
-                           "drawings_skipped": skipped,
-                           "models": budget["models"],
-                           "budget_left": budget["event"]["cap"] - budget["event"]["used"]}}
+        body: dict[str, Any] = {
+            "ok": ok,
+            "contract_version": CONTRACT_VERSION,
+            "answerer": settings.answerer,
+            "checks": {
+                "db": db_ok,
+                "data_dir": data_ok,
+                "drawings": drawings,
+                "drawings_skipped": skipped,
+                "models": budget["models"],
+                "budget_left": budget["event"]["cap"] - budget["event"]["used"],
+            },
+        }
+        if s.agent is not None:
+            body["agent_ok"] = await s.agent.health_ok()
         return JSONResponse(body, status_code=200 if ok else 503)
 
     @app.get("/drawings")
@@ -249,6 +414,10 @@ def create_app(
                               if d.file("thumb.png") else dr.get("images", {}).get("rebuilt", ""))),
                 "credit": dr.get("credit"), "source": dr.get("source", d.source),
                 "subtitle": dr.get("subtitle"), "facts": dr.get("facts"),
+                "source_ext": dr.get("source_ext"),
+                "project_id": dr.get("project_id"),
+                "floor_label": dr.get("floor_label"),
+                "floor_order": dr.get("floor_order"),
             }
             try:
                 out.append(DrawingSummary.model_validate(summ).model_dump(exclude_none=True))
@@ -256,6 +425,84 @@ def create_app(
                 s.registry.skipped.add(did)
                 log.warning("skipped a drawing with an invalid summary")
         return {"contract_version": CONTRACT_VERSION, "drawings": out}
+
+    @app.get("/projects")
+    async def list_projects(request: Request) -> dict:
+        s = svc(request)
+        projects = _synthesize_projects(s)
+        return ProjectList(projects=projects).model_dump(exclude_none=True)
+
+    @app.post("/projects")
+    async def create_or_update_project(request: Request):
+        s = svc(request)
+        try:
+            raw = await request.json()
+        except Exception:  # noqa: BLE001
+            return _err("bad_request", "Invalid JSON body.", 400)
+        if not isinstance(raw, dict):
+            return _err("bad_request", "Expected a JSON object.", 400)
+        now = time.time()
+        pid = str(raw.get("id") or f"proj-{uuid.uuid4().hex[:12]}").strip()
+        raw_floors = raw.get("floors")
+        if raw_floors is None and isinstance(raw.get("drawing_ids"), list):
+            raw_floors = []
+            for idx, did in enumerate(raw["drawing_ids"], 1):
+                did_s = str(did)
+                d_obj = s.registry.get(did_s)
+                if d_obj is None:
+                    return _err("unknown_drawing", f"Unknown drawing '{did_s}'.", 404)
+                dr = d_obj.drawing
+                lbl = dr.get("floor_label")
+                ord_v = dr.get("floor_order")
+                if lbl is None or ord_v is None:
+                    inf_l, inf_o = infer_floor_label_and_order(
+                        f"{dr.get('title', '')} {dr.get('subtitle', '')}", idx - 1
+                    )
+                    lbl = lbl or inf_l
+                    ord_v = inf_o if ord_v is None else ord_v
+                raw_floors.append({"drawing_id": did_s, "label": str(lbl), "order": ord_v})
+        if not isinstance(raw_floors, list) or len(raw_floors) < 2:
+            return _err("bad_request", "A project bundle requires at least 2 floors.", 400)
+        try:
+            pb = ProjectBundle.model_validate({
+                "id": pid,
+                "title": raw.get("title", ""),
+                "floors": raw_floors,
+                "auto_matched": bool(raw.get("auto_matched", False)),
+                "created_at": raw.get("created_at") or _iso(now),
+            })
+        except ValidationError as e:
+            return JSONResponse({"detail": jsonable_encoder(e.errors())}, status_code=422)
+        for fl in pb.floors:
+            if s.registry.get(fl.drawing_id) is None:
+                return _err("unknown_drawing", f"Unknown drawing '{fl.drawing_id}'.", 404)
+        sorted_floors = sorted(pb.floors, key=lambda f: (float(f.order), f.label, f.drawing_id))
+        pb = pb.model_copy(update={"floors": sorted_floors})
+        dumped = pb.model_dump(exclude_none=True)
+        if s.writer is not None:
+            await s.writer.execute(
+                "INSERT OR REPLACE INTO projects(id, t, title, floors, auto_matched, body) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    pb.id,
+                    now,
+                    pb.title,
+                    json.dumps([f.model_dump() for f in pb.floors], ensure_ascii=False),
+                    1 if pb.auto_matched else 0,
+                    json.dumps(dumped, ensure_ascii=False),
+                ),
+            )
+        return dumped
+
+    @app.delete("/projects/{project_id}")
+    async def delete_project(project_id: str, request: Request):
+        s = svc(request)
+        row = s.store.project_row(project_id) if s.store else None
+        if row is None:
+            return _err("not_found", f"Unknown project '{project_id}'.", 404)
+        if s.writer is not None:
+            await s.writer.execute("DELETE FROM projects WHERE id=?", (project_id,))
+        return Response(status_code=204)
 
     def upload_row(request: Request, drawing_id: str) -> dict | None:
         st = svc(request).store
@@ -363,18 +610,23 @@ def create_app(
         await asyncio.to_thread(_copy_to, f.file, tmp)
         acc = uploads.store(settings.uploads_dir, kind, tmp)
         now = time.time()
+        exp_ts = now + settings.upload_ttl_s
+        del_hash = uploads.hash_token(acc.delete_token)
         title = _safe_title(f.filename, kind)
+        db_kind = "cad_dxf" if kind == "dxf" else "ifc" if kind == "ifc" else "raster"
+        worker_kind = kind if kind in ("dxf", "pdf", "ifc") else "raster"
         await s.writer.execute(  # type: ignore[union-attr]
             "INSERT INTO drawings(id, t, kind, status, progress, error, title, delete_token_hash, "
             "expires_at, meta) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (acc.drawing_id, now, "cad_dxf" if kind == "dxf" else "raster", "queued", 0.0, None,
-             title, uploads.hash_token(acc.delete_token), now + settings.upload_ttl_s,
+            (acc.drawing_id, now, db_kind, "queued", 0.0, None,
+             title, del_hash, exp_ts,
              json.dumps({"kind": kind})))
         meta = {"title": title, "created_at": _iso(now),
-                "expires_at": _iso(now + settings.upload_ttl_s)}
+                "expires_at": _iso(exp_ts)}
         request.app.state.jobs.submit(
-            acc.drawing_id, "dxf" if kind == "dxf" else "raster", acc.src, acc.dir, meta,
-            {"presenter": presenter, "ip_hash": client_ip_hash(request, settings)})
+            acc.drawing_id, worker_kind, acc.src, acc.dir, meta,
+            {"presenter": presenter, "ip_hash": client_ip_hash(request, settings),
+             "delete_token_hash": del_hash, "expires_at": exp_ts})
         return JSONResponse({"contract_version": CONTRACT_VERSION, "drawing_id": acc.drawing_id,
                              "delete_token": acc.delete_token, "status": "queued"},
                             status_code=202)
@@ -431,7 +683,7 @@ def create_app(
             return _err("unknown_drawing", f"Unknown drawing '{body.drawing_id}'", 404)
         if body.conversation_id:
             conv = s.store.conversation(body.conversation_id) if s.store else None
-            if conv is not None and conv["drawing_id"] != body.drawing_id:
+            if conv is not None and not _same_project(s, conv["drawing_id"], body.drawing_id, body.scope):
                 return _err("bad_request", "That conversation belongs to another drawing.", 400)
         gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s)
         return StreamingResponse(_sse(gen), media_type="text/event-stream",
@@ -616,30 +868,52 @@ def _safe_title(filename: str | None, kind: str) -> str:
     """Display title only (never a path): the base name, printable, at most 80 characters."""
     name = (filename or "").replace("\\", "/").rsplit("/", 1)[-1]
     name = "".join(ch for ch in name if ch.isprintable()).strip()[:80]
-    return name or ("Uploaded DXF" if kind == "dxf" else "Uploaded image")
+    if name:
+        return name
+    defaults = {"dxf": "Uploaded DXF", "pdf": "Uploaded PDF", "ifc": "Uploaded IFC"}
+    return defaults.get(kind, "Uploaded image")
 
 
 async def _sse(gen) -> AsyncIterator[bytes]:
     async for event, data in gen:
-        yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+        if event.startswith(":"):
+            yield f": progress {data.get('seconds', 0)}\n\n".encode()
+        else:
+            yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
-async def _remove_upload(s: Services, drawing_id: str) -> None:
+async def _remove_single_upload(s: Services, drawing_id: str) -> None:
     s.registry.evict(drawing_id)
+    if s.agent is not None:
+        await s.agent.evict_drawing(drawing_id)
     d = s.settings.uploads_dir / drawing_id
     if d.is_dir() and d.parent == s.settings.uploads_dir:
         await asyncio.to_thread(shutil.rmtree, d, True)
     w = s.writer
     await w.execute("DELETE FROM drawings WHERE id=?", (drawing_id,))  # type: ignore[union-attr]
-    # Everything derived from the upload goes with it: answers, conversations, turns.
+    # Everything derived from the upload goes with it: answers, conversations, turns, caches.
     await w.execute("DELETE FROM answers WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     await w.execute(  # type: ignore[union-attr]
         "DELETE FROM turns WHERE conversation_id IN "
         "(SELECT id FROM conversations WHERE drawing_id=?)", (drawing_id,))
     await w.execute("DELETE FROM conversations WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     await w.execute("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
+    await w.execute("DELETE FROM answer_cache WHERE drawing_id=?", (drawing_id,))  # type: ignore[union-attr]
     s.answers.drop_drawing(drawing_id)
     s.checks.forget_drawing(drawing_id)
+
+
+async def _remove_upload(s: Services, drawing_id: str) -> None:
+    await _remove_single_upload(s, drawing_id)
+    # If this is the primary page of a multi-page PDF (`up-<tok>`), also remove sibling pages & auto-bundle
+    if not re.search(r"-p\d+$", drawing_id) and s.store is not None:
+        prefix = f"{drawing_id}-p"
+        siblings = [r["id"] for r in s.store.upload_rows() if r["id"].startswith(prefix)]
+        for sib_id in siblings:
+            await _remove_single_upload(s, sib_id)
+        if drawing_id.startswith("up-") and s.writer is not None:
+            proj_id = f"proj-{drawing_id.removeprefix('up-')}"
+            await s.writer.execute("DELETE FROM projects WHERE id=?", (proj_id,))
 
 
 async def cleanup_once(s: Services, now: float | None = None) -> int:
@@ -649,7 +923,7 @@ async def cleanup_once(s: Services, now: float | None = None) -> int:
     for did in expired:
         await _remove_upload(s, did)
     cutoff = now - s.settings.upload_ttl_s
-    for table in ("answers", "turns", "conversations"):
+    for table in ("answers", "turns", "conversations", "answer_cache"):
         await s.writer.execute(f"DELETE FROM {table} WHERE t < ?", (cutoff,))  # type: ignore[union-attr]
     # Privacy: the hashed IP is only needed for the last hour's rate limits; older request rows
     # keep their count and cost (the event cap) but lose the hash.
@@ -716,7 +990,7 @@ class BodyCapMiddleware:
             return
         length = dict(scope.get("headers") or []).get(b"content-length")
         if length is not None and length.isdigit() and int(length) > self.cap:
-            await _err("too_large", "The request body is too large (25 MB max).", 413)(
+            await _err("too_large", "The request body is too large (65 MB max).", 413)(
                 scope, receive, send)
             return
         seen = 0
@@ -742,7 +1016,7 @@ class BodyCapMiddleware:
                 if not replaced:
                     replaced = True
                     body = json.dumps({"contract_version": CONTRACT_VERSION, "code": "too_large",
-                                       "error": "The request body is too large (25 MB max)."})
+                                       "error": "The request body is too large (65 MB max)."})
                     await send({"type": "http.response.start", "status": 413,
                                 "headers": [(b"content-type", b"application/json")]})
                     await send({"type": "http.response.body", "body": body.encode()})

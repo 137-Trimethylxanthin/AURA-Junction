@@ -599,10 +599,26 @@ def answer(model: SwissModel, family: str, scope: dict | None = None,
             letters = sorted(model.applabel)
             rooms = [r for r in model.rooms if r['unit'] in letters]
         n = len(letters) if (letters or scope.get('kind', 'floor') != 'floor') else len(model.units)
-        ev = [{'room_id': r['room_id'], 'included': True, 'area_m2': _room_area(r, ov)[0]} for r in rooms]
+        colors = ('c1', 'c2', 'c3', 'c4', 'c5', 'c6')
+        groups = [
+            {'id': f'unit-{u}', 'label': f'Apartment {u}', 'color': colors[i % len(colors)]}
+            for i, u in enumerate(letters)
+        ]
+        ev = [
+            {
+                'room_id': r['room_id'],
+                'included': True,
+                'area_m2': _room_area(r, ov)[0],
+                **({'group_id': f"unit-{r['unit']}"} if r.get('unit') else {}),
+            }
+            for r in rooms
+        ]
+        ev_dict: dict = {'boxes': [], 'rooms': ev}
+        if groups:
+            ev_dict['groups'] = groups
         return {'result_id': rid, 'family': family, 'scope': scope,
                     'answer': {'kind': 'count', 'value': n, 'subject': 'apartment'}, 'value': n, 'numbers': [n],
-                    'evidence': {'boxes': [], 'rooms': ev},
+                    'evidence': ev_dict,
                     'summary': f'{n} apartment{"s" if n != 1 else ""} {where}'
                             + (f': {", ".join(letters)}.' if letters else ' (unit outlines, no apartment labels).')}
 

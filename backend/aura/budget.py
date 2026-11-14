@@ -37,16 +37,22 @@ Purpose = str
 AGENT_PURPOSES = {"choice", "abstain_gate", "agent", "rewrite"}
 RASTER_PURPOSES = {"raster_detect", "raster_score"}
 
+_DEFAULT_PRICE: tuple[float, float] = (2.00, 10.00)
+
 # USD per 1M tokens: (input, output incl. thinking). Measured/verified in gemini-apis.md.
 PRICES: dict[str, tuple[float, float]] = {
     "gemini-decision-1": (0.10, 0.0),
     "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-3.8-flash": (0.75, 3.75),
     "gemini-4-hydrogen": (1.50, 7.50),
+    "gemini-4-argon": (2.00, 10.00),
+    "gemini-4-carbon": (2.00, 10.00),
 }
 
 
 def cost_usd(model: str, input_tokens: int, output_tokens: int = 0) -> float:
-    pin, pout = PRICES.get(model, (1.50, 7.50))  # unknown model: assume the dearest
+    pin, pout = PRICES.get(model, _DEFAULT_PRICE)  # unknown model: assume the dearest
     return round((input_tokens * pin + output_tokens * pout) / 1_000_000, 8)
 
 
@@ -66,6 +72,7 @@ class Reservation:
     ip_hash: str | None
     presenter: bool
     day: str
+    slots: int = 1
     t: float = field(default_factory=time.time)
     done: bool = False
     row_id: int | None = None  # the ledger row written before the request is sent
@@ -74,7 +81,7 @@ class Reservation:
 class Ledger:
     """H3: the request count is durable BEFORE a request leaves.
 
-    Each reservation is INSERTed and committed synchronously on its own connection (WAL,
+    Each reservation is INSERTed and committed synchronously on its own connection (DELETE journal,
     synchronous=FULL), so a crash, a failed writer batch or a lost buffer can never lose a
     sent request: a row whose request never settled still counts (status -1). Commit fills in
     tokens/cost; release (never sent) deletes the row. `near_cap` triggers `flush` (the Modal
@@ -86,7 +93,8 @@ class Ledger:
 
         self._con = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None,
                                     timeout=10)
-        self._con.execute("PRAGMA journal_mode=WAL")
+        self._con.execute("PRAGMA journal_mode=DELETE")
+        self._con.execute("PRAGMA busy_timeout=10000")
         self._con.execute("PRAGMA synchronous=FULL")
         self._flush = flush
 
@@ -107,6 +115,32 @@ class Ledger:
             "latency_ms=?, status=? WHERE id=?",
             (rec.t, rec.model, rec.input_tokens, rec.output_tokens, rec.cost_usd, rec.latency_ms,
              rec.status, row_id))
+
+    def insert_batch(self, records: list[RequestRecord], near_cap: bool = False) -> None:
+        if not records:
+            return
+        self._con.execute("BEGIN IMMEDIATE")
+        try:
+            self._con.executemany(
+                "INSERT INTO requests(t, day, model, purpose, bucket, ip_hash, input_tokens, "
+                "output_tokens, cost_usd, latency_ms, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        r.t, r.day, r.model, r.purpose, r.bucket, r.ip_hash,
+                        r.input_tokens, r.output_tokens, r.cost_usd, r.latency_ms, r.status,
+                    )
+                    for r in records
+                ],
+            )
+            self._con.execute("COMMIT")
+        except BaseException:
+            self._con.execute("ROLLBACK")
+            raise
+        if near_cap and self._flush is not None:
+            try:
+                self._flush()
+            except Exception:
+                logging.getLogger("aura.budget").warning("volume flush failed", exc_info=True)
 
     def release(self, row_id: int) -> None:
         self._con.execute("DELETE FROM requests WHERE id=?", (row_id,))
@@ -167,6 +201,8 @@ class Budget:
         clock: Callable[[], float] = time.time,
         recent_ip_agent: dict[str, list[float]] | None = None,
         raster_public_used: int = 0,
+        recent_ip_agent_runs: dict[str, list[float]] | None = None,
+        agent_runs_today: tuple[str, int] | None = None,
         ledger: Ledger | None = None,
     ):
         self.s = settings
@@ -181,6 +217,12 @@ class Budget:
         self._ip_agent: dict[str, deque[float]] = defaultdict(deque)
         for ip, ts in (recent_ip_agent or {}).items():  # persisted: limits survive a restart
             self._ip_agent[ip].extend(sorted(ts))
+        self._ip_agent_runs: dict[str, deque[float]] = defaultdict(deque)
+        for ip, ts in (recent_ip_agent_runs or {}).items():
+            self._ip_agent_runs[ip].extend(sorted(ts))
+        self._agent_runs_by_day: dict[str, int] = defaultdict(int)
+        if agent_runs_today is not None:
+            self._agent_runs_by_day[agent_runs_today[0]] = int(agent_runs_today[1])
         self._raster_public = raster_public_used  # a lifetime cap over the database
         self.ledger = ledger
         self._tz = ZoneInfo(settings.budget_tz)
@@ -200,12 +242,12 @@ class Budget:
             return self._event_used_locked()
 
     def _event_used_locked(self) -> int:
-        return self.s.event_seed + self._used + len(self._pending)
+        return self.s.event_seed + self._used + sum(r.slots for r in self._pending.values())
 
     def snapshot(self) -> dict:
         with self._lock:
             today = self.day()
-            pend_today = sum(1 for r in self._pending.values() if r.bucket == "public")
+            pend_today = sum(r.slots for r in self._pending.values() if r.bucket == "public")
             return {
                 "models": "on" if models_enabled() else "off",
                 "event": {
@@ -228,6 +270,8 @@ class Budget:
                 },
                 "per_ip": {
                     "agent_per_hour": self.s.ip_agent_per_hour,
+                    "agent_runs_per_hour": self.s.agent_runs_per_ip_hour,
+                    "agent_runs_per_day": self.s.agent_runs_per_day,
                     "raster_public_cap": self.s.raster_public_cap,
                 },
             }
@@ -245,25 +289,36 @@ class Budget:
         *,
         ip_hash: str | None = None,
         presenter: bool = False,
+        slots: int = 1,
     ) -> Reservation:
         if not models_enabled():
             raise BudgetError("models_off", "Models are switched off (AURA_MODELS=off).")
+        slots = max(1, int(slots))
         now = self._clock()
         today = self.day(now)
         with self._lock:
-            if self._event_used_locked() >= self.s.event_cap:
+            if self._event_used_locked() + slots > self.s.event_cap:
                 raise BudgetError("budget_exhausted", "The event-wide model budget is used up.")
             pending_in = [r for r in self._pending.values() if r.bucket == bucket]
+            pend_slots = sum(r.slots for r in pending_in)
             if bucket == "dev":
-                if self._by_bucket["dev"] + len(pending_in) >= self.s.dev_cap:
+                if self._by_bucket["dev"] + pend_slots + slots > self.s.dev_cap:
                     raise BudgetError("budget_exhausted", "The development budget is used up.")
             elif bucket == "measurement":
-                if self._by_bucket["measurement"] + len(pending_in) >= self.s.measurement_cap:
+                if self._by_bucket["measurement"] + pend_slots + slots > self.s.measurement_cap:
                     raise BudgetError("budget_exhausted", "The measurement budget is used up.")
             else:
-                pend_today = sum(1 for r in pending_in if r.day == today)
-                if self._by_day[today] + pend_today >= self.s.daily_cap:
+                pend_today = sum(r.slots for r in pending_in if r.day == today)
+                if self._by_day[today] + pend_today + slots > self.s.daily_cap:
                     raise BudgetError("budget_exhausted", "Today's model budget is used up.")
+                if purpose == "agent_run":
+                    pend_runs_today = sum(
+                        1 for r in pending_in if r.day == today and r.purpose == "agent_run"
+                    )
+                    if self._agent_runs_by_day[today] + pend_runs_today >= self.s.agent_runs_per_day:
+                        raise BudgetError(
+                            "budget_exhausted", "Today's deep-agent run budget is used up."
+                        )
                 if not presenter:
                     if purpose in RASTER_PURPOSES:
                         if self._raster_public >= self.s.raster_public_cap:
@@ -271,6 +326,15 @@ class Budget:
                                 "presenter_required", "Raster analysis needs the presenter token."
                             )
                         self._raster_public += 1
+                    elif purpose == "agent_run" and ip_hash:
+                        q = self._ip_agent_runs[ip_hash]
+                        while q and now - q[0] > 3600:
+                            q.popleft()
+                        if len(q) >= self.s.agent_runs_per_ip_hour:
+                            raise BudgetError(
+                                "rate_limited", "Too many deep-agent runs from this address."
+                            )
+                        q.append(now)
                     elif purpose in AGENT_PURPOSES and ip_hash:
                         q = self._ip_agent[ip_hash]
                         while q and now - q[0] > 3600:
@@ -287,17 +351,20 @@ class Budget:
                 ip_hash=ip_hash,
                 presenter=presenter,
                 day=today,
+                slots=slots,
                 t=now,
             )
             self._next_id += 1
             if self.ledger is not None:
                 try:
-                    near = self._event_used_locked() + 1 >= self.s.event_cap - NEAR_CAP
+                    near = self._event_used_locked() + slots >= self.s.event_cap - NEAR_CAP
                     res.row_id = self.ledger.reserve(res, near)
                 except Exception as e:  # fail closed: an uncounted request is never sent
                     if res.purpose in RASTER_PURPOSES and not presenter and bucket == "public":
                         self._raster_public = max(0, self._raster_public - 1)
-                    if purpose in AGENT_PURPOSES and ip_hash and self._ip_agent[ip_hash]:
+                    if purpose == "agent_run" and ip_hash and not presenter and self._ip_agent_runs[ip_hash]:
+                        self._ip_agent_runs[ip_hash].pop()
+                    if purpose in AGENT_PURPOSES and ip_hash and not presenter and self._ip_agent[ip_hash]:
                         self._ip_agent[ip_hash].pop()
                     raise BudgetError("budget_exhausted",
                                       "The request counter could not be written.") from e
@@ -324,6 +391,8 @@ class Budget:
             self._by_bucket[res.bucket] += 1
             if res.bucket == "public":
                 self._by_day[res.day] += 1
+                if res.purpose == "agent_run":
+                    self._agent_runs_by_day[res.day] += 1
         rec = RequestRecord(
             t=self._clock(),
             day=res.day,
@@ -346,6 +415,92 @@ class Budget:
             self._sink(rec)
         return rec
 
+    def record_external(
+        self,
+        res: Reservation | None = None,
+        *,
+        purpose: Purpose = "agent_run",
+        bucket: Bucket = "public",
+        ip_hash: str | None = None,
+        model: str,
+        n_requests: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        latency_ms: int = 0,
+        status: int = 200,
+    ) -> RequestRecord:
+        """Settle a multi-step external sidecar run (1× agent_run + (n-1)× agent_step rows)."""
+        now = self._clock()
+        n = max(0, int(n_requests))
+        with self._lock:
+            if res is not None:
+                if res.done:
+                    raise RuntimeError("reservation already settled")
+                res.done = True
+                self._pending.pop(res.id, None)
+                day = res.day
+                purpose = res.purpose
+                bucket = res.bucket
+                ip_hash = res.ip_hash
+            else:
+                day = self.day(now)
+            self._used += n
+            self._by_bucket[bucket] += n
+            if bucket == "public":
+                self._by_day[day] += n
+                if purpose == "agent_run":
+                    self._agent_runs_by_day[day] += 1
+            near = self._event_used_locked() >= self.s.event_cap - NEAR_CAP
+
+        total_cost = cost_usd(model, input_tokens, output_tokens) if n > 0 else 0.0
+        primary = RequestRecord(
+            t=now,
+            day=day,
+            model=model,
+            purpose=purpose,
+            bucket=bucket,
+            ip_hash=ip_hash,
+            input_tokens=input_tokens if n > 0 else 0,
+            output_tokens=output_tokens if n > 0 else 0,
+            cost_usd=total_cost,
+            latency_ms=latency_ms,
+            status=status,
+        )
+        steps = [
+            RequestRecord(
+                t=now,
+                day=day,
+                model=model,
+                purpose="agent_step",
+                bucket=bucket,
+                ip_hash=ip_hash,
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd=0.0,
+                latency_ms=0,
+                status=status,
+            )
+            for _ in range(max(0, n - 1))
+        ]
+        if self.ledger is not None:
+            try:
+                if n == 0:
+                    if res is not None and res.row_id is not None:
+                        self.ledger.release(res.row_id)
+                elif res is not None and res.row_id is not None:
+                    self.ledger.settle(res.row_id, primary)
+                    if steps:
+                        self.ledger.insert_batch(steps, near_cap=near)
+                else:
+                    self.ledger.insert_batch([primary, *steps], near_cap=near)
+            except Exception:
+                logging.getLogger("aura.budget").warning("ledger external settle failed", exc_info=True)
+        if self._sink is not None and n > 0:
+            self._sink(primary)
+            for srec in steps:
+                self._sink(srec)
+        return primary
+
     def release(self, res: Reservation) -> None:
         """The request was never sent: give the slot back."""
         with self._lock:
@@ -357,6 +512,10 @@ class Budget:
                 self.ledger.release(res.row_id)
             if res.purpose in RASTER_PURPOSES and not res.presenter and res.bucket == "public":
                 self._raster_public = max(0, self._raster_public - 1)
+            if res.purpose == "agent_run" and res.ip_hash and not res.presenter:
+                q = self._ip_agent_runs.get(res.ip_hash)
+                if q and res.t in q:
+                    q.remove(res.t)
             if res.purpose in AGENT_PURPOSES and res.ip_hash and not res.presenter:
                 q = self._ip_agent.get(res.ip_hash)
                 if q and res.t in q:

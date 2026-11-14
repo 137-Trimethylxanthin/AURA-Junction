@@ -44,6 +44,15 @@ CREATE TABLE IF NOT EXISTS drawings (
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY, drawing_id TEXT NOT NULL, t REAL NOT NULL, status TEXT, error TEXT
 );
+CREATE TABLE IF NOT EXISTS answer_cache (
+  key TEXT PRIMARY KEY, t REAL NOT NULL, drawing_id TEXT NOT NULL,
+  question TEXT, response TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS answer_cache_drawing ON answer_cache(drawing_id);
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY, t REAL NOT NULL, title TEXT NOT NULL,
+  floors TEXT NOT NULL, auto_matched INTEGER DEFAULT 0, body TEXT NOT NULL
+);
 """
 
 
@@ -110,6 +119,21 @@ class Store:
                          tuple(purposes_raster))[0]["n"]
         return by_ip, raster
 
+    def recent_agent_runs(self, now: float, today: str) -> tuple[dict[str, list[float]], int]:
+        """Per-IP sidecar agent_run timestamps in the last hour, plus public agent_runs today."""
+        by_ip: dict[str, list[float]] = {}
+        for r in self._q(
+            "SELECT ip_hash, t FROM requests WHERE purpose='agent_run' AND bucket='public' "
+            "AND ip_hash IS NOT NULL AND t > ? ORDER BY t",
+            (now - 3600,),
+        ):
+            by_ip.setdefault(r["ip_hash"], []).append(r["t"])
+        today_runs = self._q(
+            "SELECT COUNT(*) n FROM requests WHERE purpose='agent_run' AND bucket='public' AND day=?",
+            (today,),
+        )[0]["n"]
+        return by_ip, int(today_runs)
+
     # answers
     def answer(self, answer_id: str) -> dict[str, Any] | None:
         rows = self._q("SELECT response FROM answers WHERE id=?", (answer_id,))
@@ -165,3 +189,42 @@ class Store:
 
     def upload_rows(self) -> list[dict]:
         return [dict(r) for r in self._q("SELECT * FROM drawings ORDER BY t DESC")]
+
+    # answer cache
+    def cached_answer(self, key: str, min_t: float) -> tuple[dict[str, Any], float, str] | None:
+        rows = self._q(
+            "SELECT response, t, question FROM answer_cache WHERE key=? AND t >= ?",
+            (key, min_t),
+        )
+        if not rows:
+            return None
+        return json.loads(rows[0]["response"]), float(rows[0]["t"]), rows[0]["question"] or ""
+
+    def cached_entries_for_drawing(self, drawing_id: str, min_t: float,
+                                   limit: int = 50) -> list[dict[str, Any]]:
+        rows = self._q(
+            "SELECT key, question, t FROM answer_cache WHERE drawing_id=? AND t >= ? "
+            "ORDER BY t DESC LIMIT ?",
+            (drawing_id, min_t, limit),
+        )
+        return [{"key": r["key"], "question": r["question"] or "", "t": float(r["t"])} for r in rows]
+
+    # projects
+    @staticmethod
+    def _decode_project(r: sqlite3.Row) -> dict[str, Any]:
+        d = dict(r)
+        raw_floors = d.get("floors")
+        if isinstance(raw_floors, str):
+            try:
+                d["floors"] = json.loads(raw_floors)
+            except ValueError:
+                d["floors"] = []
+        d["auto_matched"] = bool(d.get("auto_matched"))
+        return d
+
+    def project_row(self, project_id: str) -> dict[str, Any] | None:
+        rows = self._q("SELECT * FROM projects WHERE id=?", (project_id,))
+        return self._decode_project(rows[0]) if rows else None
+
+    def project_rows(self) -> list[dict[str, Any]]:
+        return [self._decode_project(r) for r in self._q("SELECT * FROM projects ORDER BY t DESC")]

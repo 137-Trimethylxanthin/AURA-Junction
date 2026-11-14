@@ -1,12 +1,13 @@
 """One pipeline for /ask and /chat: understand → tools → answer → check.
 
 `run(...)` is an async generator of (event, data) pairs in the /chat order:
-understood, (tool_call, tool_result)*, check?, answer | error. /ask collects it.
+progress*, understood, (tool_call, tool_result)*, check?, answer | error. /ask collects it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -14,6 +15,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from aura import answer as A
 from aura import tools
@@ -21,7 +23,7 @@ from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agen
 from aura.budget import Budget, BudgetError
 from aura.cache import AnswerCache, CheckCache, answer_key
 from aura.config import Settings, models_enabled
-from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse, ChatRequest
+from aura.contract import BOX_SUBJECTS, AskRequest, AskResponse, ChatRequest, EvidenceGroup, EvidenceRoom
 from aura.gemini.check import check_key, default_anchors, run_check, slice_check
 from aura.gemini.client import GeminiClient, GeminiError, Meter
 from aura.gemini.score import FAMILIES as SCORE_FAMILIES
@@ -29,16 +31,28 @@ from aura.gemini.score import MEASURED as SCORE_MEASURED
 from aura.gemini.score import MIN_CONFIDENCE as SCORE_MIN_CONFIDENCE
 from aura.gemini.score import family_of as score_family_of
 from aura.gemini.score import run_score
-from aura.gemini.understand import MIN_CONFIDENCE, understand
+from aura.gemini.understand import MIN_CONFIDENCE, decide_hybrid_route, understand
 from aura.provenance import allowed_numbers, filter_prose
-from aura.router import FIRE_PATTERN, route
+from aura.router import (
+    COLOR_CUE,
+    DEICTIC_SIMILARITY,
+    FIRE_PATTERN,
+    QUALIFIER_GUARD,
+    STAIR_ESCALATE,
+    is_followup_message,
+    route,
+)
 from aura.store import Store
 from aura.writer import Writer
+
+if TYPE_CHECKING:
+    from aura.agent_client import AgentClient
 
 log = logging.getLogger("aura.pipeline")
 
 MODEL_STEP_TIMEOUT_S = 8.0  # one model step (choice or check); the agent has AGENT_TIMEOUT_S
 CHECK_RETRY_AFTER_S = 600.0  # a failed check of one layer is not re-sent for 10 minutes
+HEARTBEAT_INTERVAL_S = 15.0  # SSE `: progress {s}` comment interval during long turns
 
 
 class PipelineError(Exception):
@@ -58,6 +72,8 @@ class Services:
     writer: Writer | None
     answers: AnswerCache
     checks: CheckCache
+    agent: AgentClient | None = None
+    heartbeat_s: float = HEARTBEAT_INTERVAL_S
     check_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     check_failures: dict[str, float] = field(default_factory=dict)  # key → time of last failure
 
@@ -113,12 +129,25 @@ def _tool_events(built: A.Built) -> list[tuple[str, dict]]:
 
 
 def context_from(turns: list[dict]) -> dict | None:
-    """Last subject, intent and scope of a conversation, for short follow-ups."""
+    """Last exact subject, intent and scope of a conversation, for short follow-ups."""
     for t in reversed(turns):
         resp = t.get("response") or {}
+        if resp.get("method") == "agent_estimate":
+            return None
         ans = resp.get("answer") or {}
         if ans.get("kind") in ("count", "area"):
             return {"intent": ans["kind"], "subject": ans.get("subject"), "scope": resp.get("scope")}
+    return None
+
+
+def last_turn_response(turns: list[dict] | None) -> dict | None:
+    """Immediately preceding assistant response in a multi-turn conversation, if any."""
+    if not turns:
+        return None
+    for t in reversed(turns):
+        resp = t.get("response")
+        if isinstance(resp, dict) and resp.get("answer"):
+            return resp
     return None
 
 
@@ -126,6 +155,89 @@ FOLLOW_UP_CUE = re.compile(
     r"^\s*(and|what about|how about|same|et|und|ja|entä|e|ed|plus|also|then)\b", re.IGNORECASE)
 WHOLE_FLOOR = re.compile(r"\b(in total|total|whole|entire|all|altogether|insgesamt|gesamt|au total|"
                          r"en tout|yhteensä|kaikki|in tutto)\b", re.IGNORECASE)
+_FILTER_RESTRICTION = re.compile(
+    r"\b(only|just|exclude|without|except|seulement|uniquement|sans|sauf|vain|ilman|nur|ohne|außer|ausser)\b",
+    re.IGNORECASE,
+)
+
+
+def _try_deterministic_color_followup(
+    question: str,
+    lang: str,
+    d: tools.LoadedDrawing,
+    history: list[dict] | None,
+) -> A.Built | None:
+    """`<2ms`, `0`-call color-coding follow-up on a prior turn's rooms (e.g. `"give me all areas"`
+    -> `"color in different colors"` / `"color by apartment"` / `"color by type"`)."""
+    if not history or not COLOR_CUE.search(question):
+        return None
+    if (QUALIFIER_GUARD.search(question) or STAIR_ESCALATE.search(question)
+            or DEICTIC_SIMILARITY.search(question) or _FILTER_RESTRICTION.search(question)):
+        return None
+    prev = last_turn_response(history)
+    if prev is None:
+        return None
+    prev_ev = prev.get("evidence") or {}
+    raw_rooms = prev_ev.get("rooms") or []
+    if not raw_rooms:
+        return None
+    prev_ans = prev.get("answer") or {}
+    if prev_ans.get("kind") not in ("area", "count"):
+        return None
+
+    by_apt = bool(re.search(r"\b(apartment|wohnung|appartement|asunto|unit)\b", question, re.IGNORECASE))
+    colored_dicts, group_dicts = tools.color_code_rooms(d, raw_rooms, by_apartment=by_apt)
+    if not group_dicts:
+        return None
+    colored_rooms = [EvidenceRoom.model_validate(r) for r in colored_dicts]
+    groups = [EvidenceGroup.model_validate(g) for g in group_dicts]
+
+    prev_scope = prev.get("scope") or {"kind": "floor"}
+    prev_method = prev.get("method") if prev.get("method") in ("cad_geometry", "agent_estimate", "vision") else "cad_geometry"
+    rid = "r-color-" + hashlib.sha1(f"{d.id}:{prev.get('answer_id', '')}:{question}".encode()).hexdigest()[:10]
+    if prev_ans["kind"] == "area":
+        tr = tools.ToolResult(
+            tool="room_areas",
+            args={"scope": prev_scope, "color_by": "apartment" if by_apt else "category"},
+            result_id=rid,
+            kind="area",
+            value=float(prev_ans["value"]),
+            subject="room",
+            rooms=colored_rooms,
+            groups=groups,
+            method=prev_method,  # type: ignore[arg-type]
+            summary=f"{float(prev_ans['value']):.2f} m² across {len(groups)} color group(s)",
+            meta={"denominator": prev_ans.get("denominator") or "net_floor_area"},
+        )
+        built = A.area(question, lang, d, tr, prev_scope, None, intent_tag="router · follow-up")
+    else:
+        subj = prev_ans.get("subject") or "room"
+        tr = tools.ToolResult(
+            tool="count_objects",
+            args={"subject": subj, "scope": prev_scope, "color_by": "apartment" if by_apt else "category"},
+            result_id=rid,
+            kind="count",
+            value=int(prev_ans["value"]),
+            subject=subj,
+            rooms=colored_rooms,
+            groups=groups,
+            method=prev_method,  # type: ignore[arg-type]
+            summary=f"{int(prev_ans['value'])} {A.noun(subj, int(prev_ans['value']))} across {len(groups)} color group(s)",
+        )
+        built = A.count(question, lang, d, tr, prev_scope, None, intent_tag="router · follow-up")
+    if prev_method == "agent_estimate" and prev.get("estimate"):
+        built.body["estimate"] = prev["estimate"]
+    return built
+
+
+def _apply_color_if_requested(d: tools.LoadedDrawing, tr: tools.ToolResult, question: str, matched: list[str]) -> None:
+    """Attach categorical color groups (`c1..c6`) in `<2ms` when an exact room/area query asks for color."""
+    if "color_cue" in matched and tr.rooms and not tr.groups:
+        by_apt = bool(re.search(r"\b(apartment|wohnung|appartement|asunto|unit)\b", question, re.IGNORECASE))
+        raw_rooms = [r.model_dump(exclude_none=True) | {"area_m2": r.area_m2} for r in tr.rooms]
+        colored_dicts, group_dicts = tools.color_code_rooms(d, raw_rooms, by_apartment=by_apt)
+        tr.rooms = [EvidenceRoom.model_validate(r) for r in colored_dicts]
+        tr.groups = [EvidenceGroup.model_validate(g) for g in group_dicts]
 
 
 def identifiers_in(question: str, d: tools.LoadedDrawing) -> str:
@@ -226,7 +338,7 @@ async def _score(svc: Services, d: tools.LoadedDrawing, question: str, lang: str
 
     if full is None:
         image = d.image_path()
-        if image is None or not svc.models_usable():
+        if image is None or not svc.models_usable() or svc.settings.answerer == "exact":
             return refuse("Counting rooms and fixtures on an image needs the model, which is off.")
         meter: Meter = stats["meter"]
         before = meter.calls
@@ -250,11 +362,77 @@ async def _score(svc: Services, d: tools.LoadedDrawing, question: str, lang: str
                             fam["probabilities"], SCORE_MEASURED, cached)
 
 
+async def _execute_exact_intent(
+    d: tools.LoadedDrawing,
+    question: str,
+    lang: str,
+    intent: str,
+    subject: str | None,
+    scope: dict,
+    overrides: list[dict],
+    matched: list[str],
+    *,
+    tag: str,
+    conf: float | None = None,
+    pattern: str | None = None,
+    topic: str | None = None,
+) -> tuple[A.Built, bool]:
+    """Execute a deterministic solver call. Returns `(built, supported_cleanly)`."""
+    if intent == "find_text":
+        pat = pattern or FIRE_PATTERN
+        tr = await asyncio.to_thread(tools.find_text, d, pat, subject or "label")
+        if tr.text:
+            return A.text(question, lang, d, tr, subject or "label", intent_tag=tag), True
+        n_texts = len(d.drawing.get("texts") or [])
+        look = (f"Searched the printed text on this drawing for fire ratings (EI30, 30 MIN, T30): "
+                f"none found{f' among {n_texts} texts' if n_texts else ''}.")
+        return A.abstain_topic(question, lang, topic or "fire", intent_tag=tag, results=[tr],
+                               look=look), False
+
+    if intent == "abstain":
+        return A.abstain_topic(question, lang, topic or "material", intent_tag=tag), True
+
+    if intent == "quantity":
+        tr = await asyncio.to_thread(tools.measure, d, subject or "", scope)
+        if not tr.supported or tr.kind == "none":
+            return A.abstain(question, lang, tr.args["scope"], "not_supported_yet",
+                             "(an IFC quantity)", tr.summary, intent_tag=tag, results=[tr]), False
+        return A.quantity(question, lang, d, tr, tr.args["scope"], intent_tag=tag), True
+
+    if intent == "count":
+        subj = subject or "room"
+        tr = await asyncio.to_thread(tools.count_objects, d, subj, scope)
+        if not tr.supported or tr.meta.get("abstain") == "not_supported_yet":
+            return A.not_supported(question, lang, scope, tr, intent_tag=tag), False
+        if tr.kind == "none":
+            return A.unclear(question, lang, d, scope, intent_tag=tag), False
+        _apply_color_if_requested(d, tr, question, matched)
+        return A.count(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf), True
+
+    # area
+    if not d.engine.supports("area"):
+        return A.abstain(question, lang, scope, "not_supported_yet", "What is the net floor area",
+                         "No rooms with areas are extracted from this drawing yet.",
+                         intent_tag=tag), False
+    tr = await asyncio.to_thread(tools.room_areas, d, scope, overrides or None)
+    if tr.kind == "none":
+        return A.unclear(question, lang, d, scope, intent_tag=tag), False
+    _apply_color_if_requested(d, tr, question, matched)
+    return A.area(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf), True
+
+
 async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller: Caller,
                   stats: dict, context: dict | None = None,
                   history: list[dict] | None = None) -> A.Built:
+    """Exact + legacy Gemini choice/agent path (used when `svc.agent is None` or `answerer == 'exact'`)."""
     question = req.question.strip()
     r = route(question, d.ctx)
+    lang = r.lang if r.lang_signal else (req.lang_hint or "en")
+
+    # Deterministic `<2ms` color-coding follow-up on prior rooms
+    if (color_built := _try_deterministic_color_followup(question, lang, d, history)) is not None:
+        return color_built
+
     if context:
         short = len(question.split()) <= 5
         cue = short and bool(FOLLOW_UP_CUE.search(question))
@@ -269,15 +447,26 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
             # "and doors?" → new subject, previous scope
             r.scope = context["scope"] if context["scope"].get("kind") != "region" else None
             r.matched.append("follow-up")
-    lang = r.lang if r.lang_signal else (req.lang_hint or "en")
+
     if d.drawing.get("kind") == "raster" and (family := score_family_of(question)) is not None:
         return await _score(svc, d, question, lang, caller, stats, family)
+
     overrides = [o.model_dump() for o in req.overrides or []]
     req_scope = req.scope.model_dump(exclude_none=True) if req.scope else None
     intent, subject, text_scope, conf = r.intent, r.subject, r.scope, None
     tag = "router · follow-up" if "follow-up" in r.matched else "router"
 
     if intent == "unknown":
+        if svc.settings.answerer == "exact":
+            return A.abstain(
+                question,
+                lang,
+                req_scope or text_scope or {"kind": "floor"},
+                "not_supported_yet",
+                question,
+                "Exact-only mode is active (`AURA_ANSWERER=exact`); open-ended questions need the model.",
+                intent_tag="router · exact",
+            )
         if svc.models_usable():
             meter: Meter = stats["meter"]
             before = meter.calls
@@ -328,68 +517,59 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
         else:
             return A.unclear(question, lang, d)
 
-    if intent == "find_text":
-        pattern = r.pattern or FIRE_PATTERN
-        tr = await asyncio.to_thread(tools.find_text, d, pattern, subject or "label")
-        if tr.text:
-            return A.text(question, lang, d, tr, subject or "label", intent_tag=tag)
-        n_texts = len(d.drawing.get("texts") or [])
-        look = (f"Searched the printed text on this drawing for fire ratings (EI30, 30 MIN, T30): "
-                f"none found{f' among {n_texts} texts' if n_texts else ''}.")
-        return A.abstain_topic(question, lang, r.topic or "fire", intent_tag=tag, results=[tr],
-                               look=look)
-
-    if intent == "abstain":
-        return A.abstain_topic(question, lang, r.topic or "material", intent_tag=tag)
-
-    if intent == "quantity":
-        tr = await asyncio.to_thread(tools.measure, d, subject or "",
-                                     req_scope or text_scope or {"kind": "floor"})
-        if not tr.supported or tr.kind == "none":
-            return A.abstain(question, lang, tr.args["scope"], "not_supported_yet",
-                             "(an IFC quantity)", tr.summary, intent_tag=tag, results=[tr])
-        return A.quantity(question, lang, d, tr, tr.args["scope"], intent_tag=tag)
-
     scope = req_scope or text_scope or {"kind": "floor"}
-
-    if intent == "count":
-        subj = subject or "room"
-        tr = await asyncio.to_thread(tools.count_objects, d, subj, scope)
-        if not tr.supported or tr.meta.get("abstain") == "not_supported_yet":
-            return A.not_supported(question, lang, scope, tr, intent_tag=tag)
-        if tr.kind == "none":
-            return A.unclear(question, lang, d, scope, intent_tag=tag)
-        return A.count(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf)
-
-    if not d.engine.supports("area"):
-        return A.abstain(question, lang, scope, "not_supported_yet", "What is the net floor area",
-                         "No rooms with areas are extracted from this drawing yet.",
-                         intent_tag=tag)
-    tr = await asyncio.to_thread(tools.room_areas, d, scope, overrides or None)
-    if tr.kind == "none":
-        return A.unclear(question, lang, d, scope, intent_tag=tag)
-    return A.area(question, lang, d, tr, scope, overrides, intent_tag=tag, intent_conf=conf)
+    built, _ = await _execute_exact_intent(
+        d,
+        question,
+        lang,
+        intent,
+        subject,
+        scope,
+        overrides,
+        r.matched,
+        tag=tag,
+        conf=conf,
+        pattern=r.pattern,
+        topic=r.topic,
+    )
+    return built
 
 
 async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: Caller,
                  stats: dict) -> dict | None:
+    if svc.settings.answerer == "exact":
+        return None
     subject = built.subject
     if not built.check_ids or subject not in BOX_SUBJECTS:
         return None
-    layer = await asyncio.to_thread(tools.count_objects, d, subject, {"kind": "floor"})
-    boxes = [b.model_dump() for b in layer.boxes]
-    ids = [b["id"] for b in boxes]
-    key = check_key(d.id, subject, ids)
-    full = svc.checks.get(key, d.dir, subject)
+
+    is_agent_est = built.body.get("method") == "agent_estimate"
+    if is_agent_est:
+        if (built.body.get("scope") or {}).get("kind") == "project":
+            return None
+        boxes = list((built.body.get("evidence") or {}).get("boxes") or [])
+        if not boxes or len(boxes) > 30:
+            return None
+        ids = [f"{b['id']}@{b['x']},{b['y']}" for b in boxes]
+        key = check_key(d.id, f"agent:{subject}", ids)
+    else:
+        layer = await asyncio.to_thread(tools.count_objects, d, subject, {"kind": "floor"})
+        boxes = [b.model_dump() for b in layer.boxes]
+        ids = [b["id"] for b in boxes]
+        key = check_key(d.id, subject, ids)
+
+    full = svc.checks.get(key, None if is_agent_est else d.dir, subject)
     cached = full is not None
     if full is None and d.image_path() is None and (d.source == "upload"
                                                      or d.drawing.get("kind") == "ifc"):
-        stats["no_image"] = True
+        if not is_agent_est:
+            stats["no_image"] = True
         return None
     if full is None:
         image = d.image_path()
         if image is None or not svc.models_usable():
             return None
+
         def recently_failed() -> bool:
             t = svc.check_failures.get(key)
             return t is not None and time.time() - t < CHECK_RETRY_AFTER_S
@@ -400,7 +580,7 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
             return None  # M5: a slow or failing check is not re-sent on every ask
         lock = svc.check_locks.setdefault(key, asyncio.Lock())
         async with lock:  # concurrent first asks share one request
-            full = svc.checks.get(key, d.dir, subject)
+            full = svc.checks.get(key, None if is_agent_est else d.dir, subject)
             cached = full is not None
             if full is None and recently_failed():  # failed while this ask waited for the lock
                 stats["check_note"] = "a check of this layer failed a moment ago; not retried yet"
@@ -432,11 +612,10 @@ async def _check(svc: Services, d: tools.LoadedDrawing, built: A.Built, caller: 
                 svc.checks.put(key, d.id, subject, full)
                 svc.check_failures.pop(key, None)
         svc.check_locks.pop(key, None)  # R3: the result is cached; the lock is not needed again
-    vision = d.drawing.get("kind") == "raster"
-    sliced = slice_check(full, built.check_ids, image="upload" if vision else "dataset_png")
+    vision = d.drawing.get("kind") == "raster" or is_agent_est
+    sliced = slice_check(full, built.check_ids, image="upload" if d.drawing.get("kind") == "raster" else "dataset_png")
     if sliced is not None and vision:
-        # On raster the check only ranks boxes for the user; it never filters or "agrees"
-        # (the CubiCasa eval showed filtering removed real boxes).
+        # On raster / agent_estimate the check only ranks boxes for the user; it never filters or "agrees"
         sliced.pop("agreed", None)
     if sliced is None:
         return None
@@ -487,44 +666,19 @@ def _check_node(check: dict, cached: bool, stats: dict, subject: str) -> dict:
             "evidence_ids": check["ranking"]}
 
 
-async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | None = None,
-              history: list[dict] | None = None,
-              meters: dict[str, Meter] | None = None) -> AsyncIterator[tuple[str, dict]]:
-    """`meters` ({'answer', 'check'}) lets a caller read what was spent even if this
-    generator is cancelled at the turn deadline."""
-    meters = meters if meters is not None else {"answer": Meter(), "check": Meter()}
-    t0 = time.perf_counter()
-    ensure_ready(svc, req.drawing_id)
-    d = svc.registry.get(req.drawing_id)
-    if d is None:
-        raise PipelineError("unknown_drawing", f"Unknown drawing '{req.drawing_id}'", 404)
-    scope_dump = req.scope.model_dump(exclude_none=True) if req.scope else None
-    ov_dump = [o.model_dump() for o in req.overrides] if req.overrides else None
-    key = answer_key(d.id, req.question, scope_dump, ov_dump, req.lang_hint, models_enabled())
-    if context:
-        key += json.dumps(context, sort_keys=True)
-    hit = svc.answers.get(key)
-    if hit is not None:
-        # A fresh answer id, persisted: its CSV link and /stats see this answer too.
-        body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
-                            "answer_id": "a-" + uuid.uuid4().hex,
-                            "latency_ms": int((time.perf_counter() - t0) * 1000)}
-        _persist(svc, d.id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
-        yield "understood", {"detected_lang": body["detected_lang"],
-                             "canonical_en": body["canonical_en"], "route": "cache"}
-        if "check" in body:
-            yield "check", {"check": body["check"]}
-        yield "answer", {"response": body}
-        return
-
-    stats = {"route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
-             "meter": meters["answer"], "check_meter": meters["check"]}
-    built = await _decide(svc, req, d, caller, stats, context, history)
-    yield "understood", {"detected_lang": built.body["detected_lang"],
-                         "canonical_en": built.body["canonical_en"], "route": stats["route"]}
-    for ev in _tool_events(built):
-        yield ev
-
+async def _finalize_and_emit(
+    svc: Services,
+    d: tools.LoadedDrawing,
+    req: AskRequest,
+    built: A.Built,
+    caller: Caller,
+    stats: dict,
+    meters: dict[str, Meter],
+    t0: float,
+    cache_key: str,
+    *,
+    allow_cache: bool,
+) -> AsyncIterator[tuple[str, dict]]:
     check = await _check(svc, d, built, caller, stats)
     body = built.body
     if check is not None and "ranking" not in check:  # sent, but no usable result
@@ -563,17 +717,309 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     resp = AskResponse.model_validate(body)  # contract gate: fails loudly on a bad body
     out = with_unknown_areas(resp.model_dump(exclude_none=True))
     _persist(svc, d.id, req.question, out, stats)
-    # The agent reads the conversation history, which is not in the cache key: a turn with
-    # history is not cached on that route.
-    if not stats.get("no_cache") and not (stats["route"] == "agent" and history):
+    if allow_cache and not stats.get("no_cache"):
         cached_body = out
         if check is not None and "ranking" in check and stats["check_calls"]:
             node = _check_node(check, True, stats, built.subject or "")
             cached_body = out | {
                 "trace": [node if n["id"] == "check" else n for n in out["trace"]],
                 "check": out["check"] | {"calls": 0, "cost_usd": 0.0, "tokens": 0, "cached": True}}
-        svc.answers.put(key, cached_body)
+        svc.answers.put(
+            cache_key,
+            cached_body,
+            drawing_id=d.id,
+            question=req.question,
+        )
     yield "answer", {"response": out}
+
+
+async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | None = None,
+              history: list[dict] | None = None,
+              meters: dict[str, Meter] | None = None,
+              deadline_s: float | None = None) -> AsyncIterator[tuple[str, dict]]:
+    """`meters` ({'answer', 'check'}) lets a caller read what was spent even if this
+    generator is cancelled at the turn deadline."""
+    meters = meters if meters is not None else {"answer": Meter(), "check": Meter()}
+    turn_deadline = deadline_s if deadline_s is not None else float(svc.settings.turn_deadline_s)
+    t0 = time.perf_counter()
+    ensure_ready(svc, req.drawing_id)
+    d = svc.registry.get(req.drawing_id)
+    if d is None:
+        raise PipelineError("unknown_drawing", f"Unknown drawing '{req.drawing_id}'", 404)
+
+    question = req.question.strip()
+    scope_dump = req.scope.model_dump(exclude_none=True) if req.scope else None
+    ov_dump = [o.model_dump() for o in req.overrides] if req.overrides else None
+    key = answer_key(d.id, question, scope_dump, ov_dump, req.lang_hint, models_enabled())
+    prev_resp = last_turn_response(history)
+    r_pre = route(question, d.ctx)
+    has_followup_semantics = prev_resp is not None and (
+        is_followup_message(question, r_pre)
+        or (prev_resp.get("method") == "agent_estimate" and bool(FOLLOW_UP_CUE.search(question)))
+    )
+    if has_followup_semantics and prev_resp is not None:
+        key += f"|prev:{prev_resp.get('answer_id', '')}"
+    elif context:
+        key += json.dumps(context, sort_keys=True)
+
+    hit = svc.answers.get(key)
+    if hit is not None:
+        # A fresh answer id, persisted: its CSV link and /stats see this answer too.
+        body = dict(hit) | {"route": "cache", "calls": 0, "cost_usd": 0.0,
+                            "answer_id": "a-" + uuid.uuid4().hex,
+                            "latency_ms": int((time.perf_counter() - t0) * 1000)}
+        _persist(svc, d.id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
+        yield "understood", {"detected_lang": body["detected_lang"],
+                             "canonical_en": body["canonical_en"], "route": "cache"}
+        if "check" in body:
+            yield "check", {"check": body["check"]}
+        yield "answer", {"response": body}
+        return
+
+    stats = {"route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
+             "meter": meters["answer"], "check_meter": meters["check"]}
+
+    # ---- Sidecar-enabled `hybrid` / `agent` modes ----
+    mode = svc.settings.answerer
+    if svc.agent is not None and mode in ("hybrid", "agent"):
+        lang = r_pre.lang if r_pre.lang_signal else (req.lang_hint or "en")
+
+        # 1. `<2ms` deterministic color-coding follow-up on prior rooms (`0` model calls)
+        if (color_built := _try_deterministic_color_followup(question, lang, d, history)) is not None:
+            yield "understood", {"detected_lang": color_built.body["detected_lang"],
+                                 "canonical_en": color_built.body["canonical_en"], "route": "template"}
+            for ev in _tool_events(color_built):
+                yield ev
+            async for ev in _finalize_and_emit(svc, d, req, color_built, caller, stats, meters, t0, key, allow_cache=True):
+                yield ev
+            return
+
+        # Short exact context inheritance (e.g. "how many doors?" -> "and in apartment B?")
+        r = route(question, d.ctx)
+        if context and not has_followup_semantics:
+            short = len(question.split()) <= 5
+            cue = short and bool(FOLLOW_UP_CUE.search(question))
+            if WHOLE_FLOOR.search(question) and r.intent in ("count", "area") and r.scope is None:
+                r.scope = {"kind": "floor"}
+            if (r.intent == "unknown" and cue and (r.scope or req.scope)
+                    and context["intent"] in ("count", "area")):
+                r.intent, r.subject = context["intent"], context.get("subject")
+                r.matched.append("follow-up")
+            elif r.intent in ("count", "area") and r.scope is None and cue and context.get("scope"):
+                r.scope = context["scope"] if context["scope"].get("kind") != "region" else None
+                r.matched.append("follow-up")
+
+        eff_scope = scope_dump or r.scope or {"kind": "floor"}
+        overrides = [o.model_dump() for o in req.overrides or []]
+        is_project = eff_scope.get("kind") == "project"
+        dkind = d.drawing.get("kind")
+        is_pdf = d.drawing.get("source_ext") == ".pdf"
+        is_deictic_region = eff_scope.get("kind") == "region" and bool(DEICTIC_SIMILARITY.search(question))
+
+        # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
+        if mode == "hybrid" and not is_project and not has_followup_semantics:
+            if dkind in ("cad_dxf", "ifc") and r.intent in ("count", "area", "quantity", "find_text"):
+                tag = "router · follow-up" if "follow-up" in r.matched else "router"
+                exact_built, ok_exact = await _execute_exact_intent(
+                    d, question, lang, r.intent, r.subject, eff_scope, overrides, r.matched,
+                    tag=tag, pattern=r.pattern, topic=r.topic,
+                )
+                if ok_exact or not models_enabled() or not svc.budget.can_spend():
+                    yield "understood", {"detected_lang": exact_built.body["detected_lang"],
+                                         "canonical_en": exact_built.body["canonical_en"], "route": "template"}
+                    for ev in _tool_events(exact_built):
+                        yield ev
+                    async for ev in _finalize_and_emit(svc, d, req, exact_built, caller, stats, meters, t0, key, allow_cache=True):
+                        yield ev
+                    return
+            elif dkind == "cad_dxf" and r.intent == "abstain" and r.topic in ("height", "material"):
+                abs_built = A.abstain_topic(question, lang, r.topic, intent_tag="router")
+                yield "understood", {"detected_lang": abs_built.body["detected_lang"],
+                                     "canonical_en": abs_built.body["canonical_en"], "route": "template"}
+                async for ev in _finalize_and_emit(svc, d, req, abs_built, caller, stats, meters, t0, key, allow_cache=True):
+                    yield ev
+                return
+
+        # 3. Check model kill-switch / budget before Decision gate or Sidecar run
+        if not models_enabled() or not svc.budget.can_spend():
+            stats["no_cache"] = True
+            off_built = A.abstain(
+                question,
+                lang,
+                eff_scope,
+                "not_supported_yet",
+                question,
+                "Models are off or the event budget is exhausted; only exact pre-indexed geometry questions are available.",
+                intent_tag="router · hybrid",
+            )
+            yield "understood", {"detected_lang": off_built.body["detected_lang"],
+                                 "canonical_en": off_built.body["canonical_en"], "route": "template"}
+            async for ev in _finalize_and_emit(svc, d, req, off_built, caller, stats, meters, t0, key, allow_cache=False):
+                yield ev
+            return
+
+        # 4. Calibrated `decide_hybrid_route` gate (`on_drawing`, `exact_sufficient`, qualifier-strict `cache_match`)
+        hard_guard = (
+            mode == "agent"
+            or is_project
+            or is_pdf
+            or has_followup_semantics
+            or is_deictic_region
+            or r.topic == "length"
+            or bool({"qualifier_guard", "stair_escalate", "deictic_similarity", "needs_model"} & set(r.matched))
+        )
+        check_exact = (not hard_guard) and dkind in ("cad_dxf", "ifc")
+        skip_on_drawing = has_followup_semantics or is_deictic_region
+        cached_candidates = (
+            [] if (has_followup_semantics or is_deictic_region or ov_dump)
+            else svc.answers.entries_for_drawing(d.id, scope=scope_dump, overrides=ov_dump, models_on=models_enabled())
+        )
+
+        intent_tag = f"router · {mode}"
+        if svc.client is not None and svc.client.available():
+            try:
+                async with asyncio.timeout(MODEL_STEP_TIMEOUT_S):
+                    hd = await decide_hybrid_route(
+                        svc.client,
+                        question,
+                        drawing_kind=str(dkind or "raster"),
+                        source_ext=d.drawing.get("source_ext"),
+                        units=d.ctx.units,
+                        labels=d.ctx.labels,
+                        cached_entries=cached_candidates,
+                        image_path=d.image_path(),
+                        ip_hash=caller.ip_hash,
+                        presenter=caller.presenter,
+                        meter=meters["answer"],
+                        check_exact=check_exact,
+                        skip_on_drawing=skip_on_drawing,
+                    )
+                if hd.on_drawing is not None:
+                    intent_tag = f"Decisions API · {hd.on_drawing:.2f}"
+                if hd.off_drawing:
+                    stats["route"] = "choice"
+                    off_b = A.abstain(
+                        question,
+                        lang,
+                        {"kind": "floor"},
+                        "not_on_drawing",
+                        "(off the drawing)",
+                        f"The model judged this information is not shown on the drawing (p = {hd.on_drawing:.2f}).",
+                        intent_body="abstain · not on drawing",
+                        intent_tag=intent_tag,
+                    )
+                    yield "understood", {"detected_lang": off_b.body["detected_lang"],
+                                         "canonical_en": off_b.body["canonical_en"], "route": "choice"}
+                    async for ev in _finalize_and_emit(svc, d, req, off_b, caller, stats, meters, t0, key, allow_cache=True):
+                        yield ev
+                    return
+
+                if hd.cache_key:
+                    sem_hit = svc.answers.get(hd.cache_key)
+                    if sem_hit is not None:
+                        sem_trace = list(sem_hit.get("trace") or [])
+                        sem_trace.append({
+                            "id": "semantic-cache",
+                            "parent": "q",
+                            "title": "Semantic cache match",
+                            "tag": f"Decisions API · {hd.cache_conf:.2f}",
+                            "body": f"Matched to an earlier verified question on this drawing (confidence {hd.cache_conf:.2f}).",
+                            "kind": "model",
+                        })
+                        body = dict(sem_hit) | {
+                            "route": "cache",
+                            "calls": meters["answer"].calls,
+                            "cost_usd": round(meters["answer"].cost_usd, 8),
+                            "answer_id": "a-" + uuid.uuid4().hex,
+                            "latency_ms": int((time.perf_counter() - t0) * 1000),
+                            "trace": sem_trace,
+                        }
+                        _persist(svc, d.id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
+                        yield "understood", {"detected_lang": body["detected_lang"],
+                                             "canonical_en": body["canonical_en"], "route": "cache"}
+                        if "check" in body:
+                            yield "check", {"check": body["check"]}
+                        yield "answer", {"response": body}
+                        return
+
+                if hd.can_use_exact and hd.exact_intent in ("count", "area"):
+                    ex_scope = hd.scope if (scope_dump is None and hd.scope and hd.scope_conf >= MIN_CONFIDENCE) else eff_scope
+                    ex_built, ex_ok = await _execute_exact_intent(
+                        d,
+                        question,
+                        lang,
+                        hd.exact_intent,
+                        hd.exact_subject,
+                        ex_scope,
+                        overrides,
+                        r.matched,
+                        tag=f"Decisions API · {hd.exact_sufficient:.2f}",
+                        conf=hd.exact_sufficient,
+                    )
+                    if ex_ok:
+                        stats["route"] = "choice"
+                        yield "understood", {"detected_lang": ex_built.body["detected_lang"],
+                                             "canonical_en": ex_built.body["canonical_en"], "route": "choice"}
+                        for ev in _tool_events(ex_built):
+                            yield ev
+                        async for ev in _finalize_and_emit(svc, d, req, ex_built, caller, stats, meters, t0, key, allow_cache=True):
+                            yield ev
+                        return
+            except (BudgetError, GeminiError, TimeoutError) as e:
+                log.warning("hybrid decision gate skipped (%s); escalating to sidecar agent", e or "timeout")
+
+        # 5. Escalate directly to `agent_client` (`deep_agent`) — NEVER fall back to legacy `understand` or `flash-lite`!
+        remaining_s = max(5.0, turn_deadline - (time.perf_counter() - t0))
+        agent_built: A.Built | None = None
+        understood_emitted = False
+        async for ev_name, ev_data in svc.agent.run_turn(
+            d=d,
+            question=question,
+            lang=lang,
+            scope=eff_scope,
+            caller=caller,
+            stats=stats,
+            history=history if has_followup_semantics else None,
+            deadline_s=remaining_s,
+            intent_tag=intent_tag,
+        ):
+            if ev_name == "_ready":
+                understood_emitted = True
+                yield "understood", ev_data
+            elif ev_name == "_built":
+                agent_built = ev_data
+            else:
+                yield ev_name, ev_data
+
+        if agent_built is None:
+            raise PipelineError("internal", "Agent turn ended without a result.", 500)
+        if not understood_emitted:
+            yield "understood", {"detected_lang": agent_built.body["detected_lang"],
+                                 "canonical_en": agent_built.body["canonical_en"], "route": stats["route"]}
+        async for ev in _finalize_and_emit(
+            svc,
+            d,
+            req,
+            agent_built,
+            caller,
+            stats,
+            meters,
+            t0,
+            key,
+            allow_cache=True,
+        ):
+            yield ev
+        return
+
+    # ---- Legacy / unit-test in-process path (`svc.agent is None` or `answerer == 'exact'`) ----
+    built = await _decide(svc, req, d, caller, stats, context, history)
+    yield "understood", {"detected_lang": built.body["detected_lang"],
+                         "canonical_en": built.body["canonical_en"], "route": stats["route"]}
+    for ev in _tool_events(built):
+        yield ev
+    allow_cache = not (stats["route"] == "agent" and history)
+    async for ev in _finalize_and_emit(svc, d, req, built, caller, stats, meters, t0, key, allow_cache=allow_cache):
+        yield ev
 
 
 def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: dict) -> None:
@@ -591,7 +1037,7 @@ def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: d
 
 async def ask(svc: Services, req: AskRequest, caller: Caller,
               meters: dict[str, Meter] | None = None) -> dict:
-    async for event, data in run(svc, req, caller, meters=meters):
+    async for event, data in run(svc, req, caller, meters=meters, deadline_s=float(svc.settings.turn_deadline_s)):
         if event == "answer":
             return data["response"]
     raise PipelineError("internal", "The pipeline ended without an answer.", 500)
@@ -599,10 +1045,12 @@ async def ask(svc: Services, req: AskRequest, caller: Caller,
 
 async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
                       deadline_s: float) -> AsyncIterator[tuple[str, dict]]:
-    """/chat: turn, understood, (tool_call, tool_result)*, check?, answer | error, done.
+    """/chat: turn, progress*, understood, (tool_call, tool_result)*, check?, answer | error, done.
 
     The pipeline runs in its own task so the turn deadline is exact; on timeout the task is
-    cancelled and the stream ends with error {code: 'timeout'} then done.
+    cancelled and the stream ends with error {code: 'timeout'} then done. Every `svc.heartbeat_s`
+    (15s) of idle waiting emits `(":progress", {"seconds": elapsed})` so proxies and the browser
+    idle watchdog keep long deep-agent runs alive.
     """
     store, writer = svc.store, svc.writer
     existing = store.conversation(body.conversation_id) if store and body.conversation_id else None
@@ -625,7 +1073,7 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
 
     async def produce() -> None:
         try:
-            async for item in run(svc, req, caller, context, history, meters):
+            async for item in run(svc, req, caller, context, history, meters, deadline_s=deadline_s):
                 await queue.put(item)
         except PipelineError as e:
             await queue.put(("error", {"error": str(e), "code": e.code}))
@@ -636,23 +1084,40 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
 
     task = asyncio.create_task(produce(), name=f"chat-{turn_id}")
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + deadline_s
+    start_t = loop.time()
+    deadline = start_t + deadline_s
+    hb_s = max(0.02, float(svc.heartbeat_s))
     response: dict | None = None
     error: dict | None = None
     try:
         while True:
-            try:
-                item = await asyncio.wait_for(queue.get(), max(0.0, deadline - loop.time()))
-            except TimeoutError:
+            rem = deadline - loop.time()
+            if rem <= 0:
                 task.cancel()
-                await asyncio.gather(task, return_exceptions=True)  # settle the meters
+                await asyncio.gather(task, return_exceptions=True)
                 spent = meters["answer"].calls + meters["check"].calls
                 cost = round(meters["answer"].cost_usd + meters["check"].cost_usd, 8)
-                # Every request already sent is reported, even without an answer.
                 error = {"error": "The answer took too long.", "code": "timeout",
                          "calls": spent, "cost_usd": cost}
                 yield "error", error
                 break
+            slice_s = min(hb_s, rem)
+            try:
+                item = await asyncio.wait_for(queue.get(), slice_s)
+            except TimeoutError:
+                if loop.time() >= deadline:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)  # settle the meters
+                    spent = meters["answer"].calls + meters["check"].calls
+                    cost = round(meters["answer"].cost_usd + meters["check"].cost_usd, 8)
+                    # Every request already sent is reported, even without an answer.
+                    error = {"error": "The answer took too long.", "code": "timeout",
+                             "calls": spent, "cost_usd": cost}
+                    yield "error", error
+                    break
+                elapsed = max(1, round(loop.time() - start_t))
+                yield ":progress", {"seconds": elapsed}
+                continue
             if item is None:
                 break
             event, data = item

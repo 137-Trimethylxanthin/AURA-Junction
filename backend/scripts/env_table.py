@@ -31,6 +31,11 @@ DOC = {
     'AURA_BUDGET_TZ': ('backend env', 'Time zone of the daily cap'),
     'AURA_DECISION_MODEL': ('backend env', 'Model for the Decisions API (checks, question choice)'),
     'AURA_AGENT_MODEL': ('backend env', 'Model for the function-calling agent and /rewrite'),
+    'AURA_ANSWERER': ('backend env', 'Answer routing mode (`hybrid`, `agent`, or `exact`)'),
+    'AURA_SIDECAR_URL': ('backend env', 'Base URL of the isolated deep-agent sidecar (`agent-service`)'),
+    'AURA_SIDECAR_TOKEN_FILE': ('backend env', 'Path to the shared bearer token file for `agent-service`'),
+    'AURA_AGENT_RUNS_PER_IP_HOUR': ('backend env', 'Deep-agent sidecar runs per client IP per hour (presenter exempt)'),
+    'AURA_AGENT_RUNS_PER_DAY': ('backend env', 'Public deep-agent sidecar runs per Europe/Helsinki day'),
     'AURA_TURN_DEADLINE_S': ('backend env', 'Deadline of one /ask or /chat turn (s)'),
     'AURA_VOLUME_COMMIT_S': ('backend env', 'Modal Volume commit interval (s)'),
     'AURA_CLEANUP_S': ('backend env', 'Interval of the expiry sweep (s)'),
@@ -53,7 +58,7 @@ EXTRA = [
 
 def default(name: str, f) -> str:
     if name in ('GEMINI_API_KEY', 'AURA_PRESENTER_TOKEN', 'AURA_IP_SALT', 'DATA_DIR', 'AURA_BUILD_DIR',
-                'ALLOWED_ORIGINS', 'ALLOWED_ORIGIN_REGEX'):
+                'ALLOWED_ORIGINS', 'ALLOWED_ORIGIN_REGEX', 'AURA_SIDECAR_URL', 'AURA_SIDECAR_TOKEN_FILE'):
         return ''
     return f'`{f.default:g}`' if isinstance(f.default, float) else f'`{f.default}`'
 
