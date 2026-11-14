@@ -52,6 +52,7 @@ from aura.logging import AccessLogMiddleware, RequestLogFile, setup_logging
 from aura.mcp import build_mcp
 from aura.netutil import client_ip_hash, is_presenter
 from aura.pipeline import Caller, PipelineError, Services, ask, chat_events
+from aura.sessions import router as sessions_router
 from aura.solvers.pdf import infer_floor_label_and_order
 from aura.store import Store, init_db
 from aura.writer import Writer
@@ -346,10 +347,11 @@ def create_app(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
         allow_origin_regex=settings.allowed_origin_regex or None,
-        allow_methods=["GET", "POST", "DELETE"],
-        allow_headers=["content-type", "x-aura-presenter", "x-delete-token"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["content-type", "x-aura-presenter", "x-delete-token", "x-aura-client"],
         max_age=600,
     )
+    app.include_router(sessions_router)
     app.mount("/mcp", mcp_app)
     app.add_middleware(BodyCapMiddleware, cap=uploads.BODY_CAP)
     app.add_middleware(DefaultNoStoreMiddleware)
@@ -391,7 +393,10 @@ def create_app(
                 "drawings": drawings,
                 "drawings_skipped": skipped,
                 "models": budget["models"],
-                "budget_left": budget["event"]["cap"] - budget["event"]["used"],
+                # None = unlimited (AURA_EVENT_CAP=0)
+                "budget_left": (budget["event"]["cap"] - budget["event"]["used"]
+                                if budget["event"]["cap"] > 0 else None),
+                **(s.store.spend_totals() if s.store else {}),
             },
         }
         if s.agent is not None:
@@ -567,16 +572,16 @@ def create_app(
                 origin_rx and origin_rx.fullmatch(origin)):
             return _err("bad_request", "Uploads are only accepted from the AURA app.", 403)
         jobs = request.app.state.jobs
-        if len(jobs.tasks) >= settings.max_queued_uploads:
+        if 0 < settings.max_queued_uploads <= len(jobs.tasks):
             return _err("rate_limited", "Uploads are busy; try again in a few minutes.", 429)
-        if _dir_bytes(settings.uploads_dir) >= settings.upload_quota_bytes:
+        if settings.upload_quota_bytes > 0 and _dir_bytes(settings.uploads_dir) >= settings.upload_quota_bytes:
             return _err("rate_limited", "Upload storage is full; try again later.", 429)
         ip = client_ip_hash(request, settings)
         if not presenter and ip:
             q, now = upload_times[ip], time.time()
             while q and now - q[0] > 3600:
                 q.popleft()
-            if len(q) >= settings.uploads_per_ip_hour:
+            if 0 < settings.uploads_per_ip_hour <= len(q):
                 return _err("rate_limited", "Too many uploads from this address; try again later.",
                             429)
             q.append(now)
@@ -600,7 +605,7 @@ def create_app(
         size = f.size if f.size is not None else len(head)
         try:
             kind = uploads.validate(head, size, presenter_ok=presenter
-                                    or settings.raster_public_cap > 0)
+                                    or settings.raster_public_cap >= 0)
         except uploads.UploadError as e:
             return _err(e.code, str(e), e.status)
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -770,7 +775,8 @@ def create_app(
         return {"contract_version": CONTRACT_VERSION,
                 "models": "on" if models_enabled() else "off",
                 "event_used": snap["event"]["used"], "event_cap": snap["event"]["cap"],
-                "day_used": snap["today"]["used"], "day_cap": snap["today"]["cap"]}
+                "day_used": snap["today"]["used"], "day_cap": snap["today"]["cap"],
+                **(s.store.spend_totals() if (s := svc(request)).store else {})}
 
     @app.get("/stats")
     async def get_stats(request: Request) -> dict:

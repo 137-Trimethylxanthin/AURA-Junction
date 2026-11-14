@@ -1,12 +1,13 @@
 import { useUi } from "@/i18n/uiLang"
 import { Suspense, lazy, useMemo } from "react"
-import { BlocksIcon, SquarePenIcon } from "lucide-react"
+import { BlocksIcon, HistoryIcon, SquarePenIcon } from "lucide-react"
 import { toast } from "sonner"
 import { displayDrawingTitle } from "@/api/library"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { actions, selectActiveProject, selectActiveTurn, selectDrawing, useAppStore } from "@/store"
 import { useEver } from "@/hooks/use-ever"
+import { openSessionHistory } from "@/features/history"
 
 /** Loaded the first time the Plugins sheet opens. */
 const PluginsSheet = lazy(() =>
@@ -120,6 +121,14 @@ export function HeaderActions() {
           </Button>
         </TooltipTrigger>
         <TooltipContent>{tu("new_chat")}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon" aria-label={tu("hist_open")} onClick={() => openSessionHistory()}>
+            <HistoryIcon />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{tu("hist_open")}</TooltipContent>
       </Tooltip>
       <SessionButton />
       <Button variant="outline" onClick={() => actions().setPluginsOpen(true)}>

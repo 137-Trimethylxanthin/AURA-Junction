@@ -24,6 +24,7 @@ import {
   HeaderActions,
   SidebarOverlay,
 } from "@/features/chat"
+import { SessionHistorySheet } from "@/features/history/SessionHistorySheet"
 import { Credit, PlanStage, PlanToolbar } from "@/features/plan"
 import { CommandPaletteDialog } from "@/features/shortcuts/CommandPaletteDialog"
 import { ShortcutHelpDialog } from "@/features/shortcuts/ShortcutHelpDialog"
@@ -131,6 +132,7 @@ export default function Workspace() {
       />
       <CommandPaletteDialog />
       <ShortcutHelpDialog />
+      <SessionHistorySheet />
     </TooltipProvider>
   )
 }
