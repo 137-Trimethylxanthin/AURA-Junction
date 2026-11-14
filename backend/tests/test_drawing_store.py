@@ -238,3 +238,63 @@ def test_full_mode_skips_our_detection_in_the_parse_slot(tmp_path):
         jobs.store_on = lambda: False
         did = upload_pdf(c, make_pdf(["OG"]), "b.pdf").json()["drawing_id"]
         assert wait_status(c, did)["status"] == "ready" and calls == [did]
+
+
+def test_svg_with_a_dtd_or_entity_anywhere_is_refused(tmp_path):
+    from aura import uploads
+    pad = b"<g/>" * 5000  # past the sniffed head
+    cases = {
+        "late_entity": b"<svg xmlns='http://www.w3.org/2000/svg'>" + pad + b"<!ENTITY a 'x'></svg>",
+        "doctype_no_bracket": b"<?xml version='1.0'?><!doctype svg SYSTEM 'x.dtd'><svg/>",
+        "plain": b"<svg xmlns='http://www.w3.org/2000/svg'><rect/></svg>",
+    }
+    got = {}
+    for name, data in cases.items():
+        p = tmp_path / f"{name}.svg"
+        p.write_bytes(data)
+        got[name] = uploads.svg_is_safe(p, chunk=4096)
+    assert got == {"late_entity": False, "doctype_no_bracket": False, "plain": True}
+
+
+def test_svg_upload_counts_toward_the_queue_cap(tmp_path):
+    with TestClient(make_app(tmp_path, AURA_MAX_QUEUED_UPLOADS=1)) as c:
+        c.app.state.drawing_store.ok = True
+        c.app.state.drawing_store.on_parsed = lambda *a: None  # the store never finishes here
+        svg = b"<svg xmlns='http://www.w3.org/2000/svg'><rect/></svg>"
+        first = c.post("/uploads", files={"file": ("a.svg", svg, "image/svg+xml")})
+        assert first.status_code == 202
+        second = c.post("/uploads", files={"file": ("b.svg", svg, "image/svg+xml")})
+        assert second.status_code == 429
+
+
+def test_reindex_guard_rate_limit_and_budget_context(tmp_path):
+    with TestClient(make_app(tmp_path)) as c:
+        ds = c.app.state.drawing_store
+        ds.ok = True
+        ds._spawn = lambda coro: coro.close()
+        r = upload_pdf(c, make_pdf(["EG"]), "a.pdf").json()
+        did, tok = r["drawing_id"], r["delete_token"]
+        assert wait_status(c, did)["status"] == "ready"
+        h = {"x-delete-token": tok}
+        ds.following.add(did)
+        assert c.post(f"/drawings/{did}/reindex", headers=h).status_code == 409  # still working
+        ds.following.discard(did)
+        assert c.post(f"/drawings/{did}/store/retry", headers=h).status_code == 202
+        assert set(ds.ctx[did]) == {"presenter", "ip_hash"}
+        assert c.post(f"/drawings/{did}/reindex", headers=h).status_code == 429  # within a minute
+
+
+def test_forget_waits_for_a_registration_in_progress(tmp_path, monkeypatch):
+    import asyncio
+
+    with TestClient(make_app(tmp_path)) as c:
+        ds, deleted = _armed(c, monkeypatch)
+
+        async def scenario():
+            async with ds.register_lock:
+                task = asyncio.create_task(ds.forget(["e" * 16]))
+                await asyncio.sleep(0.05)
+                assert not task.done() and deleted == []  # blocked behind the registration
+            await task
+            return deleted
+        assert c.portal.call(scenario) == [["e" * 16]]

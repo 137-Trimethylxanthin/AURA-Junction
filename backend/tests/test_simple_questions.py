@@ -6,6 +6,8 @@ exact-answerable question never waits on gemini-decision-1, the image check or t
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -216,3 +218,50 @@ def test_gate_off_drawing_verdict_does_not_stop_the_tool_tier_on_an_indexed_draw
         r = c.post("/ask", json={"drawing_id": SWISS, "question": "which rooms are larger than 15.5 m²"}).json()
         assert r["route"] == "choice" and r["answer"]["kind"] == "area"
         assert sc.runs == []
+
+
+def test_cached_abstains_are_never_offered_as_the_same_question(tmp_path):
+    """The gate's semantic cache sees only real answers of the current router version."""
+    with TestClient(make_hybrid_app(tmp_path, sidecar=MockSidecarState())) as c:
+        svc = c.app.state.svc
+        from aura.router import ROUTER_VERSION
+        old = f'["{SWISS}", "q old", null, null, null, true]|router:{ROUTER_VERSION - 1}'
+        cur_abs = f'["{SWISS}", "q abs", null, null, null, true]|router:{ROUTER_VERSION}'
+        svc.answers.put(old, {"answer": {"kind": "count", "value": 1}}, drawing_id=SWISS, question="q old")
+        svc.answers.put(cur_abs, {"answer": {"kind": "abstain", "reason": "x"}}, drawing_id=SWISS, question="q abs")
+        gem = c.app.state.svc.client.transport
+        before = len(gem.calls)
+        c.post("/ask", json={"drawing_id": SWISS, "question": "tell me something unusual about the doors"})
+        sent = [b for _, b in gem.calls[before:] if "cache_match" in (b.get("questions") or {})]
+        assert all("q old" not in json.dumps(b) and "q abs" not in json.dumps(b) for b in sent)
+
+
+@pytest.mark.parametrize("q", ["which rooms are larger than 15.5 m²", "which rooms have a door wider than 0.92 m",
+                               "which of them are wider than 0.95 m", "rooms over 12.5"])
+def test_measurements_are_never_read_as_room_ids(q):
+    """'15.5 m²' is a threshold, not room 15.5: a room scope that does not exist would make the tool
+    steps decline (measured live)."""
+    ctx = DrawingCtx(labels=["Bad"], room_ids=["3.05"], units=["A"])
+    assert route(q, ctx).scope is None
+    assert route("what is the area of room 3.05", ctx).scope == {"kind": "room", "room_id": "3.05"}
+
+
+def test_tool_tier_abstain_is_not_answerable_and_router_topics_stay_not_on_drawing(tmp_path, monkeypatch):
+    """Rule: tools tried and empty -> not_answerable; a router topic (ceiling height) that never
+    reaches the tools -> not_on_drawing."""
+    import aura.pipeline as P
+    from aura import answer as A
+
+    async def tool_abstain(svc, d, question, lang, caller, stats, history=None, scope=None, **k):
+        stats["route"] = "choice"
+        return A.abstain(question, lang, {"kind": "floor"}, "not_on_drawing", question,
+                         "I cannot answer this from the drawing's data: nothing matched.")
+
+    with TestClient(make_hybrid_app(tmp_path, sidecar=MockSidecarState())) as c:
+        c.app.state.svc.agent = None
+        c.app.state.drawing_store.ok = True
+        monkeypatch.setattr(P, "answer_with_tools", tool_abstain)
+        r = c.post("/ask", json={"drawing_id": SWISS, "question": "how far is it to walk from the kitchen to the bath"}).json()
+        assert r["answer"] == {"kind": "abstain", "reason": "not_answerable"}
+        h = c.post("/ask", json={"drawing_id": SWISS, "question": "what is the ceiling height in the kitchen"}).json()
+        assert h["answer"]["reason"] == "not_on_drawing"

@@ -1112,6 +1112,11 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             [] if (has_followup_semantics or is_deictic_region or ov_dump)
             else svc.answers.entries_for_drawing(d.id, scope=scope_dump, overrides=ov_dump, models_on=models_enabled())
         )
+        # Only answers written by the current router, and only real answers: an old abstain must
+        # never come back as "the same question" once routing or the index improved.
+        cur = f"|router:{ROUTER_VERSION}"
+        cached_candidates = [(k, q) for k, q in cached_candidates if cur in k
+                             and ((svc.answers.get(k) or {}).get("answer") or {}).get("kind") != "abstain"]
 
         intent_tag = f"router · {mode}"
         if svc.client is not None and svc.client.available():
@@ -1158,7 +1163,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
                 if hd.cache_key:
                     sem_hit = svc.answers.get(hd.cache_key)
-                    if sem_hit is not None:
+                    if sem_hit is not None and (sem_hit.get("answer") or {}).get("kind") != "abstain":
                         sem_trace = _with_decision(
                             [n for n in sem_hit.get("trace") or [] if n.get("stage") != "decision"],
                             decision_node(hd, "cache"))
@@ -1225,6 +1230,11 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             except Exception:  # the tool path must never take the turn down; the agent still runs
                 log.exception("tool-step answerer failed; escalating to sidecar agent")
             if tools_built is not None:
+                ans = tools_built.body.get("answer") or {}
+                if ans.get("kind") == "abstain" and ans.get("reason") == "not_on_drawing":
+                    # The rule: not_on_drawing only when the tools were NOT tried (router topic or
+                    # a confident gate on a drawing without an index); tried and empty = not_answerable.
+                    ans["reason"] = "not_answerable"
                 if gate_node:
                     tools_built.body["trace"] = [gate_node, *tools_built.body.get("trace", [])]
                 yield "understood", {"detected_lang": tools_built.body["detected_lang"],

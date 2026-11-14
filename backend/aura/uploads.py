@@ -46,10 +46,11 @@ def sniff(head: bytes) -> str | None:
     text = head.lstrip(b"\xef\xbb\xbf").lstrip()
     if text.startswith(b"ISO-10303-21;"):
         return "ifc"
-    # SVG: XML whose root is <svg>. Untrusted: a DTD (entity expansion) is refused, the bytes go
-    # only to the drawing store's reader and are never served (SERVED_FILES has no source.svg).
-    if text.startswith((b"<?xml", b"<svg", b"<!--")) and b"<svg" in text[:4096]:
-        return None if b"<!DOCTYPE" in text[:4096].upper() and b"[" in text[:4096] else "svg"
+    # SVG: XML whose root is <svg>. Untrusted: the whole file is checked by svg_is_safe() (no DTD,
+    # no entities) before it is stored; the bytes go only to the drawing store's reader and are
+    # never served (SERVED_FILES has no source.svg).
+    if text.startswith((b"<?xml", b"<svg", b"<!--", b"<!doctype", b"<!DOCTYPE")) and b"<svg" in text[:4096]:
+        return "svg"
     # ASCII DXF: group code 0, then SECTION (optionally preceded by 999 comments).
     lines = [ln.strip() for ln in text.split(b"\n")[:8]]
     while len(lines) >= 2 and lines[0] == b"999":
@@ -104,6 +105,22 @@ class Accepted:
     dir: Path
     src: Path
     delete_token: str
+
+
+_XML_DANGER = (b"<!doctype", b"<!entity")
+
+
+def svg_is_safe(path: Path, chunk: int = 1 << 20) -> bool:
+    """False when the SVG declares a DTD or an entity anywhere (XML entity expansion: jstore reads
+    SVG with xml.etree, which expands internal entities). Case-insensitive, whole file."""
+    tail = b""
+    with path.open("rb") as f:
+        while block := f.read(chunk):
+            low = (tail + block).lower()
+            if any(m in low for m in _XML_DANGER):
+                return False
+            tail = low[-16:]
+    return True
 
 
 def accepted(*, store_on: bool, images_open: bool) -> list[dict]:

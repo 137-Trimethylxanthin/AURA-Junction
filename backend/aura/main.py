@@ -62,6 +62,9 @@ from aura.writer import Writer
 
 log = logging.getLogger("aura.main")
 
+REINDEX_EVERY_S = 60.0  # one store retry per upload per minute
+REINDEX_PER_IP_HOUR = 10
+
 SERVED_FILES = {"plan.svg", "original.png", "thumb.png"}  # allow-list: no other names
 LIBRARY_CACHE = "public, max-age=3600"
 NO_STORE = "private, no-store"
@@ -367,7 +370,8 @@ def create_app(
         jobs.store_on = drawing_store.available
 
         def store_failed(did: str) -> None:  # no store index for this page: our detection instead
-            task = asyncio.create_task(jobs.detect_later(did, settings.uploads_dir / did))
+            task = asyncio.create_task(jobs.detect_later(did, settings.uploads_dir / did,
+                                                         drawing_store.ctx.get(did)))
             jobs.tasks.add(task)
             task.add_done_callback(jobs.tasks.discard)
 
@@ -654,6 +658,9 @@ def create_app(
         return {"contract_version": CONTRACT_VERSION, "id": d.id,
                 "status": d.drawing.get("status", "ready")}
 
+    reindex_last: dict[str, float] = {}
+    reindex_by_ip: dict[str, deque] = defaultdict(deque)
+
     @app.get("/uploads/accepted")
     async def uploads_accepted(request: Request) -> dict:
         """What the upload page may offer right now: types, extensions and size caps."""
@@ -679,6 +686,21 @@ def create_app(
         s = svc(request)
         pages = [drawing_id] + ([r["id"] for r in s.store.upload_rows() if r["id"].startswith(f"{drawing_id}-p")]
                                 if s.store and not re.search(r"-p\d+$", drawing_id) else [])
+        if any(p in ds.following for p in pages):
+            return _err("bad_request", "The drawing store is still working on this upload.", 409)
+        now, ip = time.time(), client_ip_hash(request, settings) or "-"
+        presenter = is_presenter(request, settings)
+        if now - reindex_last.get(drawing_id, 0.0) < REINDEX_EVERY_S:
+            return _err("rate_limited", "This upload was retried a moment ago; wait a minute.", 429)
+        q = reindex_by_ip[ip]
+        while q and now - q[0] > 3600:
+            q.popleft()
+        if len(q) >= REINDEX_PER_IP_HOUR and not presenter:
+            return _err("rate_limited", "Too many retries from this address; try again later.", 429)
+        reindex_last[drawing_id] = now
+        q.append(now)
+        for p in pages:  # the fallback detection spends under the requester's budget context
+            ds.ctx[p] = {"presenter": presenter, "ip_hash": client_ip_hash(request, settings)}
         await ds.reindex(pages)
         row = upload_row(request, drawing_id)
         body = {"contract_version": CONTRACT_VERSION, "id": drawing_id, "status": row["status"]}
@@ -732,7 +754,11 @@ def create_app(
         if (refused := origin_refused(request)) is not None:
             return refused
         jobs = request.app.state.jobs
-        if 0 < settings.max_queued_uploads <= len(jobs.tasks):
+        # SVGs skip our parse queue (the store reads them) but count toward the same cap.
+        svg_busy = (svc(request).store._q(
+            "SELECT count(*) n FROM drawings WHERE status='processing' AND meta LIKE '%\"kind\": \"svg\"%'"
+        )[0]["n"] if svc(request).store else 0)
+        if 0 < settings.max_queued_uploads <= len(jobs.tasks) + svg_busy:
             return _err("rate_limited", "Uploads are busy; try again in a few minutes.", 429)
         if settings.upload_quota_bytes > 0 and _dir_bytes(settings.uploads_dir) >= settings.upload_quota_bytes:
             return _err("rate_limited", "Upload storage is full; try again later.", 429)
@@ -789,6 +815,12 @@ def create_app(
              json.dumps({"kind": kind})))
         meta = {"title": title, "created_at": _iso(now),
                 "expires_at": _iso(exp_ts)}
+        request.app.state.drawing_store.ctx[acc.drawing_id] = {
+            "presenter": presenter, "ip_hash": client_ip_hash(request, settings)}
+        if kind == "svg" and not await asyncio.to_thread(uploads.svg_is_safe, acc.src):
+            await _remove_upload(s, acc.drawing_id)
+            return _err("unsupported_type", "This SVG declares a DTD or entities, which are not "
+                        "accepted. Save it as plain SVG and upload again.", 415)
         if kind == "svg":
             # No parse of ours: the drawing store reads the SVG; materialise writes the page image
             # and marks the row ready. The SVG itself is never served (SERVED_FILES).

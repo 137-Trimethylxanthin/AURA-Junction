@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 5  # 4: tool-step tier before the sidecar; 5: store-indexed uploads answer exactly
+ROUTER_VERSION = 7  # 5: store-indexed exact; 6: length filters to tools; 7: measurements are not room ids
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
@@ -298,7 +298,12 @@ _UNIT_RE = re.compile(
 )
 _UNIT_APOS_RE = re.compile(r"(?:l['’]|dell['’])appartement?o?\s*([A-Z])(?![^\W_])", re.IGNORECASE)
 _UNIT_FI_RE = re.compile(rf"(?<!{_L})([A-Z])-(?:asunno|asunto){_L}*")
-_ROOM_ID_RE = re.compile(r"(?<![\w.])([A-Z]{0,2}\d{1,3}\.\d{1,3})(?![\d])")
+# A room id like 3.05; never a measurement ("0.92 m", "15.5 m²", "2.5 metres").
+_ROOM_ID_RE = re.compile(r"(?<![\w.])([A-Z]{0,2}\d{1,3}\.\d{1,3})(?![\d])"
+                         r"(?!\s*(?:m\b|m²|m2\b|m\^2|cm|mm|sqm|qm|%|met(?:er|re)s?\b|neliö|quadrat))")
+# ... nor a threshold ("larger than 15.5", "over 0.9", ">= 12.5").
+_COMPARE_BEFORE = re.compile(r"(?:than|over|under|above|below|least|most|[<>]=?|≥|≤|als|que|kuin|di)\s*$",
+                             re.IGNORECASE)
 _ROOM_AFTER_WORD = re.compile(
     rf"(?<!{_L})(?:room|pièce|piece|raum|locale|huone|stanza|zimmer)\s+(?:n[o°.]?\s*)?"
     rf"([A-Z]{{0,2}}\d{{1,3}}(?:\.\d{{1,3}})?)(?![\d.])",
@@ -367,12 +372,13 @@ def room_of(text: str, ctx: DrawingCtx | None) -> str | None:
         if up in known:
             return up
         return rid
-    for m2 in _ROOM_ID_RE.finditer(text):
+    ids = [m2 for m2 in _ROOM_ID_RE.finditer(text)
+           if m2.group(1) in known or not _COMPARE_BEFORE.search(text[:m2.start()])]
+    for m2 in ids:
         rid = m2.group(1)
         if not known or rid in known:
             return rid
-    m3 = _ROOM_ID_RE.search(text)
-    return m3.group(1) if m3 else None
+    return ids[0].group(1) if ids else None
 
 
 def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]:

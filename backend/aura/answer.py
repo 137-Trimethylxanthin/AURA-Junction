@@ -77,6 +77,27 @@ PICK_SOURCE = {
 }
 
 
+def pick_source(method: str | None, d: LoadedDrawing) -> dict:
+    """The 'Pick the best source' node, worded after the evidence the answer really used."""
+    store = bool(d.drawing.get("evidence_method"))
+    if method == "vision":
+        body = ("The drawing store indexed this upload; these items were detected on the page image by "
+                "a model, so the count is an estimate." if store else
+                "This drawing is an image with no CAD geometry, so Gemini found the boxes on the image "
+                "once at upload. The count is a model estimate.")
+        return {**PICK_SOURCE, "body": body, "kind": "model"}
+    if method == "ocr":
+        return {**PICK_SOURCE, "kind": "model",
+                "body": "These values were read by OCR from the page image, so the answer is an estimate."}
+    if method == "pdf_vector":
+        return {**PICK_SOURCE, "body": "The rooms of this PDF were read from its vector lines and printed "
+                                      "text, so counts and areas come from that index without an image model."}
+    if d.drawing.get("kind") == "ifc":
+        return {**PICK_SOURCE, "body": "The IFC model's elements and stored quantities answer counts and "
+                                      "areas exactly, so no image model is needed for the answer."}
+    return dict(PICK_SOURCE)
+
+
 def tool_meta(tr: ToolResult) -> dict:
     return {"name": tr.tool, "args": tr.args, "result_id": tr.result_id, "ms": tr.ms}
 
@@ -172,13 +193,8 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
     trace: list[dict] = [question_node(question, lang),
                          intent_node(f"count · {plural} · {scope_text(scope)}", intent_tag,
                                      intent_conf),
-                         PICK_SOURCE]
+                         pick_source(tr.method, d)]
     vision = tr.method == "vision"
-    if vision:
-        trace[2] = {"id": "source", "parent": "q", "title": "Pick the best source",
-                    "tag": "router", "kind": "model",
-                    "body": "This drawing is an image with no CAD geometry, so Gemini found the "
-                            "boxes on the image once at upload. The count is a model estimate."}
     if tr.boxes or subject not in ("room", "apartment"):
         ids = [b.id for b in tr.boxes]
         trace.append({"id": "read", "parent": "source",
@@ -265,7 +281,7 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
         intent_node(f"area · net · {scope_text(scope)}" + (" · without outdoor" if out else "")
                     + "".join(f" · what-if {o['room_id']} = {round(o['w_m'] * o['h_m'], 2):.2f} m²"
                               for o in used), intent_tag, intent_conf),
-        PICK_SOURCE,
+        pick_source(tr.method, d),
         {"id": "collect", "parent": "source", "title": "Collect rooms",
          "tag": "room labels · printed areas", "body": tr.summary, "kind": "exact",
          "evidence_ids": ids, "tool": tool_meta(tr)},

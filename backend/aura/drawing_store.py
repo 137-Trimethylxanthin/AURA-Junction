@@ -188,6 +188,8 @@ class DrawingStore:
         self.store = store  # aura.store.Store (SQLite reads)
         self.on_materialised = on_materialised  # callable(drawing_id): evict caches
         self.on_store_failed = None  # callable(drawing_id): our own detection as the fallback
+        self.following: set[str] = set()  # drawing ids with a follow task running (reindex guard)
+        self.ctx: dict[str, dict] = {}  # drawing id -> the uploader's budget context (presenter, ip)
         self.ok = False
         self.ingestor: Any = None
         self.jsettings: Any = None
@@ -293,8 +295,13 @@ class DrawingStore:
         except ValueError:
             return {}
 
-    async def forget(self, file_ids: list[str]) -> None:
-        """Delete these store projects unless a live upload or the dataset still uses the bytes."""
+    async def forget(self, file_ids: list[str], *, locked: bool = False) -> None:
+        """Delete these store projects unless a live upload or the dataset still uses the bytes.
+        Under the registration lock: a registration of the same bytes cannot slip in between the
+        reference check and the delete (it would lose its store data). `locked`: caller holds it."""
+        if not locked:
+            async with self.register_lock:
+                return await self.forget(file_ids, locked=True)
         keep = self.live_file_ids() | self.permanent_file_ids()
         await self.delete([f for f in file_ids if f and f not in keep])
 
@@ -376,7 +383,7 @@ class DrawingStore:
                     return None
                 row = await asyncio.to_thread(jfiles.store_upload, self.jsettings, tmp, original_name)
                 if self._gone(drawing_id):  # deleted while the store took the file: undo at once
-                    await self.forget([row["file_id"]])
+                    await self.forget([row["file_id"]], locked=True)
                     return None
                 await self._set_store_meta(drawing_id, file_id=row["file_id"],
                                            drawing_key=row["drawing_key"], state="registered",
@@ -402,6 +409,7 @@ class DrawingStore:
         return await asyncio.to_thread(q)
 
     async def _follow(self, drawing_id: str, file_id: str, key: str) -> None:
+        self.following.add(drawing_id)
         try:
             status, _ = await self._db_status(file_id)
             if status in ("registered", "failed"):
@@ -439,9 +447,11 @@ class DrawingStore:
                 await self._set_store_meta(drawing_id, state="failed", error="read")
         except asyncio.CancelledError:
             raise
-        except Exception as e:
+        except Exception as e:  # a background follower must never take the app down
             log.exception("store follow failed for %s", drawing_id)
             await self._set_store_meta(drawing_id, state="failed", error=type(e).__name__)
+        finally:
+            self.following.discard(drawing_id)
 
     def _interpret_pool(self):
         if self.ingestor.pool is None:
