@@ -277,10 +277,10 @@ def _is_saved_project_row(row: dict) -> bool:
 
 
 def _bundle_visible(s: Services, request: Request, p: ProjectBundle, rows_by_id: dict[str, dict]) -> bool:
-    """True when `request` may see or answer across `p`: public server-built bundles for everyone,
-    user-saved or upload-backed bundles only for the caller holding their token."""
+    """True when `request` may see or answer across `p`: public server-built (and legacy ownerless
+    library-only) bundles for everyone, token-owned or upload-backed bundles only with their token."""
     row = rows_by_id.get(p.id)
-    if (row is not None and _is_saved_project_row(row)) or any(
+    if (row is not None and row.get("token_hash")) or any(
         f.drawing_id.startswith("up-") for f in p.floors
     ):
         return _project_access(
@@ -299,6 +299,8 @@ def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -
     bundle is private exactly as in GET /projects (unknown to anyone without its token)."""
     if scope is None or getattr(scope, "kind", None) != "project":
         return None
+    from aura import building
+
     proj = _project_of(s, scope.project_id)
     if proj is not None:
         rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
@@ -306,10 +308,28 @@ def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -
             proj = None  # same answer as an unknown id: do not confirm it exists
     if proj is None:
         return _err("not_found", f"Unknown project '{scope.project_id}'.", 404)
+    unique_ids = list(dict.fromkeys(scope.drawing_ids))
+    scope.drawing_ids = unique_ids
     members = {f.drawing_id for f in proj.floors}
-    outside = [d for d in [drawing_id, *scope.drawing_ids] if d not in members]
+    involved = list(dict.fromkeys([drawing_id, *unique_ids]))
+    outside = [d for d in involved if d not in members]
     if outside:
         return _err("bad_request", f"Not floors of project '{proj.id}': {', '.join(outside[:5])}.", 400)
+    if building.MAX_SHEETS > 0 and len(involved) > building.MAX_SHEETS:
+        return _err(
+            "bad_request",
+            f"Too many sheets in one question ({len(involved)}; maximum {building.MAX_SHEETS}). "
+            f"Select up to {building.MAX_SHEETS} sheets or ask about a specific floor.",
+            400,
+        )
+    if s.store is not None:
+        for did in unique_ids:
+            if did.startswith("up-"):
+                urow = s.store.drawing_row(did)
+                if urow is None:
+                    s.registry.evict(did)
+                elif urow["status"] != "ready":
+                    return _err("processing", f"Drawing '{did}' is {urow['status']}.", 409)
     return None
 
 
@@ -321,8 +341,10 @@ def _visible_projects(s: Services, request: Request) -> list[ProjectBundle]:
 
 def _building_run(s: Services, request: Request, drawing_id: str, question: str, body: Any):
     """A whole-building `run` for a drawing that is a sheet of a multi-plan project, else None."""
-    from aura import building
+    from aura import building, pipeline
 
+    if body.scope is not None and getattr(body.scope, "kind", None) == "project":
+        return building.wrap_project_scope_run(pipeline.run, list(body.scope.drawing_ids))
     rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
     visible = [p for p in _synthesize_projects(s) if _bundle_visible(s, request, p, rows_by_id)]
     saved_ids = {pid for pid, r in rows_by_id.items() if _is_saved_project_row(r)}
@@ -333,7 +355,6 @@ def _building_run(s: Services, request: Request, drawing_id: str, question: str,
     if plan is None:
         return None
     building.validate_plan(plan)
-    from aura import pipeline
     persist = functools.partial(building.persist_answer, plan=plan)
     return functools.partial(building.run, plan=plan, base_run=pipeline.run, persist=persist)
 
@@ -420,6 +441,8 @@ def create_app(
         registry = tools.Registry(settings.drawing_dirs(),
                                   {d.id: d for d in extra_drawings or []},
                                   uploads_dir=settings.uploads_dir)
+        for ed in extra_drawings or ():
+            ed.registry = registry
         agent = (
             AgentClient(settings, budget, client, registry, transport=sidecar_transport)
             if (settings.sidecar_url or sidecar_transport is not None)
@@ -459,8 +482,7 @@ def create_app(
 
         def materialised(did: str) -> None:  # the drawing file changed: nothing cached may outlive it
             registry.evict(did)
-            _drop_cached_sheet(app.state.svc.answers, did)
-            app.state.svc.checks.forget_drawing(did)
+            _forget_drawing_mem(app.state.svc, did)
 
         drawing_store.on_materialised = materialised
         # Before the first request: the pool's pending set is in memory, so unsettled pages are
@@ -1178,6 +1200,21 @@ def _drop_cached_sheet(answers: AnswerCache, drawing_id: str) -> None:
             answers._q.pop(k, None)
 
 
+def _forget_drawing_mem(s: Services, drawing_id: str) -> None:
+    """Drop every in-memory cache entry (answers, checks, door-leaf crops) referencing `drawing_id`."""
+    from aura import door_leaves
+
+    _drop_cached_sheet(s.answers, drawing_id)
+    s.checks.forget_drawing(drawing_id)
+    for ck in [k for k in list(s.checks._mem) if k.startswith(f"{drawing_id}:") or k == f"score:{drawing_id}"]:
+        s.checks._mem.pop(ck, None)
+    for dk in [k for k in list(door_leaves._MEM) if k.startswith(f"{drawing_id}:")]:
+        door_leaves._MEM.pop(dk, None)
+    for fk in [k for k in list(door_leaves._FAILED) if k.startswith(f"{drawing_id}:")]:
+        door_leaves._FAILED.pop(fk, None)
+    door_leaves._LOCKS.pop(drawing_id, None)
+
+
 async def _remove_single_upload(s: Services, drawing_id: str) -> None:
     from aura import building
 
@@ -1187,8 +1224,7 @@ async def _remove_single_upload(s: Services, drawing_id: str) -> None:
     d = s.settings.uploads_dir / drawing_id
     if d.is_dir() and d.parent == s.settings.uploads_dir:
         await asyncio.to_thread(shutil.rmtree, d, True)
-    _drop_cached_sheet(s.answers, drawing_id)
-    s.checks.forget_drawing(drawing_id)
+    _forget_drawing_mem(s, drawing_id)
 
     w = s.writer
     if w is None:
@@ -1287,8 +1323,7 @@ async def _remove_single_upload(s: Services, drawing_id: str) -> None:
                             )
 
     await w.flush()
-    _drop_cached_sheet(s.answers, drawing_id)
-    s.checks.forget_drawing(drawing_id)
+    _forget_drawing_mem(s, drawing_id)
 
 
 _STAGE_RANK = {"queued": 0, "parsing": 1, "reading": 2, "interpreting": 3, "materialising": 4}

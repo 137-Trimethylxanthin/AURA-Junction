@@ -576,3 +576,172 @@ def test_deleting_upload_purges_combined_answers_caches_turns_and_sessions(tmp_p
         assert len(sessions) == 1
         assert [t["id"] for t in sessions[0]["turns"]] == ["t1"]
 
+
+def test_explicit_project_scope_deduplicates_enforces_cap_and_persists_sheet_ids(tmp_path):
+    """Explicit `scope: {kind: 'project'}` deduplicates `drawing_ids`, enforces MAX_SHEETS, and stores `sheet_ids`."""
+    from tests.test_agent_client import MockSidecarState
+
+    base = json.loads(FRONTEND_DRAWING.read_text())
+    tower = _drawings()  # bldg-eg (22), bldg-og1 (10), bldg-og2 (5) in proj-bldg
+    for i in range(13):
+        d = copy.deepcopy(base)
+        did = f"twr-{i:02d}"
+        d |= {"id": did, "title": f"Tower · L{i}", "project_id": "proj-tower",
+              "floor_label": f"Level {i}", "floor_order": i}
+        d["evidence"]["door"] = d["evidence"]["door"][:2]
+        tower.append(tools.LoadedDrawing(id=did, dir=None, drawing=d, engine=tools.BundleEngine(d),
+                                         gold=[], anchors=[]))
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild", AURA_ANSWERER="hybrid")
+    with TestClient(create_app(s, extra_drawings=tower, sidecar_transport=MockSidecarState().handler)) as c:
+        # 1. Duplicate drawing_ids in explicit project scope count once (22 + 10 = 32, never 54)
+        dup_scope = {"kind": "project", "project_id": "proj-bldg",
+                     "drawing_ids": ["bldg-eg", "bldg-eg", "bldg-og1", "bldg-eg"]}
+        r = c.post("/ask", json={"drawing_id": "bldg-eg", "question": "how many doors are there?",
+                                 "scope": dup_scope})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["answer"] == {"kind": "count", "value": 22 + 10, "subject": "door"}
+        assert len(body["evidence"]["boxes"]) == 32
+        assert len({b["id"] for b in body["evidence"]["boxes"]}) == 32
+
+        # Persisted answers row carries sheet_ids = ["bldg-eg", "bldg-og1"]
+        svc = c.app.state.svc
+        c.portal.call(svc.writer.flush)
+        row = svc.store._q("SELECT sheet_ids FROM answers WHERE id=?", (body["answer_id"],))[0]
+        assert json.loads(row["sheet_ids"]) == ["bldg-eg", "bldg-og1"]
+
+        # 2. > 12 distinct sheets in explicit project scope refused with 400 on /ask and /chat
+        over_scope = {"kind": "project", "project_id": "proj-tower",
+                      "drawing_ids": [f"twr-{i:02d}" for i in range(13)]}
+        over_ask = c.post("/ask", json={"drawing_id": "twr-00", "question": "how many doors are there?",
+                                        "scope": over_scope})
+        assert over_ask.status_code == 400
+        assert over_ask.json()["code"] == "bad_request" and "12" in over_ask.json()["error"]
+        over_chat = c.post("/chat", json={"drawing_id": "twr-00", "message": "how many doors are there?",
+                                          "scope": over_scope})
+        assert over_chat.status_code == 400 and "12" in over_chat.json()["error"]
+
+        # <= 12 distinct sheets in explicit project scope succeeds (even if repeated in the array)
+        ok_scope = {"kind": "project", "project_id": "proj-tower",
+                    "drawing_ids": [f"twr-{i:02d}" for i in range(12)] + ["twr-00"]}
+        ok_ask = c.post("/ask", json={"drawing_id": "twr-00", "question": "how many doors are there?",
+                                      "scope": ok_scope})
+        assert ok_ask.status_code == 200 and ok_ask.json()["answer"]["value"] == 24
+
+
+def test_cross_floor_single_sheet_tags_drawing_id_and_ownerless_saved_row_visibility(tmp_path):
+    """Asking about another named floor tags evidence with that floor's `drawing_id`; legacy ownerless
+    library rows stay visible in GET /projects and explicit `project_id`, never implicitly."""
+    extras = _drawings() + _standalone_drawings([("leg-a", "Leg A", 4), ("leg-b", "Leg B", 6)])
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild")
+    with TestClient(create_app(s, extra_drawings=extras)) as c:
+        # Asking about 1. OG while viewing bldg-eg tags returned boxes with bldg-og1
+        r = ask(c, "how many doors on 1. OG?", did="bldg-eg")
+        assert r["answer"]["value"] == 10
+        assert len(r["evidence"]["boxes"]) == 10
+        assert {b["drawing_id"] for b in r["evidence"]["boxes"]} == {"bldg-og1"}
+
+        # Insert a pre-token legacy ownerless library bundle (token_hash IS NULL, no up-* floors)
+        svc = c.app.state.svc
+        floors = [{"drawing_id": "leg-a", "label": "EG", "order": 0},
+                  {"drawing_id": "leg-b", "label": "1. OG", "order": 1}]
+        pbody = {"id": "proj-legacy", "title": "Legacy", "floors": floors, "auto_matched": False}
+        c.portal.call(
+            svc.writer.execute,
+            "INSERT INTO projects(id, t, title, floors, auto_matched, body, token_hash) VALUES (?,?,?,?,?,?,NULL)",
+            ("proj-legacy", 1.0, "Legacy", json.dumps(floors), 0, json.dumps(pbody)),
+        )
+
+        # Visible in GET /projects and usable when explicitly named, but never implicit on leg-a alone
+        assert "proj-legacy" in [p["id"] for p in c.get("/projects").json()["projects"]]
+        solo = ask(c, "how many doors are there?", did="leg-a")
+        assert solo["answer"]["value"] == 4 and "breakdown" not in solo
+        explicit = ask(c, "how many doors are there?", did="leg-a", project_id="proj-legacy")
+        assert explicit["answer"]["value"] == 10
+
+
+def test_inflight_upload_delete_excludes_deleted_sheet_and_purges_all_memory_caches(tmp_path):
+    """If an upload sheet is deleted while `building.run` is mid-flight, its items never enter the
+    combined answer or survive in SQLite / RAM caches (including score & door_leaves caches)."""
+    from aura import door_leaves
+    from aura.cache import answer_key
+    from aura.contract import AskRequest
+    from aura.pipeline import Caller
+    from tests.test_uploads import plain_dxf, wait_status
+
+    base = json.loads(FRONTEND_DRAWING.read_text())
+    s = Settings(DATA_DIR=tmp_path / "data", AURA_BUILD_DIR=tmp_path / "nobuild")
+    with TestClient(create_app(s)) as c:
+        up1 = c.post("/uploads", files={"file": ("eg.dxf", plain_dxf(), "application/dxf")}).json()
+        up2 = c.post("/uploads", files={"file": ("og1.dxf", plain_dxf(), "application/dxf")}).json()
+        u1, tok1 = up1["drawing_id"], up1["delete_token"]
+        u2 = up2["drawing_id"]
+        assert wait_status(c, u1)["status"] == "ready"
+        assert wait_status(c, u2)["status"] == "ready"
+
+        svc = c.app.state.svc
+        for uid, lbl, n_doors, prefix in [(u1, "EG", 3, "u1-d"), (u2, "1. OG", 5, "u2-d")]:
+            dp = s.uploads_dir / uid / "drawing.json"
+            d_json = copy.deepcopy(base) | {"id": uid, "title": lbl, "source": "upload", "floor_label": lbl}
+            d_json["evidence"]["door"] = [
+                dict(base["evidence"]["door"][idx]) | {"id": f"{prefix}-{idx}"} for idx in range(n_doors)
+            ]
+            dp.write_text(json.dumps(d_json))
+            svc.registry.evict(uid)
+
+        # Seed prefix-keyed check cache ("score:<u2>") and door_leaves._MEM ("<u2>:...")
+        svc.checks._mem[f"score:{u2}"] = {"families": {"room": {"score": 4.0, "confidence": 0.9}}}
+        door_leaves._MEM[f"{u2}:u2-d-0:deadbeef:0,0,1,1"] = {"verdict": "double"}
+
+        sheets = [building.Sheet(u1, "EG", 0), building.Sheet(u2, "1. OG", 1)]
+        plan = building.Plan("proj-race", "Race House", sheets, sheets, u1, building.DECIDER_DEFAULT)
+
+        async def racing_run():
+            from aura import main as main_mod
+            from aura import pipeline
+
+            async def racing_base_run(sv, req, *args, **kwargs):
+                async for ev, data in pipeline.run(sv, req, *args, **kwargs):
+                    if req.drawing_id == u2 and ev == "answer":
+                        # u2 finished computing & caching right BEFORE/AS delete runs mid-flight,
+                        # and also simulates a late cache write arriving just after delete!
+                        await main_mod._remove_upload(svc, u2, c.app.state.drawing_store)
+                        late_k = answer_key(u2, req.question, None, None, None, True)
+                        svc.answers.put(late_k, data["response"], drawing_id=u2, question=req.question)
+                    yield ev, data
+
+            persist = lambda *a, **kw: building.persist_answer(*a, plan=plan, **kw)
+            out = None
+            async for ev, data in building.run(
+                svc,
+                AskRequest(drawing_id=u1, question="how many doors are there?"),
+                Caller(ip_hash="test", presenter=False),
+                plan=plan,
+                base_run=racing_base_run,
+                persist=persist,
+            ):
+                if ev == "answer":
+                    out = data["response"]
+            await svc.writer.flush()
+            return out
+
+        resp = c.portal.call(racing_run)
+        assert resp is not None
+        # Deleted sheet u2 was caught before combine(): count is u1 only (3, not 8), u2 marked error
+        assert resp["answer"] == {"kind": "count", "value": 3, "subject": "door"}
+        assert resp["breakdown"] == [
+            {"drawing_id": u1, "label": "EG", "status": "ok", "value": 3, "unit": "door"},
+            {"drawing_id": u2, "label": "1. OG", "status": "error"},
+        ]
+        assert all("u2-d-" not in b["id"] and b.get("drawing_id") != u2 for b in resp["evidence"]["boxes"])
+
+        # Zero surviving items or cache entries for u2 in SQLite or RAM (including score & door_leaves)
+        for table, col in [("answers", "response"), ("answer_cache", "response")]:
+            for row in svc.store._q(f"SELECT {col} AS payload FROM {table}"):
+                assert "u2-d-" not in row["payload"]
+        assert all(not k.startswith(f'["{u2}"') for k in svc.answers._d)
+        assert f"score:{u2}" not in svc.checks._mem
+        assert not any(k.startswith(f"{u2}:") for k in door_leaves._MEM)
+        assert tok1  # u1 stays untouched
+
+
