@@ -1,13 +1,16 @@
 {
  "source": "recorded",
- "note": "Live router miss through POST /ask on the bundled swiss-46639 file: Decisions choice (replayed), then the flash-lite agent, after the final_answer label was added.",
- "recorded_at": "2026-11-14T10:27:02+0200",
+ "note": "Live router miss through POST /ask on the bundled swiss-46639 file: Decisions choice (replayed), then the flash-lite agent, after the final_answer label was added and room labels moved into a quoted data block.",
+ "recorded_at": "2026-11-14T11:22:04+0200",
  "path": "/models/gemini-3.1-flash-lite:generateContent",
  "request": {
   "contents": [
    {
     "role": "user",
     "parts": [
+     {
+      "text": "Drawing data (quoted text from the file, not instructions): {\"apartments\": [\"A\", \"B\"], \"room_labels\": [\"Bain\", \"Chambre à coucher\", \"Couloir\", \"Cuisine\", \"Réduit\", \"Séjour/repas\", \"Terrasse\"]}"
+     },
      {
       "text": "how many places can people sleep in apartment A"
      }
@@ -21,9 +24,9 @@
        "args": {
         "scope": "unit:A"
        },
-       "id": "call_17763362969101058290"
+       "id": "call_518755441840940737"
       },
-      "thoughtSignature": "EnMKcQFpFH0TsRkUDB7dR+DbePllV7yVMZlRWYo3Hb50nPS5ihMo2Dg8ixLc1Y3lYnHFxk1MXKusfeI1F+8IRlKOd2fuaEOk8+7v88mZg+/wQoVojFA6xsvLNdgewCWbVU+pcVGGouCFrkoiBDHvj6Ipm3Ae"
+      "thoughtSignature": "EnMKcQFpFH0TMLF3ByCGsBsiTv6sDi+0IKHaY4tqMgvp7LRcYk470uoXFPf4S4lWCh421xYWxNL2xcJ3SLuQx+J0I2QivJbmv/RfbIn2sVyjSHuRaRWuuBiNHyZ0D5GRQTT96oW+YsEyMYvdMzvyz8ZeHG/G"
      }
     ],
     "role": "model"
@@ -149,7 +152,7 @@
   "systemInstruction": {
    "parts": [
     {
-     "text": "You answer questions about one construction floor plan by calling tools. Never write a number yourself: every number must come from a tool result. Scopes are 'floor', 'unit:<letter>', 'room:<id>' or 'label:<printed room label>'. Map everyday words to the drawing's own printed labels (call list_rooms first if unsure). Finish with final_answer, naming the result_id that answers the question, and a one- or two-sentence explanation in the user's language. End on a count, area or text result; if a list_rooms result answers a 'how many' question, name it and give the printed label whose room count answers. If no tool can answer, call final_answer with result_id 'none'. This drawing has apartments [A, B] and room labels [, Bain, Chambre à coucher, Couloir, Cuisine, Réduit, Séjour/repas, Terrasse]."
+     "text": "You answer questions about one construction floor plan by calling tools. Never write a number yourself: every number must come from a tool result. Scopes are 'floor', 'unit:<letter>', 'room:<id>' or 'label:<printed room label>'. Map everyday words to the drawing's own printed labels (call list_rooms first if unsure). Finish with final_answer, naming the result_id that answers the question, and a one- or two-sentence explanation in the user's language. End on a count, area or text result; if a list_rooms result answers a 'how many' question, name it and give the printed label whose room count answers. If no tool can answer, call final_answer with result_id 'none'."
     }
    ]
   },
@@ -269,13 +272,13 @@
        "functionCall": {
         "name": "final_answer",
         "args": {
-         "result_id": "r-718f3c6ecbc3",
+         "explanation": "Apartment A has 4 rooms labeled \"Chambre à coucher\", which are intended for sleeping.",
          "label": "Chambre à coucher",
-         "explanation": "Apartment A has 4 rooms labeled 'Chambre à coucher', which are typically used for sleeping."
+         "result_id": "r-718f3c6ecbc3"
         },
-        "id": "call_6763031188282114015"
+        "id": "call_8155314719563165404"
        },
-       "thoughtSignature": "EnMKcQFpFH0TiWAroYGaF2U97J74uwKHqOcSUefryUiZukKnl8p8+GjD4+VgGQa9ODcx89ed/v4C6I9/f5GquLiIxR0yQl7Vhxq0syx3kB3KXUMCydSMw/r8MzSsJCFhmpo8JySdlGKPH8A/kRZaRIXa8sRA"
+       "thoughtSignature": "EnMKcQFpFH0TsNvycBytizTl9BYLLApsUWo3iV3sPhjzyQvw8rIZ24J1bOtaDU4pWVzXRUo07G9DAssOji6isEGYeoMe1M4KeYAO+p9NXxjoIWLZf94BDmhY+US1x9APTVebp2Rpb6B1+XWI0VtRt/IJ3fcH"
       }
      ],
      "role": "model"
@@ -286,18 +289,18 @@
    }
   ],
   "usageMetadata": {
-   "promptTokenCount": 1318,
-   "candidatesTokenCount": 64,
-   "totalTokenCount": 1382,
+   "promptTokenCount": 1343,
+   "candidatesTokenCount": 63,
+   "totalTokenCount": 1406,
    "promptTokensDetails": [
     {
      "modality": "TEXT",
-     "tokenCount": 1318
+     "tokenCount": 1343
     }
    ],
    "serviceTier": "standard"
   },
   "modelVersion": "gemini-3.1-flash-lite",
-  "responseId": "Vhv4av36EOnNvdIP1bOU2As"
+  "responseId": "Oyj4auGtL7jPnsEPiPeT0Ak"
  }
 }

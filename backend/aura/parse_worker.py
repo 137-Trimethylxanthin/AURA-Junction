@@ -14,6 +14,7 @@ import json
 import multiprocessing as mp
 import os
 import resource
+import sys
 from pathlib import Path
 
 AS_LIMIT = 1536 * 1024 * 1024
@@ -34,8 +35,14 @@ class TooLarge(ValueError):
 
 def _limits() -> None:
     """M4: the child holds no secrets (it never needs Settings) and gets hard resource limits."""
-    for k in [k for k in os.environ if k not in KEEP_ENV]:
+    for k in [k for k in os.environ if k not in KEEP_ENV]:  # second line of defence
         os.environ.pop(k, None)
+    try:  # not dumpable: no core dump, /proc/<pid>/{environ,mem} unreadable to the same UID
+        import ctypes
+
+        ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE = 4
+    except Exception:  # noqa: BLE001, S110 - not Linux: nothing to set
+        pass
     resource.setrlimit(resource.RLIMIT_AS, (AS_LIMIT, AS_LIMIT))
     resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_S, CPU_LIMIT_S + 5))
     resource.setrlimit(resource.RLIMIT_FSIZE, (FSIZE_LIMIT, FSIZE_LIMIT))
@@ -125,10 +132,40 @@ def _child(kind: str, src: str, out: str, drawing_id: str, meta: dict, conn) -> 
         conn.close()
 
 
+_LAUNCHER: str | None = None
+
+
+def _launcher() -> str:
+    """A tiny exec wrapper so the spawned Python starts with a MINIMAL environment: secrets
+    (GEMINI_API_KEY, AURA_PRESENTER_TOKEN, AURA_IP_SALT, ...) never enter the child process, so
+    they are not in its /proc/<pid>/environ nor in its memory. `env -i` keeps the inherited pipe
+    descriptors spawn needs; sys.path travels in spawn's own preparation data."""
+    global _LAUNCHER
+    if _LAUNCHER is None or not Path(_LAUNCHER).is_file():
+        import shlex
+        import stat
+        import tempfile
+
+        keep = " ".join(f'{k}="${{{k}:-}}"' for k in KEEP_ENV)
+        fd, path = tempfile.mkstemp(prefix="aura-child-", suffix=".sh")
+        with os.fdopen(fd, "w") as f:
+            f.write(f"#!/bin/sh\nexec /usr/bin/env -i {keep} {shlex.quote(sys.executable)} \"$@\"\n")
+        os.chmod(path, stat.S_IRWXU)
+        _LAUNCHER = path
+    return _LAUNCHER
+
+
 def start(kind: str, src: Path, out: Path, drawing_id: str, meta: dict,
           target=_child) -> tuple[mp.Process, object]:
-    """Spawn the child; returns (process, parent end of the pipe)."""
+    """Spawn the child; returns (process, parent end of the pipe).
+
+    Isolation (M4): the child starts with a scrubbed environment (no secrets), hard rlimits, and
+    is not dumpable (PR_SET_DUMPABLE=0: no core dumps, its /proc files are root-owned). It still
+    runs as the SAME UID with the same filesystem access (the DB and other uploads); a real
+    sandbox (separate user, seccomp, read-only mounts) is not set up here."""
     ctx = mp.get_context("spawn")
+    if os.path.exists("/usr/bin/env"):
+        ctx.set_executable(_launcher())  # every spawn in this process gets the scrubbed env
     parent, child = ctx.Pipe(duplex=False)
     p = ctx.Process(target=target, args=(kind, str(src), str(out), drawing_id, meta, child),
                     daemon=True)

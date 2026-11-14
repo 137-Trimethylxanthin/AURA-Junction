@@ -20,21 +20,33 @@ def answer_key(drawing_id: str, question: str, scope: dict | None, overrides: li
 
 
 class AnswerCache:
-    def __init__(self, max_items: int = 2000):
+    """In-memory answers (they contain the question text): LRU, and gone after `ttl_s` like the
+    stored answers, so nothing a user typed outlives the 24 h retention in memory either."""
+
+    def __init__(self, max_items: int = 2000, ttl_s: float = 24 * 3600.0, clock=time.time):
         self._d: OrderedDict[str, dict] = OrderedDict()
+        self._t: dict[str, float] = {}
         self.max = max_items
+        self.ttl_s = ttl_s
+        self._clock = clock
 
     def get(self, key: str) -> dict | None:
         v = self._d.get(key)
+        if v is not None and self._clock() - self._t.get(key, 0) > self.ttl_s:
+            del self._d[key]
+            self._t.pop(key, None)
+            return None
         if v is not None:
             self._d.move_to_end(key)
         return v
 
     def put(self, key: str, body: dict) -> None:
         self._d[key] = body
+        self._t[key] = self._clock()
         self._d.move_to_end(key)
         while len(self._d) > self.max:
-            self._d.popitem(last=False)
+            old, _ = self._d.popitem(last=False)
+            self._t.pop(old, None)
 
     def drop_drawing(self, drawing_id: str) -> None:
         prefix = json.dumps([drawing_id])[:-1] + ","

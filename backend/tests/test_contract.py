@@ -85,3 +85,29 @@ def test_health_and_drawing_shapes(client):
     assert lib["drawings"][0]["status"] == "ready"
     st = client.get("/drawings/swiss-46639/status").json()
     assert st == {"contract_version": "1.1", "id": "swiss-46639", "status": "ready"}
+
+
+def test_modal_image_is_pinned_to_the_lockfile():
+    """L5: the deployed image installs exactly uv.lock's versions."""
+    import subprocess
+
+    from tests.conftest import BACKEND
+
+    want = subprocess.run(["uv", "export", "--frozen", "--no-dev", "--no-hashes",
+                           "--no-emit-project", "--no-header"], cwd=BACKEND, capture_output=True,
+                          text=True, check=True).stdout
+    assert (BACKEND / "requirements-modal.txt").read_text() == want
+    assert "requirements-modal.txt" in (BACKEND / "modal_app.py").read_text()
+
+
+def test_readme_env_table_is_generated_from_settings():
+    """Every Settings alias is documented, and README.md holds exactly the generated table."""
+    import importlib.util
+
+    from tests.conftest import BACKEND
+
+    spec = importlib.util.spec_from_file_location("env_table", BACKEND / "scripts" / "env_table.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    text = mod.README.read_text(encoding="utf-8")
+    assert mod.readme_with_table(text) == text, "run: uv run python -I scripts/env_table.py --write"

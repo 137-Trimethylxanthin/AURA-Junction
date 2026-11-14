@@ -265,3 +265,52 @@ def test_ip_buckets_map_ipv4_mapped_and_group_real_ipv6():
     assert ip_bucket("2001:db8:1:2::1") != ip_bucket("2001:db8:1:3::1")
     assert ip_bucket("not an ip") == ip_bucket("also bad") == "invalid"
     assert ip_bucket(None) is None
+
+
+def test_retention_answer_cache_expires_and_old_ip_hashes_are_cleared(tmp_path):
+    """Privacy page: nothing a user typed outlives 24 h in memory; old request rows keep their
+    count (event cap) but lose the IP hash; the audit file never has one."""
+    import json as _json
+    import sqlite3
+    import time as _t
+
+    from fastapi.testclient import TestClient
+
+    from aura.cache import AnswerCache
+    from aura.main import cleanup_once
+    from tests.conftest import make_app
+
+    now = [1000.0]
+    c = AnswerCache(ttl_s=10, clock=lambda: now[0])
+    c.put("k", {"a": 1})
+    assert c.get("k") == {"a": 1}
+    now[0] += 11
+    assert c.get("k") is None
+
+    with TestClient(make_app(tmp_path)) as cl:
+        svc = cl.app.state.svc
+        cl.portal.call(svc.writer.execute, "INSERT INTO requests(t, day, model, purpose, bucket, "
+                       "ip_hash, status) VALUES (?,?,?,?,?,?,200)",
+                       (_t.time() - 3 * 86400, "2026-11-11", "m", "agent", "public", "iphash"))
+        cl.portal.call(cleanup_once, svc)
+        cl.portal.call(svc.writer.flush)
+    row = sqlite3.connect(tmp_path / "data" / "aura.sqlite3").execute(
+        "SELECT ip_hash, model FROM requests").fetchone()
+    assert row == (None, "m")
+    for f in (tmp_path / "data").rglob("requests.jsonl"):
+        assert all("ip_hash" not in _json.loads(x) for x in f.read_text().splitlines())
+
+
+def test_admin_models_switch_needs_the_presenter_and_works_live(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from aura.config import models_enabled
+    from tests.conftest import make_app
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    with TestClient(make_app(tmp_path, AURA_PRESENTER_TOKEN="pres")) as c:
+        assert c.post("/admin/models", json={"on": False}).status_code == 403
+        r = c.post("/admin/models", json={"on": False}, headers={"x-aura-presenter": "pres"})
+        assert r.json()["models"] is False and not models_enabled()
+        r = c.post("/admin/models", json={"on": True}, headers={"x-aura-presenter": "pres"})
+        assert r.json()["models"] is True and models_enabled()

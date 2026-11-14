@@ -472,3 +472,24 @@ def test_cors_is_pinned_and_foreign_origins_cannot_upload(tmp_path):
         r = upload(c, plain_dxf(), headers={"origin": "https://aura-attacker.pages.dev"})
         assert r.status_code == 403
         assert upload(c, plain_dxf(), headers={"origin": "https://aura-j26.pages.dev"}).status_code == 202
+
+
+def report_env(kind, src, out, drawing_id, meta, conn):
+    """Child entry point for the isolation test: reports what the child can see."""
+    import os
+
+    conn.send({"keys": sorted(os.environ)})
+    conn.close()
+
+
+def test_parse_child_starts_without_secrets(monkeypatch):
+    """The secrets never enter the child: its INITIAL environment (before any scrub) is minimal."""
+    from aura import parse_worker
+
+    for k in ("GEMINI_API_KEY", "AURA_PRESENTER_TOKEN", "AURA_IP_SALT"):
+        monkeypatch.setenv(k, "secret")
+    proc, conn = parse_worker.start("dxf", REPO / "x", REPO / "y", "up-x", {}, target=report_env)
+    keys = conn.recv()["keys"]
+    proc.join(10)
+    assert not {"GEMINI_API_KEY", "AURA_PRESENTER_TOKEN", "AURA_IP_SALT"} & set(keys)
+    assert set(keys) <= set(parse_worker.KEEP_ENV)

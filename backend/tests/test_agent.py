@@ -89,8 +89,8 @@ def test_unsure_choice_hands_over_to_the_agent(tmp_path):
 
 
 def test_agent_names_a_room_list_with_a_label_and_gets_that_count(tmp_path):
-    """RECORDED live (choice replayed + 2 flash-lite calls, Sat 14 Nov ~10:50, after the
-    final_answer `label` was added): the agent called list_rooms(unit:A), then named that list
+    """RECORDED live (choice replayed + 2 flash-lite calls, Sat 14 Nov afternoon, with the
+    final_answer `label` and the room labels in a quoted user-turn data block): the agent called list_rooms(unit:A), then named that list
     with label 'Chambre à coucher'. The value 4 is the tool's per-label count (rooms 3.04, 3.05,
     3.07, 3.10 as evidence), never the model's number."""
     with _app(tmp_path) as c:

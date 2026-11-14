@@ -108,7 +108,12 @@ def models_enabled() -> bool:
     on Modal the environment is fixed at start, but a file on the Volume can be created live)."""
     if os.environ.get("AURA_MODELS", "on").strip().lower() in {"off", "0", "false", "no"}:
         return False
-    return not (Path(os.environ.get("DATA_DIR") or BACKEND_DIR / ".data") / "MODELS_OFF").exists()
+    return not kill_file().exists()
+
+
+def kill_file() -> Path:
+    """The live kill switch (POST /admin/models writes it; on Modal it lives on the Volume)."""
+    return Path(os.environ.get("DATA_DIR") or BACKEND_DIR / ".data") / "MODELS_OFF"
 
 
 def live_allowed() -> bool:

@@ -31,7 +31,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from aura import tools, uploads
 from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, Ledger, RequestRecord
 from aura.cache import AnswerCache, CheckCache
-from aura.config import Settings, get_settings, models_enabled
+from aura.config import Settings, get_settings, kill_file, models_enabled
 from aura.contract import (
     CONTRACT_VERSION,
     AskRequest,
@@ -140,7 +140,7 @@ def create_app(
         def sink(rec: RequestRecord) -> None:
             # The DB row was written by the Ledger before the request was sent (H3).
             row = rec.as_dict()
-            reqlog.write(row)
+            reqlog.write({k: v for k, v in row.items() if k != "ip_hash"})  # audit file: no IP data
             logging.getLogger("aura.model").info("", extra={"fields": {"kind": "model", **row}})
 
         # Jobs live in this process only: anything still queued/processing was cut off by a
@@ -166,7 +166,7 @@ def create_app(
         app.state.jobs = jobs
         app.state.svc = Services(settings=settings, budget=budget, client=client,
                                  registry=registry, store=store, writer=writer,
-                                 answers=AnswerCache(), checks=CheckCache(store, writer))
+                                 answers=AnswerCache(ttl_s=settings.upload_ttl_s), checks=CheckCache(store, writer))
         holder["svc"] = app.state.svc
         cleanup = asyncio.create_task(_cleanup_loop(app.state.svc), name="aura-cleanup")
         try:
@@ -437,6 +437,27 @@ def create_app(
         return StreamingResponse(_sse(gen), media_type="text/event-stream",
                                  headers={"cache-control": NO_STORE, "x-accel-buffering": "no"})
 
+    @app.post("/admin/models")
+    async def admin_models(request: Request):
+        """Live kill switch, presenter token only: {"on": false} stops every model call at once
+        (a MODELS_OFF file on the Volume, read on every call); {"on": true} turns them back on."""
+        if not is_presenter(request, settings):
+            return _err("presenter_required", "Needs the presenter token.", 403)
+        try:
+            on = bool((await request.json())["on"])
+        except Exception:  # noqa: BLE001 - any malformed body
+            return _err("bad_request", 'Send {"on": true|false}.', 400)
+        f = kill_file()
+        if on:
+            f.unlink(missing_ok=True)
+        else:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.touch()
+        if on_modal:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(_volume().commit)
+        return {"contract_version": CONTRACT_VERSION, "models": models_enabled()}
+
     @app.post("/rewrite")
     async def post_rewrite(body: RewriteRequest, request: Request):
         """Rambling text / voice transcript → question blocks for the user to confirm.
@@ -619,6 +640,10 @@ async def cleanup_once(s: Services, now: float | None = None) -> int:
     cutoff = now - s.settings.upload_ttl_s
     for table in ("answers", "turns", "conversations"):
         await s.writer.execute(f"DELETE FROM {table} WHERE t < ?", (cutoff,))  # type: ignore[union-attr]
+    # Privacy: the hashed IP is only needed for the last hour's rate limits; older request rows
+    # keep their count and cost (the event cap) but lose the hash.
+    await s.writer.execute(  # type: ignore[union-attr]
+        "UPDATE requests SET ip_hash=NULL WHERE t < ? AND ip_hash IS NOT NULL", (cutoff,))
     # Upload folders with no DB row (a failure between storing and the INSERT) are swept too.
     known = {r["id"] for r in s.store.upload_rows()}
     for p in s.settings.uploads_dir.glob("up-*") if s.settings.uploads_dir.is_dir() else []:
