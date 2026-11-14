@@ -30,9 +30,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aura.budget import BudgetError
-from aura.contract import CONTRACT_VERSION, AskRequest, ProjectBundle
+from aura.contract import CONTRACT_VERSION, AskRequest, ProjectBundle, ScopeFloor
 from aura.gemini.client import Meter
 from aura.pipeline import PipelineError, ensure_ready, with_unknown_areas
+from aura.router import WHOLE_MODEL
 
 log = logging.getLogger("aura.building")
 
@@ -840,6 +841,14 @@ def wrap_project_scope_run(
 
 def _sub_request(req: AskRequest, sheet: Sheet, plan: Plan) -> AskRequest:
     scope = req.scope if req.scope is not None and req.scope.kind != "project" else None
+    if len(plan.sheets) > 1 and (
+        (scope is None and WHOLE_MODEL.search(req.question))
+        or (scope is not None and scope.kind == "model")
+    ):
+        # "in the whole building" is what the plan already does by asking every sheet: each sheet
+        # answers for its own storey, or an IFC storey would answer for the whole model and the
+        # combined total would count the model once per sheet.
+        scope = ScopeFloor()
     own = sheet.id == req.drawing_id
     return AskRequest(drawing_id=sheet.id, question=req.question, scope=scope,
                       overrides=req.overrides if own else None, lang_hint=req.lang_hint)
