@@ -271,9 +271,17 @@ export default function LibraryPage() {
       .filter((t) => present.has(t))
       .map((t) => ({ t, n: drawings.filter((d) => fileTypeOf(d) === t).length }))
   }, [drawings])
+  // Sheets of a project are shown by the project card, not again one by one (except while grouping).
+  const [projectsVersion, setProjectsVersion] = useState(0)
+  useEffect(() => myProjects.subscribe(() => setProjectsVersion((n) => n + 1)), [])
+  const inProject = useMemo(() => {
+    void projectsVersion
+    return new Set(myProjects.resolveAll(drawings).flatMap((p) => p.floors.map((f) => f.drawing_id)))
+  }, [drawings, projectsVersion])
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase()
     return drawings.filter((d) => {
+      if (!grouping && inProject.has(d.id)) return false
       if (kind !== "all" && fileTypeOf(d) !== kind) return false
       if (!q) return true
       const display = displayDrawingTitle(d).toLowerCase()
@@ -284,7 +292,7 @@ export default function LibraryPage() {
         d.id.toLowerCase().includes(q)
       )
     })
-  }, [drawings, query, kind])
+  }, [drawings, query, kind, grouping, inProject])
   const anyFacts = drawings.some((d) => d.facts)
   const offline = !base || list.state === "error"
 
@@ -317,7 +325,7 @@ export default function LibraryPage() {
                   <>
                     {" "}
                     <span className="num ml-1.5 font-normal text-muted-foreground">
-                      {shown.length}
+                      {drawings.length}
                     </span>
                   </>
                 ) : null}
@@ -438,7 +446,7 @@ export default function LibraryPage() {
                   </li>
                 ))}
               </ul>
-            ) : shown.length ? (
+            ) : !shown.length && drawings.length && !query.trim() && kind === "all" ? null : shown.length ? (
               <ul
                 className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4"
                 aria-label={tu("nav_drawings")}

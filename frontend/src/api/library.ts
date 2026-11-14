@@ -109,6 +109,18 @@ export const myUploads = {
 // ---- multi-plan house / project bundles & floor auto-matching (1.2) ---------------------------------------
 
 const PROJECTS_KEY = 'aura.projects'
+
+/**
+ * Projects are made by the user only (Group plans, or uploading files as one project). Auto-matched bundles are
+ * dropped wherever they come from, except the pages of ONE multi-page upload (`up-x`, `up-x-p2`, ...), which are
+ * one file's own sheets, not a guess from names.
+ */
+const UPLOAD_PAGE = /^(up-[A-Za-z0-9_-]+?)(?:-p\d+)?$/
+export function isOneUploadPages(p: Pick<ProjectBundle, 'floors'>): boolean {
+  const roots = new Set(p.floors.map((f) => UPLOAD_PAGE.exec(f.drawing_id)?.[1] ?? f.drawing_id))
+  return p.floors.length > 0 && roots.size === 1 && p.floors.every((f) => UPLOAD_PAGE.test(f.drawing_id))
+}
+const keepProject = (p: ProjectBundle) => !p.auto_matched || isOneUploadPages(p)
 /** Field on a stored bundle holding the ownership token the server returned when it was created. */
 const PROJECT_TOKEN_FIELD = 'owner_token'
 /** Header the backend reads the project ownership token from; rename here once the backend fixes it. */
@@ -489,6 +501,11 @@ export function autoGroupDrawings(
 /** Local persistence (`aura.projects`) and auto-match resolution for multi-plan House / Project bundles. */
 export const myProjects = {
   list(): ProjectBundle[] {
+    return myProjects.listStored().filter(keepProject)
+  },
+
+  /** Everything stored, including old auto-matched bundles (kept on disk, never shown). */
+  listStored(): ProjectBundle[] {
     try {
       const v: unknown = JSON.parse(read(PROJECTS_KEY) ?? '[]')
       if (!Array.isArray(v)) return []
@@ -643,7 +660,7 @@ export const myProjects = {
     const localById = new Map(myProjects.list().map((p) => [p.id, p]))
     let changed = false
     for (const sp of serverProjects) {
-      if (!isProjectBundle(sp)) continue
+      if (!isProjectBundle(sp) || !keepProject(sp)) continue
       if (sp.auto_matched && ungrouped.has(sp.id)) continue
       const existing = localById.get(sp.id)
       if (existing && !existing.auto_matched) continue
@@ -684,9 +701,9 @@ export const myProjects = {
       result.push({ ...p, floors: availableFloors })
     }
 
+    void drawings // auto-grouping by file names is gone; the argument stays for callers
     for (const p of myProjects.list()) consider(p, Boolean(p.auto_matched))
-    for (const p of serverProjects) if (isProjectBundle(p)) consider(p, Boolean(p.auto_matched))
-    for (const p of autoGroupDrawings(drawings)) consider(p, true)
+    for (const p of serverProjects) if (isProjectBundle(p) && keepProject(p)) consider(p, Boolean(p.auto_matched))
 
     return result
   },

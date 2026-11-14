@@ -404,6 +404,12 @@ export interface AskRequest {
   scope?: Scope
   overrides?: Override[]
   lang_hint?: Lang
+  /**
+   * 1.2: a sheet of a multi-plan building is answered for the WHOLE building unless the question names a floor
+   * ("this floor", "ground floor", "level 2") or `sheet_ids` selects some sheets (default: all sheets).
+   */
+  project_id?: string
+  sheet_ids?: string[]
 }
 
 export type TraceKind = 'exact' | 'model' | 'warn' | 'info'
@@ -455,7 +461,7 @@ export interface TraceNode {
   /** 1.1: present when this node is a tool call. */
   tool?: ToolCall
   /** Tool-step answerer stage; `detail` has one shape per stage (read defensively, see features/trace/detail.ts). */
-  stage?: 'resources' | 'decision' | 'filter' | 'answer'
+  stage?: 'resources' | 'decision' | 'filter' | 'answer' | 'scope'
   detail?: Record<string, unknown>
 }
 
@@ -631,6 +637,18 @@ export interface AskResponse {
   estimate?: { confidence: number; probabilities?: Record<string, number>; measured?: { correct: number; n: number; source: string } }
   /** Set only on the abstain of a failed deep-agent run: service down, deadline, or the run returned no answer. */
   agent_failure?: AgentFailure
+  /** 1.2: per-sheet shares of a whole-building answer (`scope` is then the project scope of the sheets asked). */
+  breakdown?: BreakdownItem[]
+}
+
+/** One sheet's share of a whole-building answer ("ground floor 14"); evidence items carry their sheet in `drawing_id`. */
+export interface BreakdownItem {
+  drawing_id: string
+  label: string
+  status: 'ok' | 'abstain' | 'error'
+  /** The sheet's count / area / quantity when it is summable. */
+  value?: number
+  unit?: string
 }
 
 export type AgentFailure = 'unavailable' | 'timeout' | 'error'
@@ -643,6 +661,9 @@ export interface ChatRequest {
   scope?: Scope
   overrides?: Override[]
   lang_hint?: Lang
+  /** See `AskRequest`. */
+  project_id?: string
+  sheet_ids?: string[]
 }
 
 /** Server-sent events of `POST /chat`, in order: turn, progress*, understood, (tool_call, tool_result)*, check?, answer | error, done. */

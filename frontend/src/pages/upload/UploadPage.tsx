@@ -12,7 +12,9 @@ import {
   Trash2Icon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { apiBase } from '@/api/library'
+import { apiBase, myProjects } from '@/api/library'
+import { Input } from '@/components/ui/input'
+import { defaultGroupName, pendingGroups, useGroupFinisher } from './groups'
 import { useTitle } from '@/hooks/use-title'
 import type { UploadPage as UploadPageInfo } from '@/api/contract'
 import { SiteHeader } from '@/components/shell/SiteHeader'
@@ -138,11 +140,16 @@ function Uploads({ base }: { base: string }) {
   const accepted = useAccepted(base)
   const anyLive = rows.some((r) => viewOf(r, mode).outcome === 'working')
   const now = useNow(anyLive)
+  // Files handed over by the library: several are staged (one project or not?), one goes straight up.
+  const [staged, setStaged] = useState<{ files: File[]; folder: boolean } | null>(() =>
+    uploadHandoff.files.length >= 2 ? { files: uploadHandoff.files, folder: false } : null,
+  )
+  const [groupsTick, setGroupsTick] = useState(0)
 
   // Files dropped on the library card arrive here.
   useEffect(() => {
     const files = uploadHandoff.take()
-    if (files.length) void add(files, hasPresenter, accepted)
+    if (files.length === 1) void add(files, hasPresenter, accepted)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -152,12 +159,44 @@ function Uploads({ base }: { base: string }) {
 
   const effectiveMode = rows.find((r) => r.status?.mode)?.status?.mode ?? mode
 
+  // Several files (or a folder): ask whether they are one project before uploading. One file goes straight up.
+  const take = (list: FileList | null, folder = false) => {
+    const files = Array.from(list ?? [])
+    if (files.length >= 2) setStaged({ files, folder })
+    else if (files.length) void add(files, hasPresenter, accepted)
+  }
+  useGroupFinisher(base, rows)
+  void groupsTick
+  const waiting = pendingGroups.list()
+
   return (
     <>
       <PageHead mode={effectiveMode} />
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
         <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6">
-          <DropZone onFiles={(f) => void add(f, hasPresenter, accepted)} accepted={accepted} />
+          <DropZone onFiles={(f, folder) => take(f, folder)} accepted={accepted} />
+          {staged ? (
+            <GroupPanel
+              files={staged.files}
+              folder={staged.folder}
+              onCancel={() => setStaged(null)}
+              onUpload={(choice) => {
+                const files = staged.files
+                setStaged(null)
+                void add(files, hasPresenter, accepted).then((ids) => {
+                  if (choice.kind === 'separate' || ids.length === 0) return
+                  pendingGroups.add({
+                    id: Date.now().toString(36),
+                    title: choice.kind === 'new' ? choice.title : '',
+                    uploadIds: ids,
+                    projectId: choice.kind === 'add' ? choice.projectId : undefined,
+                    created_at: new Date().toISOString(),
+                  })
+                  setGroupsTick((n) => n + 1)
+                })
+              }}
+            />
+          ) : null}
           {rejected.length ? (
             <Alert variant="destructive" data-upload-rejected>
               <TriangleAlertIcon />
@@ -188,6 +227,12 @@ function Uploads({ base }: { base: string }) {
             {tu('your_uploads')}
             {rows.length ? <span className="num ml-2 font-normal text-muted-foreground">{rows.length}</span> : null}
           </h2>
+          {waiting.map((g) => (
+            <p key={g.id} className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground" data-pending-group={g.id}>
+              <FileStackIcon className="size-4 shrink-0" aria-hidden />
+              {tu('ug_waiting', { name: g.title || (g.projectId ? myProjects.get(g.projectId)?.title ?? '' : ''), n: g.uploadIds.length })}
+            </p>
+          ))}
           {rows.length === 0 ? (
             <Empty className="rounded-xl border border-dashed py-12" data-uploads-empty>
               <EmptyHeader>
@@ -221,9 +266,10 @@ function Uploads({ base }: { base: string }) {
   )
 }
 
-function DropZone({ onFiles, accepted }: { onFiles: (f: FileList | null) => void; accepted: Accepted }) {
+function DropZone({ onFiles, accepted }: { onFiles: (f: FileList | null, folder?: boolean) => void; accepted: Accepted }) {
   const { tu } = useUi()
   const input = useRef<HTMLInputElement>(null)
+  const folderInput = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
   return (
     <Card className="gap-0 p-0">
@@ -253,7 +299,31 @@ function DropZone({ onFiles, accepted }: { onFiles: (f: FileList | null) => void
           <p className="text-sm font-medium text-foreground">{tu('drop_here')}</p>
           <p className="text-xs text-muted-foreground">{tu('ul_batch_hint', { n: UPLOAD_BATCH })}</p>
         </div>
-        <Button onClick={() => input.current?.click()}>{tu('choose_file')}</Button>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button onClick={() => input.current?.click()}>{tu('choose_file')}</Button>
+          <Button variant="outline" onClick={() => folderInput.current?.click()}>
+            {tu('ug_choose_folder')}
+          </Button>
+        </div>
+        <input
+          ref={folderInput}
+          type="file"
+          multiple
+          className="sr-only"
+          tabIndex={-1}
+          aria-label={tu('ug_choose_folder')}
+          data-upload-folder
+          {...({ webkitdirectory: '' } as Record<string, string>)}
+          onChange={(e) => {
+            const all = Array.from(e.currentTarget.files ?? [])
+            const exts = accepted.types.flatMap((t) => t.ext)
+            const keep = all.filter((f) => exts.some((x) => f.name.toLowerCase().endsWith(x)))
+            const dt = new DataTransfer()
+            for (const f of keep) dt.items.add(f)
+            onFiles(dt.files, true)
+            e.currentTarget.value = ''
+          }}
+        />
         <input
           ref={input}
           type="file"
@@ -632,5 +702,83 @@ function Pages({ pages, parent, mode }: { pages: UploadPageInfo[]; parent: Uploa
         </ul>
       </CollapsibleContent>
     </Collapsible>
+  )
+}
+
+type GroupChoice = { kind: 'separate' } | { kind: 'new'; title: string } | { kind: 'add'; projectId: string }
+
+/** Several files picked: upload them separately, as one new project, or into an existing project. */
+function GroupPanel({
+  files,
+  folder,
+  onUpload,
+  onCancel,
+}: {
+  files: File[]
+  folder: boolean
+  onUpload(choice: GroupChoice): void
+  onCancel(): void
+}) {
+  const { tu } = useUi()
+  const projects = myProjects.list()
+  const [mode, setMode] = useState<'separate' | 'new' | 'add'>(folder || files.length >= 2 ? 'new' : 'separate')
+  const [title, setTitle] = useState(() => defaultGroupName(files))
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? '')
+  const choice: GroupChoice =
+    mode === 'new' ? { kind: 'new', title: title.trim() || defaultGroupName(files) } : mode === 'add' && projectId ? { kind: 'add', projectId } : { kind: 'separate' }
+  return (
+    <Card className="gap-3 px-4 py-4 enter-rise" data-group-panel>
+      <p className="text-sm font-medium">{tu('ug_n_files', { n: files.length })}</p>
+      <ul className="flex max-h-32 flex-col gap-0.5 overflow-y-auto text-xs text-muted-foreground">
+        {files.map((f, i) => (
+          <li key={i} className="truncate" title={f.name}>
+            {f.name}
+          </li>
+        ))}
+      </ul>
+      <fieldset className="flex flex-col gap-2 text-sm">
+        <legend className="sr-only">{tu('ug_how')}</legend>
+        <label className="flex min-h-10 items-center gap-2">
+          <input type="radio" name="ug" checked={mode === 'new'} onChange={() => setMode('new')} className="size-4" />
+          {tu('ug_as_project')}
+        </label>
+        {mode === 'new' ? (
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} aria-label={tu('ug_project_name')} className="h-10" data-group-name />
+        ) : null}
+        {projects.length ? (
+          <label className="flex min-h-10 items-center gap-2">
+            <input type="radio" name="ug" checked={mode === 'add'} onChange={() => setMode('add')} className="size-4" />
+            {tu('ug_add_to')}
+          </label>
+        ) : null}
+        {mode === 'add' ? (
+          <select
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            aria-label={tu('ug_add_to')}
+            className="h-10 rounded-md border border-input bg-background px-2 text-sm"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.title}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <label className="flex min-h-10 items-center gap-2">
+          <input type="radio" name="ug" checked={mode === 'separate'} onChange={() => setMode('separate')} className="size-4" />
+          {tu('ug_separate')}
+        </label>
+      </fieldset>
+      <p className="text-xs text-muted-foreground">{tu('ug_hint')}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => onUpload(choice)} data-group-upload>
+          {tu('ug_upload_n', { n: files.length })}
+        </Button>
+        <Button variant="ghost" onClick={onCancel}>
+          {tu('ug_cancel')}
+        </Button>
+      </div>
+    </Card>
   )
 }
