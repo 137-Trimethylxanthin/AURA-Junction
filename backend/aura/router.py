@@ -20,11 +20,12 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 11  # 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
-EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count"})
+ROUTER_VERSION = 12  # 12: printed dimensions of scans; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
+EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count",
+                           "dimension"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
-                 "room_rank", "adjacent", "rooms_by_count"]
+                 "room_rank", "adjacent", "rooms_by_count", "dimension"]
 InternalLang = Literal["en", "fr", "fi", "de", "it"]
 
 _LD = r"[^\W_]"  # letter or digit
@@ -142,6 +143,38 @@ NOT_ON_DRAWING: list[tuple[str, re.Pattern[str]]] = [
 LENGTH = S(r"length|lengths|longueur|pituus|länge|lunghezza|perimeter|périmètre|umfang|"
            r"volume|volumen|tilavuus|volum|width|widths|wide|narrow|largeur|étroit|leveys|"
            r"kapea|breite|breit|schmal|larghezza")
+
+# Printed dimensions of a scan ("overall dimensions of the building", "how wide is the plan", "length of
+# wall #1"): answered from the dimension strings read on the drawing (drawing.dimensions), 0 model calls.
+WALL_NO = re.compile(r"(?<![\w])(?:wall|mur|seinä|wand|muro)\s*(?:#|no\.?|nr\.?|number|n°)?\s*(\d{1,3})(?!\d)",
+                     re.IGNORECASE)
+DIM_WORD = S(r"dimensions?|measurements?|length|long|width|wide|depth|deep|size|span|"
+             r"longueur|largeur|profondeur|pituus|leveys|syvyys|mitat|länge|breite|tiefe|abmessung\w*|"
+             r"lunghezza|larghezza|profondità|dimensioni")
+DIM_WHOLE = S(r"overall|outside|exterior|outer|total|whole|entire|building|house|plan|floor ?plan|footprint|"
+              r"bâtiment|maison|plan|rakennus|talo|gebäude|haus|grundriss|edificio|casa|pianta")
+DIM_WIDTH = S(r"width|wide|largeur|leveys|breite|breit|larghezza")
+DIM_DEPTH = S(r"depth|deep|profondeur|syvyys|tiefe|profondità")
+DIM_LENGTH = S(r"length|long|longueur|pituus|länge|lunghezza")
+
+
+def dimension_subject(s: str) -> str | None:
+    """'wall:N' | 'width' | 'depth' | 'length' | 'overall' when the question asks for a printed dimension of
+    the building or of a numbered wall; None otherwise."""
+    if (m := WALL_NO.search(s)) and (DIM_WORD.search(s) or re.search(r"how (?:long|wide)", s, re.IGNORECASE)):
+        return f"wall:{int(m.group(1))}"
+    if not (DIM_WORD.search(s) and DIM_WHOLE.search(s)):
+        return None
+    if re.search(r"area|surface|m²|m2|sq\.? ?ft|square", s, re.IGNORECASE):
+        return None
+    if DIM_WIDTH.search(s) and not DIM_LENGTH.search(s):
+        return "width"
+    if DIM_DEPTH.search(s) and not DIM_LENGTH.search(s):
+        return "depth"
+    if DIM_LENGTH.search(s) and not DIM_WIDTH.search(s) and not re.search(r"dimension|size|measure", s, re.IGNORECASE):
+        return "length"
+    return "overall"
+
 
 LOCATE = S(
     r"show|highlight|mark|find|locate|point out|where (?:is|are)|list|display|give me|"
@@ -334,6 +367,7 @@ class DrawingCtx:
     room_ids: list[str] = field(default_factory=list)
     units: list[str] = field(default_factory=list)
     kind: str = "cad_dxf"
+    has_dimensions: bool = False  # printed dimension strings were read (scans: drawing.dimensions)
 
 
 WHOLE_MODEL = S(r"whole building|entire building|in the (?:ifc )?model|whole model|all storeys|"
@@ -617,6 +651,10 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
             if rx.search(s):
                 return Routed("quantity", lang, signal, subject=fam, scope={"kind": "floor"},
                               matched=["quantity", fam])
+    if ctx is not None and ctx.has_dimensions and (dim := dimension_subject(s)) is not None and not (
+            not dim.startswith("wall") and not re.search(r"building|house|overall|exterior|outside|footprint", s, re.IGNORECASE)
+            and any(len(lb) >= 3 and lb.lower() in s.lower() for lb in ctx.labels)):   # "length of the kitchen"
+        return Routed("dimension", lang, signal, subject=dim, scope={"kind": "floor"}, matched=["dimension", dim])
     for topic, rx in NOT_ON_DRAWING:
         if rx.search(s):
             return Routed("abstain", lang, signal, reason="not_on_drawing", topic=topic,

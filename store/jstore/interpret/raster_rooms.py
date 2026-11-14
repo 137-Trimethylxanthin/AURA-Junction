@@ -26,8 +26,11 @@ How a room comes about (each step is recorded in the definition rows and in the 
               raster_detection rows and get metres only when step 3 finds a scale.  A room Gemini gives no usable
               polygon for, or that is not answered within JSTORE_ROOM_OUTLINE_BUDGET_S (150), keeps the
               wall-segmentation outline; the definition row says how many did and why.
-  3. scale    in this order: the frame of the page, printed scale with the DPI of the file (above 96), printed
-              scale with the paper size named on the sheet (the image must have the ISO proportions), the scale
+  3. scale    in this order: the frame of the page, printed scale with the DPI of the file (above 96), the
+              dimension chains (jstore.dimensions: printed dimension strings over the spans between their drawn
+              end marks, median of those that agree, confirmed when a chain adds up to its overall dimension;
+              read before the labels, stored as raster_detection rows class 'dimension' also when no room is
+              found), printed scale with the paper size named on the sheet (the image must have the ISO proportions), the scale
               bar measured in the pixels, the scale bar as Gemini boxed it, the printed room areas themselves
               over the outlines of step 2 (>= 3 rooms that agree; the Gemini polygons where there are any).
               Where two of them exist they must agree within 8 %, else the confidence drops.  Without one of
@@ -748,8 +751,55 @@ def _bar_px(gray: np.ndarray, box, k: float) -> float | None:
     return min(found, key=lambda L: abs(L - w)) if found else None
 
 
+DIM_DETECTOR = "dimensions d-1"
+DIM_SECONDS = float(os.environ.get("JSTORE_DIMENSIONS_TIMEOUT_S", "40"))
+
+
+def read_dimension_strings(db: DB, f: dict, im: Image.Image, words: list[dict], deadline: float) -> dict:
+    """The printed dimensions of the plan (jstore.dimensions): read in the pixels and OCR lines, with one Gemini
+    pass (when a key is set and JSTORE_DIMENSIONS_GEMINI is not 0) snapped onto the drawn end marks.  Every
+    dimension is stored as a raster_detection row (class 'dimension', box = its text, attrs = text, metres, the
+    measured span p0 / p1 in pixels, how it was read, whether it agrees with the scale).
+    -> {mpp, confidence, n, of, chains_confirmed, gemini} (mpp None when no dimension was read)."""
+    from .. import dimensions as D
+    out: dict = dict(mpp=None, confidence=0.0, n=0, of=0, chains_confirmed=0)
+    db.run("delete from jstore.raster_detection where file_id = :f and class = 'dimension'", f=f["file_id"])
+    try:
+        gray = np.asarray(im.convert("L"))
+        use_gemini = bool(os.environ.get("GEMINI_API_KEY")) and os.environ.get("JSTORE_DIMENSIONS_GEMINI", "1") != "0"
+        with cf.ThreadPoolExecutor(1) as ex:
+            fut = ex.submit(D.gemini_dimensions, gray, deadline) if use_gemini else None
+            dims = D.read_dimensions(gray, words, deadline=time.time() + DIM_SECONDS)
+            g = fut.result() if fut is not None else None
+        if g is not None and "error" in g:
+            out["gemini"] = dict(error=g["error"])
+        elif g is not None:
+            out["gemini"] = dict(D.add_gemini(dims, g["dims"], gray.shape), cached=g["cached"], model=g["model"])
+    except MemoryError:
+        out["error"] = "out of memory"
+        return out
+    D.attach_notes(dims, words)
+    mpp, conf, used = D.scale_from_dimensions(dims)
+    if mpp and len(used) >= 2:                       # one dimension alone may be a misreading
+        chk = D._chain_checks(used)
+        out.update(mpp=mpp, confidence=conf, n=len(used), chains_confirmed=chk["confirmed"])
+    out["of"] = len(dims)
+    rows = []
+    for d in dims:
+        x0, y0, x1, y1 = (float(v) for v in d.box)
+        rows.append((f["file_id"], 0, "dimension", 1.0 if d.used else 0.3, x0, y0, x1, y1, DIM_DETECTOR,
+                     js(dict(text=d.text, metres=round(d.metres, 4), p0=[round(v, 1) for v in d.p0],
+                             p1=[round(v, 1) for v in d.p1], px=round(d.px_length, 1), orientation=d.orientation,
+                             read=d.read, chain=d.chain, used=d.used, note=d.note or None)),
+                     f"SRID=0;POLYGON(({x0} {y0},{x1} {y0},{x1} {y1},{x0} {y1},{x0} {y0}))"))
+    if rows:
+        db.copy("jstore.raster_detection", ["file_id", "page_no", "class", "score", "x0", "y0", "x1", "y1", "detector",
+                                            "attrs", "geom"], rows)
+    return out
+
+
 def find_scale(db: DB, f: dict, page: dict, toks: list[dict], g: dict | None, gray: np.ndarray, k: float,
-               dpi_of_file: float | None = None) -> dict:
+               dpi_of_file: float | None = None, dims: dict | None = None) -> dict:
     """Metres per source pixel and how far it can be trusted.  -> {mpp or None, confidence, source, detail}."""
     from ..frames import scales_in, trusted_scale
     W, H = page["image_w"], page["image_h"]
@@ -802,6 +852,16 @@ def find_scale(db: DB, f: dict, page: dict, toks: list[dict], g: dict | None, gr
         ok = mpp_bar is None or agree(mpp_bar, detail["frame"]["mpp"])
         return dict(mpp=detail["frame"]["mpp"], confidence=0.7 if ok else 0.4, detail=detail,
                     source="printed scale and the DPI of the file" + ("" if ok else "; the scale bar disagrees"))
+    mpp_dims = dims.get("mpp") if dims else None
+    if mpp_dims:                                  # dimension chains: the printed lengths over their drawn spans
+        detail["dimensions"] = {k: dims[k] for k in ("mpp", "n", "of", "chains_confirmed", "confidence")}
+        others = [v for v in (mpp_paper, mpp_bar) if v]
+        ok = not others or any(agree(v, mpp_dims) for v in others)
+        return dict(mpp=mpp_dims, confidence=dims["confidence"] if ok else min(dims["confidence"], 0.4), detail=detail,
+                    source=f"dimension strings: {dims['n']} printed dimensions over their drawn spans"
+                           + (f", {dims['chains_confirmed']} chain(s) adding up to the overall dimension"
+                              if dims["chains_confirmed"] else "")
+                           + ("" if ok else "; the paper size or scale bar disagrees"))
     if mpp_paper and agree(mpp_bar, mpp_paper):
         return dict(mpp=mpp_paper, confidence=0.8, source="printed scale and paper size, confirmed by the scale bar",
                     detail=detail)
@@ -916,6 +976,7 @@ def interpret(db: DB, f: dict) -> dict:
     words = db.run("select id, text, conf, x0, y0, x1, y1 from jstore.raster_word where file_id = :f and page_no = 0",
                    f=f["file_id"])
     toks = _ocr_tokens(words)
+    dims = read_dimension_strings(db, f, im, words, deadline - 30)
     log: dict = {}
     g = read_labels(im, deadline - 25, log)
     if g is not None and g["kind"] != "floor_plan":
@@ -937,7 +998,7 @@ def interpret(db: DB, f: dict) -> dict:
         segment(gray, rooms, k, [t["box"] for t in toks] + [r["label_box"] for r in rooms], deadline - 8, seg_log)
     except MemoryError:
         seg_log["error"] = "out of memory"
-    scale = find_scale(db, f, page, toks, g, gray, k, dpi_of_file)
+    scale = find_scale(db, f, page, toks, g, gray, k, dpi_of_file, dims)
 
     # the outline of every labelled room, drawn by Gemini; the regions above stay as the second measurement
     source = outline_source()
@@ -1015,8 +1076,10 @@ def interpret(db: DB, f: dict) -> dict:
                           "wall-segmentation outline where there is one")
     define(db, f["file_id"], "units", "reader", dict(
         metres_per_pixel=mpp, how=scale["source"], detail=scale["detail"],
-        rule="a measured area is written only when a pixel can be sized: frame of the page, printed scale with paper "
-             "size, scale bar, or >= 3 printed room areas that agree over their outlines"), scale["confidence"], BY)
+        dimension_strings=dims,
+        rule="a measured area is written only when a pixel can be sized: frame of the page, printed scale with the "
+             "DPI, dimension strings over their drawn spans, printed scale with paper size, scale bar, or >= 3 printed "
+             "room areas that agree over their outlines"), scale["confidence"], BY)
     d_room = define(db, f["file_id"], "room", "reader", dict(
         source="raster_rooms", version=VERSION,
         rule="every room label read on the plan is a room; its outline is the polygon Gemini drew for it with the "

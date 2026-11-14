@@ -179,6 +179,10 @@ def normalise(ours: dict, doc: dict, evidence: dict, model: dict, sources: dict[
         rooms=rooms, units=doc.get("units", []), evidence=out_ev, texts=texts, capabilities=caps,
         evidence_method=methods,
     )
+    if doc.get("dimensions"):                     # printed dimensions read on a scan (percent of the page)
+        out["dimensions"] = doc["dimensions"]
+    else:
+        out.pop("dimensions", None)
     if dropped:
         out["store_dropped"] = dropped
     return out

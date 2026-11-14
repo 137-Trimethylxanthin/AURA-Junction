@@ -626,6 +626,35 @@ def text(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, subject: st
     return Built(body, [tr], [], subject)
 
 
+def dimension(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, matched: list[str],
+              intent_tag: str = "router") -> Built:
+    """A printed dimension of the plan (drawing.dimensions): a note with the number in metres and the dimension
+    texts as evidence boxes.  0 model calls."""
+    boxes = [b.model_dump(exclude_none=True) for b in tr.boxes]
+    ids = [b["id"] for b in boxes]
+    subject = tr.args.get("subject", "overall")
+    what = (f"length of wall #{subject.split(':')[1]}" if subject.startswith("wall:") else
+            {"width": "width of the building", "depth": "depth of the building",
+             "length": "length of the building"}.get(subject, "overall dimensions of the building"))
+    body = _base(question, lang, {"kind": "floor"}) | {
+        "answer": {"kind": "note", "value": tr.text or "", "number": float(tr.value or 0), "unit": "m"},
+        "evidence": {"boxes": boxes, "rooms": []},
+        "canonical_en": f"What is the {what}",
+        "method": tr.method,
+        "trace": [
+            question_node(question, lang),
+            intent_node(f"dimension · {what}", intent_tag),
+            rule_decision_node("dimension", matched),
+            {"id": "read", "parent": "q", "title": "Read the printed dimensions", "tag": "OCR · dimension strings",
+             "body": tr.summary, "kind": "exact", "evidence_ids": ids, "tool": tool_meta(tr)},
+            {"id": "answer", "parent": "q", "title": "Answer", "tag": "dimension",
+             "body": f"{tr.text}, as printed on the drawing (converted to metres).", "kind": "exact",
+             "evidence_ids": ids},
+        ],
+    }
+    return Built(body, [tr], [], "dimension")
+
+
 def not_supported(question: str, lang: str, scope: dict, tr: ToolResult,
                   intent_tag: str = "router") -> Built:
     plural = noun(tr.subject or "", 2)
