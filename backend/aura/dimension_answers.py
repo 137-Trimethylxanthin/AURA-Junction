@@ -69,6 +69,9 @@ def _printed(text: str | None, value_m: float, unit: str | None) -> str:
         return f"{t} as printed = {_m(value_m)}"
     if t and unit in ("mm", "cm"):
         return f"{t} {unit} as printed = {_m(value_m)}"
+    if t and t not in _m(value_m) and re.fullmatch(r"[\d.,\s]+", t):
+        # a bare number that is not the metres: the file's own drawing units (inches or millimetres on a CAD sheet)
+        return f"{_m(value_m)} (written {t} in the drawing's own units)"
     return f"{_m(value_m)} as printed" + (f" ({t})" if t and t not in _m(value_m) else "")
 
 
@@ -252,7 +255,7 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
             x = s["dims"][0]
             parts.append(f"{names[k]}: the sheet prints no overall dimension and no row of dimensions that spans this "
                          f"side; the longest {x.get('orientation')} dimension printed is "
-                         f"{_printed(x.get('text'), s['value'], x.get('unit'))}, so the plan is at least that wide here")
+                         f"{_printed(x.get('text'), s['value'], x.get('unit'))}, so the plan is at least that {'wide' if k == 'width' else 'deep'} here")
             used += s["dims"]
             lower_bound = True
         elif s:

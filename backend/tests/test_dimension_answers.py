@@ -184,3 +184,12 @@ def test_longest_printed_dimension_without_dimension_lines_says_so_and_never_cou
         "What is the longest dimension printed on this sheet?", "en", _drawing([area])).body["explanation"]
     assert "10.00 m × 8.00 m" in da.try_answer(
         "What is the longest dimension printed on this sheet?", "en", _bundle(BUNDLE_ROOMS)).body["explanation"]
+
+
+def test_a_bare_number_in_drawing_units_is_not_quoted_as_if_it_were_metres():
+    raw = _dim(9, "2471.375", 62.773, "horizontal", [[5, 5], [95, 5]], unit=None)
+    b = da.try_answer("What is the longest dimension printed on this sheet?", "en", _drawing([raw]))
+    assert "62.77 m (written 2471.375 in the drawing's own units)" in b.body["explanation"]
+    lone = _dim(8, "864", 21.946, "vertical", [[5, 20], [5, 80]], unit=None)
+    b = da.try_answer("How long is the building?", "en", _drawing([lone]))
+    assert "at least that deep here" in b.body["answer"]["value"] and "wide here" not in b.body["answer"]["value"]

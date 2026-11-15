@@ -81,7 +81,9 @@ function SessionButton() {
       variant="outline"
       disabled={!canOpen}
       // The session total is information even before there is a tree to open: keep it readable (5.7:1).
-      className="disabled:text-muted-foreground disabled:opacity-100"
+      // On a phone the header keeps Plugins and the language switch on screen: the session total stays in each
+      // answer's footer and in the history sheet.
+      className="hidden disabled:text-muted-foreground disabled:opacity-100 sm:inline-flex"
       data-trace-opener
       onClick={() => actions().setTraceOpen(true)}
       title={
@@ -142,9 +144,9 @@ export function HeaderActions() {
         <TooltipContent>{tu("hist_open")}</TooltipContent>
       </Tooltip>
       <SessionButton />
-      <Button variant="outline" onClick={() => actions().setPluginsOpen(true)}>
+      <Button variant="outline" aria-label={tu("plugins")} onClick={() => actions().setPluginsOpen(true)}>
         <BlocksIcon data-icon="inline-start" />
-        {tu("plugins")}
+        <span className="hidden sm:inline">{tu("plugins")}</span>
       </Button>
       {pluginsUsed ? (
         <Suspense fallback={null}>

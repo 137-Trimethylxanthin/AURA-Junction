@@ -285,7 +285,7 @@ def test_a_length_unit_asked_for_an_area_is_explained_not_silently_squared():
     resp = {"answer": {"kind": "area", "value": 341.42, "unit": "m2"}, "detected_lang": "en"}
     out = U.apply(resp, U.BY_KEY["in"])
     assert out["display"]["unit"] == "sqin" and out["answer"]["value"] == 341.42
-    assert "An area cannot be given in in (a length), so it is shown in sq in." in out["explanation"]
+    assert "An area cannot be given in inches (a length), so it is shown in sq in." in out["explanation"]
     same = U.apply(resp, U.BY_KEY["sqft"])
     assert "cannot be given" not in same["explanation"]
     length = U.apply({"answer": {"kind": "quantity", "value": 2.0, "unit": "m"}, "detected_lang": "en"}, U.BY_KEY["in"])
