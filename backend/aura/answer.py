@@ -470,9 +470,8 @@ def quantity(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: 
 
 
 def said_lang(lang: str) -> str:
-    """The language an answer sentence is written in: the question's, Italian included (the contract's
-    `Lang` has no Italian, so the interface around an Italian answer stays English)."""
-    return "it" if lang == "it" else contract_lang(lang)
+    """The language an answer sentence is written in: the question's, Italian included."""
+    return contract_lang(lang)
 
 
 #: "10 rooms (8 labelled, 2 without a label)" in the other interface languages
