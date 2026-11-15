@@ -51,14 +51,19 @@ Scored like the challenge (counts exact). Same drawings, before and after tonigh
 |---|---|---|---|
 | Swiss PDF (vector) | 28 | 28 ok | 28 ok |
 | Swiss PNG (image) | 42 | 0 ok, 42 abstain | **38 ok**, 0 abstain |
-| CubiCasa PNG | 62 | 21 ok, 28 abstain | **40 ok**, 0 abstain |
+| CubiCasa PNG (5 plans) | 62 | 21 ok, 28 abstain | **55 of 68 ok** (more questions asked later) |
+| CubiCasa PNG (5 unseen plans) | 76 | — | **46 ok**, 1 abstain |
+| Swiss DXF | 40 | — | 40 ok (no regression from label families) |
 | US door schedule sheet (A-801) | "doors listed" | 0 | **38** (truth 38) |
 
 What fixed it: (1) a thread race in the store's room reader (dimension reading decoded the same PNG
 concurrently) left image uploads without rooms; (2) room-less image uploads skipped the tool tier;
 (3) zero counts from guessed SQL on sheets were final; the reasoning step now reads the sheet instead.
-Remaining errors are detector off-by-ones (windows ±1–2, doors 17 vs 16) and Finnish room-label
-ambiguity (kitchens/saunas counted twice).
+Later fixes: Finnish abbreviations (KK/AVOK kitchen, S sauna) in the store vocabulary and the SQL
+planner told not to substring-match abbreviations; room-less scans no longer stop at a guessed label;
+'marked MH' counts only printed markings. Remaining errors are mostly the store's symbol detector
+undercounting windows drawn as thin double lines on long walls (12→6, 11→7, 18→14) — the best next
+lever for CubiCasa accuracy (store/jstore/gemini_detect.py).
 
 Noise/robustness (uploads that are not floor plans): a church-interior engraving and a photograph are
 recognised as "not a floor plan" (counts abstain, "what is shown" describes them); a HAER bridge sheet
@@ -88,6 +93,10 @@ cd frontend && npm run e2e:live   # against a running scripts/dev.sh; set AURA_E
 ```
 
 ## What's left / known limits
+
+- Window undercount by the store's symbol detector on CubiCasa scans (see above).
+- An uploaded multi-storey IFC is loaded as one storey-less drawing (`parse_worker.parse_ifc`, `storey=None`),
+  so per-storey questions ("doors on '1.korrus'") abstain; the library's per-storey IFC drawings are fine.
 
 - Uploading byte-identical files reuses the store's earlier interpretation; after a code change re-index or re-encode.
 - The vectorizer occasionally closes door gaps with a short diagonal and merges rooms with no wall between them (only matters for unlabelled regions; labelled rooms are split).
