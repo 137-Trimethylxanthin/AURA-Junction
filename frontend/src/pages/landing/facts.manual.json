@@ -48,6 +48,18 @@
       "method": "A vision model outlines each labelled room on the image, the outline is snapped to the drawn lines, and its area is compared with the CAD original of the same floor",
       "measured": "2026-11-14",
       "caveat": "Scans only, no CAD or BIM file. Plans without a stated scale are not included: there the scale is estimated and areas are shown as estimates."
+    },
+    {
+      "id": "scan-ingest-cost",
+      "kind": "result",
+      "label": "Scans: model cost to ingest one scan or PDF sheet",
+      "value": "~€0.10",
+      "n": 665,
+      "n_unit": "scans and PDF sheets",
+      "scope": "All model calls cached while ingesting the 665 image-only and PDF-only drawings of the library: 11,452 calls, 18.8M input and 2.6M output tokens",
+      "method": "Logged token counts priced at the model's list price ($2 / $10 per million tokens), about $64 in total, divided by the number of drawings",
+      "measured": "2026-11-15",
+      "caveat": "An upper bound: the total includes re-reads after code changes. CAD and BIM files are read by code and cost nothing to ingest."
     }
   ]
 }

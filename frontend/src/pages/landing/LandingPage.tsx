@@ -453,11 +453,13 @@ const SCAN_SHORT: Record<string, string> = {
   "scan-area-within-2": "of room areas within 2 %",
   "scan-perimeter-within-2": "of room perimeters within 2 %",
   "scan-area-median": "median room-area error",
+  "scan-ingest-cost": "model cost per ingested scan",
 }
 
 /** The scan results as one highlighted band: big numbers first, the measurement details once below. */
 function ScanHighlight({ facts }: { facts: Fact[] }) {
   const first = facts[0]
+  const cost = facts.find((f) => f.id === "scan-ingest-cost")
   return (
     <Reveal amount={0.2}>
       <RevealItem>
@@ -474,12 +476,12 @@ function ScanHighlight({ facts }: { facts: Fact[] }) {
                 From a plan image alone, measured against the CAD original
               </h3>
             </div>
-            <ul className="grid grid-cols-2 gap-x-6 gap-y-8 lg:grid-cols-4">
+            <ul className="grid grid-cols-2 gap-x-6 gap-y-8 lg:grid-cols-5">
               {facts.map((f) => (
                 <li key={f.id} data-fact={f.id} className="flex flex-col gap-2">
                   <CountUp
                     value={f.value}
-                    className="text-5xl leading-none font-semibold tracking-[-0.03em] tabular-nums sm:text-6xl"
+                    className="text-5xl leading-none font-semibold tracking-[-0.03em] tabular-nums sm:text-6xl lg:text-5xl xl:text-6xl"
                   />
                   <span className="text-base font-medium text-pretty opacity-90">
                     {SCAN_SHORT[f.id] ?? f.label}
@@ -490,6 +492,7 @@ function ScanHighlight({ facts }: { facts: Fact[] }) {
             <p className="text-sm text-pretty opacity-75">
               {first.scope}. Measured {fmtDate(first.measured)}.{" "}
               {first.caveat}
+              {cost ? ` Ingestion cost: ${cost.method.charAt(0).toLowerCase()}${cost.method.slice(1)}; ${cost.caveat?.charAt(0).toLowerCase()}${cost.caveat?.slice(1)}` : ""}
             </p>
           </div>
         </div>
