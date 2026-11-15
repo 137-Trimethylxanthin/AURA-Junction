@@ -60,6 +60,12 @@ concurrently) left image uploads without rooms; (2) room-less image uploads skip
 Remaining errors are detector off-by-ones (windows ±1–2, doors 17 vs 16) and Finnish room-label
 ambiguity (kitchens/saunas counted twice).
 
+Noise/robustness (uploads that are not floor plans): a church-interior engraving and a photograph are
+recognised as "not a floor plan" (counts abstain, "what is shown" describes them); a HAER bridge sheet
+answers "0 rooms — this is a bridge elevation"; a 1930s German plan gets 58 rooms and a rebuild; a faint
+archive scan indexes without a rebuild (no plausible walls). Photos/elevations never get a vector
+rebuild (plausibility gate), so Compare is hidden for them.
+
 The IFC-rendered PDF questions ask about the whole IFC model (doors in the model), which a single
 rendered storey cannot answer; they abstain honestly.
 
