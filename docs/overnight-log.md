@@ -5,12 +5,12 @@ Each work stream runs in its own git worktree and branch, is verified on a priva
 and is then merged here. This file is the running record: what was asked, what was done, how it
 was checked, and what is still open.
 
-## Result at a glance (written 02:15 UTC)
+## Result at a glance (written 02:15 UTC, updated 02:50 UTC)
 
-Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `5094bef`. Not pushed
+Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `db77e6b`. Not pushed
 (no GitHub credentials on the devbox): `git push -u origin overnight-improvements`.
-Suites on the final tree: backend 723 passed / 34 skipped, store 173 passed / 1 skipped,
-frontend 356 passed, typecheck clean.
+Suites on the final tree: backend 746 passed / 34 skipped, store 176 passed / 1 skipped,
+frontend 357 passed, typecheck clean.
 
 | Asked | State | Evidence |
 |---|---|---|
@@ -38,7 +38,9 @@ before non-plan sheets; PDF sheets shown as their page render instead of an unre
 - German, French and Finnish answer sentences are translated for the common cases; Italian and the
   composed dimension sentences are still English.
 - A DWG site plan answers "1 door, Exact" (one CAD door entity in the store).
-- Multi-page PDFs show one page; dimensions on other pages are cited without a box.
+- Multi-page PDFs show one page (the header says which); door and window counts follow that page,
+  room counts can still differ from the header (outdoor spaces left out, or a page without rooms
+  answering for the whole document); dimensions on other pages are cited without a box.
 - The answer cache was reset by the last deploy (cache key version 3); the main demo questions were
   asked once afterwards so they are warm.
 
@@ -54,7 +56,7 @@ before non-plan sheets; PDF sheets shown as their page render instead of an unre
 5. A Swiss bundle: "What is the net floor area in square feet?", then "and in square yards?".
 
 **Operations done on the live deployment tonight**
-- Six deploys of this branch (`537b0c6`, `a3c5e98`, `0e056d9`, `aa03080`, `9b0bacf`, `5094bef`).
+- Seven deploys of this branch (`537b0c6`, `a3c5e98`, `0e056d9`, `aa03080`, `9b0bacf`, `5094bef`, `db77e6b`).
 - The live store was re-interpreted three times for image drawings (all from the Gemini cache) and
   twice with the dimensions reader (new model calls); false unlabelled spaces were pruned once.
   Backups: `/root/aura-deploy/backup/store-20261114T2301-pre-overnight.dump` and
@@ -340,3 +342,36 @@ room count below the header. Suites: backend 723 passed / 34 skipped, store 173 
 After the deploy the main demo questions were asked through the public API (all answered, most
 with 0 model calls) and three drawings were opened in a browser (a US PDF sheet, a CubiCasa plan,
 an IFC storey): no console errors.
+
+### 02:15–02:50 UTC — regression sweep of the final deploy, last fixes, seventh deploy
+
+**Sweep (one tester, live site):** no must-level problem. 28 drawings opened across every kind
+with two suggested questions each; Compare and 3D on three scans; German, Finnish and a phone
+viewport; 157 library entries through the API with no failure and nothing slower than 0.9 s; the
+five demo walkthroughs above give the numbers stated; 0 console errors, 0 failed requests.
+
+**Four should-level findings, fixed in `on/n-regressions` (merged, deployed as `db77e6b`):**
+- 3D is no longer offered where there is no wall model (PDF sheets shown as their page render):
+  it had fallen back to the old image relief and extruded detail drawings into towers.
+- Multi-page PDFs: header, library card and answers count the page shown and say which page
+  ("page 7 of 16 · 22 rooms · 15 doors · 52 windows"). Room counts can still differ (see limits).
+- A DWG that rendered as a speck (far-away stray entities blew up the extent) fills the page.
+- "What does this drawing show?" is answered from what the store knows, 0 model calls, also in German.
+
+Suites: backend 746 passed / 34 skipped, store 176 passed / 1 skipped, frontend 357 passed.
+
+After the deploy 29 demo questions were asked through the public API: all answered, 28 with no
+model call (this also warms the cache that a deploy with new document versions resets).
+
+Left as found by the sweep, lower priority: header counts line, source chips and "sq ft" stay
+English in the German and Finnish UI; one building's all-floors evidence list is incomplete while
+its totals are right; a few answers show internal wording ("Rule: the cell perimeter_m = …");
+library thumbnails of scans show the scan, not the rebuilt plan.
+
+### Branches
+
+`overnight-improvements` holds everything. The stream branches (`on/a-backend-fixes`,
+`on/b-scan-vector`, `on/c-units`, `on/d-dimensions`, `on/e-dimension-answers`, `on/f-scan-polish`,
+`on/g-walkthrough-fixes`, `on/h-scan-quality`, `on/i-answers-polish`, `on/j-plan-polish`,
+`on/k-demo-paths`, `on/l-final-fixes`, `on/m-last-polish`, `on/n-regressions`) are merged into it
+and exist only locally; their worktrees are under `/root/aura-work/` on the devbox.
