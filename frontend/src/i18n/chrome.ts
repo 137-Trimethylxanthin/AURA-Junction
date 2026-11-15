@@ -307,6 +307,23 @@ export const chromeEn = {
   proj_save: 'Save project',
   proj_saved_toast: 'Grouped {n} floors into {title}',
   proj_ungrouped_toast: 'Ungrouped {title}',
+  // library sources, the counts line of a drawing, rows of an evidence list
+  origin_ifc: 'IFC models',
+  origin_us_sheets: 'US sheets',
+  origin_historic: 'Historic scans',
+  origin_uploads: 'Uploads',
+  origin_other: 'Other',
+  room_no_label: 'Room without label',
+  row_leave_out: 'Leave out {what}',
+  row_add: 'Add {what}',
+  sub_page_of: 'page {n} of {m}',
+  sub_not_interpreted: 'not interpreted',
+  sub_outlines_only: 'outlines only',
+  sub_storey: 'storey {name}',
+  sub_fixture_1: '{n} fixture',
+  sub_fixture_n: '{n} fixtures',
+  sub_object_1: '{n} object',
+  sub_object_n: '{n} objects',
 }
 
 export type ChromeKey = keyof typeof chromeEn
@@ -601,6 +618,23 @@ export const chromeFr: ChromeDict = {
   proj_save: 'Enregistrer le projet',
   proj_saved_toast: '{n} étages regroupés dans {title}',
   proj_ungrouped_toast: '{title} dissocié',
+  // library sources, the counts line of a drawing, rows of an evidence list
+  origin_ifc: 'Maquettes IFC',
+  origin_us_sheets: 'Plans US',
+  origin_historic: 'Scans historiques',
+  origin_uploads: 'Téléversements',
+  origin_other: 'Autres',
+  room_no_label: 'Pièce sans libellé',
+  row_leave_out: 'Exclure {what}',
+  row_add: 'Ajouter {what}',
+  sub_page_of: 'page {n} sur {m}',
+  sub_not_interpreted: 'non interprété',
+  sub_outlines_only: 'contours seulement',
+  sub_storey: 'étage {name}',
+  sub_fixture_1: '{n} équipement',
+  sub_fixture_n: '{n} équipements',
+  sub_object_1: '{n} objet',
+  sub_object_n: '{n} objets',
 }
 
 export const chromeFi: ChromeDict = {
@@ -892,6 +926,23 @@ export const chromeFi: ChromeDict = {
   proj_save: 'Tallenna projekti',
   proj_saved_toast: '{n} kerrosta yhdistetty projektiin {title}',
   proj_ungrouped_toast: '{title} purettu',
+  // library sources, the counts line of a drawing, rows of an evidence list
+  origin_ifc: 'IFC-mallit',
+  origin_us_sheets: 'US-piirustukset',
+  origin_historic: 'Historialliset skannaukset',
+  origin_uploads: 'Omat lataukset',
+  origin_other: 'Muut',
+  room_no_label: 'Nimetön huone',
+  row_leave_out: 'Jätä pois: {what}',
+  row_add: 'Lisää: {what}',
+  sub_page_of: 'sivu {n}/{m}',
+  sub_not_interpreted: 'ei tulkittu',
+  sub_outlines_only: 'vain ääriviivat',
+  sub_storey: 'kerros {name}',
+  sub_fixture_1: '{n} kaluste',
+  sub_fixture_n: '{n} kalustetta',
+  sub_object_1: '{n} objekti',
+  sub_object_n: '{n} objektia',
 }
 
 export const chromeDe: ChromeDict = {
@@ -1183,4 +1234,21 @@ export const chromeDe: ChromeDict = {
   proj_save: 'Projekt speichern',
   proj_saved_toast: '{n} Geschosse in {title} gruppiert',
   proj_ungrouped_toast: 'Gruppierung von {title} aufgehoben',
+  // library sources, the counts line of a drawing, rows of an evidence list
+  origin_ifc: 'IFC-Modelle',
+  origin_us_sheets: 'US-Pläne',
+  origin_historic: 'Historische Scans',
+  origin_uploads: 'Uploads',
+  origin_other: 'Sonstige',
+  room_no_label: 'Raum ohne Beschriftung',
+  row_leave_out: '{what} weglassen',
+  row_add: '{what} hinzufügen',
+  sub_page_of: 'Seite {n} von {m}',
+  sub_not_interpreted: 'nicht interpretiert',
+  sub_outlines_only: 'nur Umrisse',
+  sub_storey: 'Geschoss {name}',
+  sub_fixture_1: '{n} Einrichtungsgegenstand',
+  sub_fixture_n: '{n} Einrichtungsgegenstände',
+  sub_object_1: '{n} Objekt',
+  sub_object_n: '{n} Objekte',
 }

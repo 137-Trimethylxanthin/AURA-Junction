@@ -1053,7 +1053,8 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
                for i in ids[:200]]
     evidence: dict[str, Any] = {"boxes": boxes,
                                 "rooms": [{"room_id": r, "included": True} for r in room_ids],
-                                **({"rows": rows_ev} if rows_ev else {})}
+                                # listed only where the plan cannot show them all (a thing drawn is not listed twice)
+                                **({"rows": rows_ev} if rows_ev and len(boxes) + len(room_ids) < len(ids) else {})}
     body = A._base(question, lang, scope) | {
         "answer": ans, "evidence": evidence, "method": method, "trace": trace, "explanation": text,
         "canonical_en": str(fin.get("restated") or "").strip()[:300] or question,

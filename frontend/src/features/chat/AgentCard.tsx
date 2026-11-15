@@ -284,7 +284,7 @@ function EvidenceRow({
   const Toggle = row.kind === 'room' ? (row.on ? MinusIcon : PlusIcon) : row.on ? XIcon : RotateCcwIcon
   const toggleLabel =
     row.kind === 'room'
-      ? `${row.on ? 'Leave out' : 'Add'} ${row.title} ${row.badge}`
+      ? tu(row.on ? 'row_leave_out' : 'row_add', { what: `${row.title} ${row.badge}` })
       : `${row.on ? tu('reject_box') : tu('restore_box')} ${row.title}`
   const subParts = row.sub ? row.sub.split(' · ') : []
   const grpVars = groupCssVars(row.groupColor)
