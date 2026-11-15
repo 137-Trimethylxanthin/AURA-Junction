@@ -56,7 +56,7 @@ from ..db import DB, js
 from . import define, merge
 
 BY = "jstore.interpret.raster_plan"
-VERSION = "rp-1"
+VERSION = "rp-2"
 RASTER = ("png", "jpg")
 NOMINAL = "nominal_scale"
 NOMINAL_CLAIM = "nominal_outline"
@@ -77,10 +77,56 @@ DARK = 200
 
 
 # ------------------------------------------------------------------------------------------------ nominal scale
-def estimate_scale(boxes: list, room_px: list, W: int, H: int) -> dict:
-    """Metres per pixel from the sizes of things on the sheet.  boxes = [(class, x0, y0, x1, y1)] (kept detections),
-    room_px = areas of the room outlines in pixels.  -> {mpp, source, uncertainty, votes: {class: {mpp, n}}}"""
+# Usual floor area in m2 of rooms by type (median of 6,000 rooms with a printed or CAD area) and how far the
+# 10th-90th percentile lies from it as a factor on the SIDE of the room (square root of the area ratio).
+ROOM_AREA_M2 = {"bedroom": (12.5, 1.15), "room": (15.4, 1.21), "living_room": (20.0, 1.35), "living_dining": (26.8, 1.27),
+                "kitchen": (7.9, 1.37), "bathroom": (3.9, 1.4), "toilet": (2.5, 1.26), "elevator": (2.8, 1.25),
+                "sauna": (3.5, 1.45), "laundry": (7.3, 1.36), "dining_room": (9.6, 1.7)}
+# Smallest plausible area by type: an estimate that makes the median room of a type smaller than this is doubted.
+ROOM_MIN_M2 = {"bedroom": 7.0, "room": 7.0, "living_room": 12.0, "living_dining": 14.0, "kitchen": 3.5}
+# Spread (sigma of the log error) of each estimator, measured on scans with a known scale; weight = 1 / sigma^2.
+SIGMA = {"printed_areas": 0.04, "dimensions": 0.05, "door": 0.22, "toilet": 0.12, "washbasin": 0.15, "bathtub": 0.11,
+         "room_types": 0.25}
+OUTLIER = 1.3               # an estimator this factor away from the weighted median is dropped
+
+
+def _wmedian(logs: list, weights: list) -> float:
+    o = np.argsort(logs)
+    lg, w = np.array(logs, float)[o], np.array(weights, float)[o]
+    c = np.cumsum(w)
+    i = int(np.searchsorted(c, 0.5 * c[-1]))              # the value at which half of the weight is reached
+    if i + 1 < len(lg) and abs(c[i] - 0.5 * c[-1]) < 1e-9:
+        return float(0.5 * (lg[i] + lg[i + 1]))
+    return float(lg[i])
+
+
+def estimate_scale(boxes: list, room_px: list, W: int, H: int, dims: list | None = None) -> dict:
+    """Metres per pixel from everything on the sheet that has a known or usual size.
+    boxes = [(class, x0, y0, x1, y1)] (kept detections); room_px = one item per room outline: its area in pixels, or
+    {"px": area in pixels, "type": room type or None, "printed_m2": area printed in the room or None};
+    dims = [(length of a dimension line in pixels, printed value in metres)].
+    Estimators (each one value of metres per pixel):
+      printed_areas  rooms with a printed area: sqrt(printed m2 / outline pixels), median over the rooms
+      dimensions     printed value over the length of its dimension line, median over the lines
+      door, toilet, washbasin, bathtub   median long side of the detected boxes against the usual size (REF_M)
+      room_types     the outline of each typed room against the usual area of such a room (ROOM_AREA_M2), median
+    They are combined by the weighted median of their logarithms (weight 1 / sigma^2, SIGMA); estimators more than
+    OUTLIER away from it are dropped and the median is taken again.  Without any estimator the median room is taken
+    as 3.15 m x 3.15 m, without rooms the long side of the image as 30 m.
+    -> {mpp, source, uncertainty, votes: {estimator: {mpp, n, weight, used}}, agreement, checks}"""
+    rooms = [r if isinstance(r, dict) else dict(px=float(r)) for r in room_px]
+    rooms = [r for r in rooms if r.get("px") and r["px"] > 0]
     votes: dict = {}
+    pa = [math.sqrt(r["printed_m2"] / r["px"]) for r in rooms if r.get("printed_m2") and 0.5 <= r["printed_m2"] <= 2000]
+    if pa:
+        votes["printed_areas"] = dict(mpp=float(np.median(pa)), n=len(pa),
+                                      sigma=SIGMA["printed_areas"] * (2.0 if len(pa) == 1 else 1.0))
+    dv = [v / d for d, v in (dims or []) if d and d > 3 and v and v > 0]
+    if len(dv) >= 2:
+        med = float(np.median(dv))
+        near = [x for x in dv if abs(math.log(x / med)) < 0.1]
+        if len(near) >= max(2, 0.5 * len(dv)):            # lines that agree; a sheet of stray numbers does not vote
+            votes["dimensions"] = dict(mpp=float(np.median(near)), n=len(near), sigma=SIGMA["dimensions"])
     for cls, ref in REF_M.items():
         b = np.array([[min(x[3] - x[1], x[4] - x[2]), max(x[3] - x[1], x[4] - x[2])] for x in boxes if x[0] == cls
                       and x[3] > x[1] and x[4] > x[2]], float).reshape(-1, 2)
@@ -88,17 +134,199 @@ def estimate_scale(boxes: list, room_px: list, W: int, H: int) -> dict:
             sq = b[b[:, 0] / b[:, 1] > 0.6] if len(b) else b      # a leaf with its swing; sliding doors are longer
             b = sq if len(sq) >= 2 else b
         if len(b):
-            votes[cls] = dict(mpp=ref / float(np.median(b[:, 1])), n=int(len(b)), box_m=ref)
+            votes[cls] = dict(mpp=ref / float(np.median(b[:, 1])), n=int(len(b)), box_m=ref,
+                              sigma=SIGMA[cls] * (1.5 if len(b) == 1 else 1.0))
+    rt = [math.sqrt(ROOM_AREA_M2[r["type"]][0] / r["px"]) for r in rooms if r.get("type") in ROOM_AREA_M2]
+    if rt:
+        spread = float(np.median([math.log(ROOM_AREA_M2[r["type"]][1]) for r in rooms if r.get("type") in ROOM_AREA_M2]))
+        votes["room_types"] = dict(mpp=float(np.median(rt)), n=len(rt),
+                                   sigma=max(SIGMA["room_types"], spread / math.sqrt(len(rt)) * 1.3))
+    checks: dict = {}
     if votes:
-        mpp = float(np.exp(np.median([math.log(v["mpp"]) for v in votes.values()])))
-        fx = [c for c in votes if c != "door"]
-        source = "doors and fixtures" if fx and "door" in votes else "fixtures" if fx else "doors"
-    elif len(room_px) >= 1:
-        mpp, source = ROOM_SIDE_M / math.sqrt(float(np.median(room_px))), "room size"
+        names = list(votes)
+        logs = [math.log(votes[c]["mpp"]) for c in names]
+        wts = [1.0 / votes[c]["sigma"] ** 2 for c in names]
+        mid = _wmedian(logs, wts)
+        keep = [abs(lg - mid) <= math.log(OUTLIER) for lg in logs]
+        if any(keep) and not all(keep):
+            mid = _wmedian([lg for lg, k in zip(logs, keep) if k], [w for w, k in zip(wts, keep) if k])
+        mpp = math.exp(mid)
+        used = [c for c, k in zip(names, keep) if k]
+        for c, k, w in zip(names, keep, wts):
+            votes[c].update(used=bool(k), weight=round(w, 1))
+        # how well the estimators agree: weighted mean distance from the chosen value (all of them, dropped too)
+        agreement = float(np.average([min(abs(lg - mid), 0.7) for lg in logs], weights=wts)) if len(names) > 1 else None
+        own = 1.0 / math.sqrt(sum(w for w, k in zip(wts, keep) if k))
+        unc = 1.3 * own + (agreement or 0.0)
+        if len(names) == 1:
+            unc = 1.5 * votes[names[0]]["sigma"]
+        # sanity: typical rooms must not come out implausibly small
+        for t, least in ROOM_MIN_M2.items():
+            a = [r["px"] * mpp * mpp for r in rooms if r.get("type") == t]
+            if a and float(np.median(a)) < least:
+                checks[t] = dict(median_m2=round(float(np.median(a)), 1), least_plausible_m2=least)
+        if checks:
+            unc = max(unc, 0.35)
+        fx = [c for c in used if c in ("toilet", "washbasin", "bathtub")]
+        if "printed_areas" in used or "dimensions" in used:
+            source = " and ".join(x for x in ("printed areas" if "printed_areas" in used else None,
+                                              "printed dimensions" if "dimensions" in used else None) if x)
+        elif fx or "door" in used:
+            source = "doors and fixtures" if fx and "door" in used else "fixtures" if fx else "doors"
+            if "room_types" in used:
+                source += " and room sizes"
+        else:
+            source = "room sizes by type"
+        unc = round(float(np.clip(unc, 0.04, 0.6)), 2)
+    elif rooms:
+        mpp, source = ROOM_SIDE_M / math.sqrt(float(np.median([r["px"] for r in rooms]))), "room size"
+        unc, agreement = UNCERTAINTY[source], None
     else:
-        mpp, source = IMAGE_SIDE_M / max(W, H), "image size"
-    return dict(mpp=mpp, source=source, uncertainty=UNCERTAINTY[source],
-                votes={c: dict(v, mpp=round(v["mpp"], 6)) for c, v in votes.items()})
+        mpp, source, unc, agreement = IMAGE_SIDE_M / max(W, H), "image size", UNCERTAINTY["image size"], None
+    return dict(mpp=mpp, source=source, uncertainty=unc, checks=checks,
+                agreement=None if agreement is None else round(agreement, 3),
+                votes={c: dict({k: v[k] for k in v if k != "sigma"}, mpp=round(v["mpp"], 6)) for c, v in votes.items()})
+
+
+# ------------------------------------------------------------------------------------- spaces without a label
+SPACE_OPEN_M = 0.3          # radius of the disc that must fit: passages narrower than twice this close a space
+SPACE_FILL_M = 0.9          # a space is flooded this far past thin lines (door swings, fixtures) up to the filled walls
+SPACE_MIN_M2 = 1.2          # smallest enclosed space kept inside the building
+SPACE_OUT_MIN_M2 = 1.5      # ... and beside it (balcony, terrace)
+SPACE_OUT_MAX_M2 = 30.0
+SPACE_REACH_M = 0.6         # a space belongs to the building when a room or wall is this near
+WET = ("toilet", "bathtub", "shower")
+
+
+def _space_type(kinds: list, area_m2: float, indoor: bool) -> tuple[str, str]:
+    """Room type of a space without a label, and why.  kinds = classes of the fixtures detected inside."""
+    if not indoor:
+        return "balcony", "enclosed by thin lines on the outside of the building"
+    ks = set(kinds)
+    if ks & {"bathtub", "shower"}:
+        return "bathroom", "a " + " and a ".join(sorted(ks & {"bathtub", "shower", "toilet"})) + " inside"
+    if "toilet" in ks:
+        return ("toilet", "a toilet inside") if area_m2 < 2.5 else ("bathroom", "a toilet inside")
+    if "washbasin" in ks:
+        return "bathroom", "a washbasin inside"
+    return "room", "no fixture inside"
+
+
+def unlabelled_spaces(bgr: np.ndarray, rooms: list, mpp: float, symbols: list) -> list[dict]:
+    """Enclosed spaces of the plan that no room outline covers: rooms whose label was not read or never printed
+    (bathroom cores, storage) and open-air spaces drawn beside the building (balconies).
+    The free space of the sheet (no ink, no room outline) is opened with a disc of SPACE_OPEN_M, which closes door
+    openings and narrow gaps; its connected pieces are candidates.  Kept: pieces that do not reach the border of the
+    image (the sheet background), are not the open continuation of a labelled room (connected to its inside without
+    a drawn line between), have a room or wall within SPACE_REACH_M, a plausible size, and are either held by filled
+    walls and rooms along most of their outline (indoor) or have a compact rectangular shape (balcony, terrace).
+    rooms = shapely polygons in page pixels, symbols = [(class, x0, y0, x1, y1)].
+    -> [{"poly": Polygon (page pixels), "indoor": bool, "type", "why", "fixtures": [class], "area_m2"}]"""
+    from shapely.geometry import Polygon, box
+    from shapely.ops import unary_union
+    from .raster_rooms import _ink
+    if not rooms:
+        return []
+    H, W = bgr.shape[:2]
+    s = min(1.0, MAX_WORK_PX / max(W, H), 0.04 / mpp)         # no finer than 4 cm per working pixel
+    img = bgr if s == 1.0 else cv2.resize(bgr, (max(1, round(W * s)), max(1, round(H * s))), interpolation=cv2.INTER_AREA)
+    k = mpp / s
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    ink = (_ink(g) | (g < 110)).astype(np.uint8)
+    h, w = ink.shape
+    thick = _open_disc(ink, max(1.6, 0.5 * WALL_MIN_M / k + 0.6))      # walls drawn filled
+    for b in symbols:                                         # a fixture is furniture of the space, not its boundary
+        if b[0] in FIXTURES:
+            x0, y0, x1, y1 = (int(round(v * s)) for v in b[1:])
+            ink[max(0, y0):y1 + 1, max(0, x0):x1 + 1] &= thick[max(0, y0):y1 + 1, max(0, x0):x1 + 1]
+    r = SPACE_OPEN_M / k
+    union = unary_union(rooms)
+    roomm = _fill((h, w), [p.buffer(0.08 / mpp) for p in rooms], s)
+    free0 = np.pad(1 - ink, 1, constant_values=1)             # (the padding joins everything that reaches the border)
+    free = np.pad(((ink == 0) & (roomm == 0)).astype(np.uint8), 1, constant_values=1)
+    core = (cv2.distanceTransform(free, cv2.DIST_L2, 5) >= r).astype(np.uint8)
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(core, connectivity=8)
+    if n <= 1:
+        return []
+    # pieces of the paper around and between things: the ones connected to the image border
+    core0 = (cv2.distanceTransform(free0, cv2.DIST_L2, 5) >= r).astype(np.uint8)
+    n0, lab0 = cv2.connectedComponents(core0, connectivity=8)
+    inside = np.pad(_fill((h, w), [p.buffer(-(r + 2) * 1.0 / s) for p in rooms], s), 1)
+    of_room = np.zeros(n0, bool)                              # pieces of the unmasked free space that hold a room
+    of_room[np.unique(lab0[(inside > 0) & (lab0 > 0)])] = True
+    near = union.buffer(SPACE_REACH_M / mpp)
+    largest = max(p.area for p in rooms) * mpp * mpp
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * int(math.ceil(r)) + 3,) * 2)
+    cross = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    # within 0.25 m of a filled wall or a room: what holds an indoor space
+    hard = cv2.dilate(((thick > 0) | (roomm > 0)).astype(np.uint8), cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * int(math.ceil(0.25 / k)) + 1,) * 2))
+    solid = np.pad(((thick == 0) & (roomm == 0)).astype(np.uint8), 1, constant_values=1)
+    out = []
+    for i in range(1, n):
+        x, y, bw, bh, a = stats[i]
+        if x == 0 or y == 0 or x + bw >= w + 2 or y + bh >= h + 2:
+            continue                                          # reaches the border: sheet background
+        if a * k * k < 0.25:
+            continue
+        piece = (lab[y:y + bh, x:x + bw] == i)
+        ids = np.unique(lab0[y:y + bh, x:x + bw][piece])
+        if of_room[ids[ids > 0]].any() or lab0[0, 0] in ids:
+            continue                                          # open to a labelled room, or to the background
+        pad = int(math.ceil(r + SPACE_FILL_M / k)) + 2
+        y0, y1, x0, x1 = max(0, y - pad), min(h + 2, y + bh + pad), max(0, x - pad), min(w + 2, x + bw + pad)
+        grown = cv2.dilate((lab[y0:y1, x0:x1] == i).astype(np.uint8), disc) & free[y0:y1, x0:x1]
+        # thin lines inside the space (door swings, furniture, a shower) are part of it: flood on from the piece
+        # over everything that is neither a filled wall nor a room, SPACE_FILL_M far, and drop what is thin
+        blob = grown.copy()
+        sol = solid[y0:y1, x0:x1]
+        for _ in range(int(math.ceil(SPACE_FILL_M / k))):
+            grown = cv2.dilate(grown, cross) & sol
+        fat = _open_disc(grown, max(1.5, 0.2 / k))
+        nn, ll = cv2.connectedComponents(fat, connectivity=4)
+        if nn > 2:
+            seed = np.bincount(ll[lab[y0:y1, x0:x1] == i], minlength=nn)
+            seed[0] = 0
+            fat = (ll == int(np.argmax(seed))).astype(np.uint8)
+        grown = fat
+        def polygon(mask):
+            cs, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not cs:
+                return None
+            ring = cv2.approxPolyDP(max(cs, key=cv2.contourArea), max(1.0, 0.04 / k), True).reshape(-1, 2)
+            if len(ring) < 3:
+                return None
+            q = Polygon((ring + [x0 - 1 + 0.5, y0 - 1 + 0.5]) / s).buffer(0)
+            return max(_parts(q.difference(union)), key=lambda t: t.area, default=None)
+
+        poly = polygon(blob)                                  # bounded by every drawn line
+        if poly is None or not poly.intersects(near):
+            continue
+        def held(q) -> float:                                # share of the outline that runs along a filled wall or a room
+            pts = [q.exterior.interpolate(float(d)) for d in np.arange(0, q.exterior.length, max(1.0, 0.1 / mpp))]
+            return sum(1 for t in pts if hard[min(h - 1, max(0, int(t.y * s))), min(w - 1, max(0, int(t.x * s)))]) / max(1, len(pts))
+
+        full = polygon(grown)                                 # bounded by filled walls and rooms
+        if full is not None and full.area <= 3.0 * poly.area and held(full) >= 0.6:
+            poly = full
+        indoor = held(poly) >= 0.6
+        if indoor:
+            area = poly.area * mpp * mpp
+            if not SPACE_MIN_M2 <= area <= max(40.0, 1.5 * largest):
+                continue
+        else:
+            area = poly.area * mpp * mpp
+            rect = poly.minimum_rotated_rectangle
+            ex = np.array(rect.exterior.coords)
+            a_, b_ = math.dist(ex[0], ex[1]) * mpp, math.dist(ex[1], ex[2]) * mpp
+            touch = poly.buffer(SPACE_REACH_M / mpp).intersection(union).area * mpp * mpp
+            if not (SPACE_OUT_MIN_M2 <= area <= SPACE_OUT_MAX_M2 and poly.area >= 0.75 * rect.area
+                    and min(a_, b_) >= 0.9 and max(a_, b_) <= 8 * min(a_, b_) and touch >= 0.3):
+                continue
+        inside_k = [b[0] for b in symbols if b[0] in FIXTURES and poly.buffer(0.15 / mpp).contains(box(*b[1:]).centroid)]
+        t, why = _space_type(inside_k, area, indoor)
+        out.append(dict(poly=poly, indoor=indoor, type=t, why=why, fixtures=inside_k, area_m2=round(area, 2)))
+    return out
 
 
 # ------------------------------------------------------------------------------------------------------- walls
@@ -321,7 +549,9 @@ def _invert(m):
 def _room_rows(db: DB, f: dict) -> list[dict]:
     """Rooms read from this file with the outline raster_rooms kept in page pixels."""
     from shapely import from_wkb
-    rows = db.run("""select e.entity_id, e.attrs, e.geom is not null as placed, s.id as source_id,
+    rows = db.run("""select e.entity_id, e.attrs, e.geom is not null as placed, s.id as source_id, e.label_norm,
+                            (select max(c.value_num) from jstore.claim c where c.entity_id = e.entity_id and c.file_id = :f
+                              and c.property = 'net_area_m2' and c.method in ('printed', 'ocr')) as printed_m2,
                             encode(st_asbinary(d.geom), 'hex') as wkb
                      from jstore.entity e
                      join jstore.entity_source s on s.entity_id = e.entity_id and s.file_id = :f and s.page_no = 0
@@ -344,6 +574,9 @@ def _clean(db: DB, f: dict) -> None:
     db.run("""delete from jstore.entity where drawing_key = :d and kind = 'wall' and attrs->>'by' = :by
               and entity_id in (select entity_id from jstore.entity_source where file_id = :f)""",
            d=f["drawing_key"], by=BY, f=f["file_id"])
+    db.run("""delete from jstore.entity where drawing_key = :d and kind = 'room' and attrs->>'by' = :by
+              and entity_id in (select entity_id from jstore.entity_source where file_id = :f)""",
+           d=f["drawing_key"], by=BY, f=f["file_id"])        # spaces without a label of an earlier run
     db.run("delete from jstore.raster_detection where file_id = :f and detector like 'raster_plan %'", f=f["file_id"])
     db.run("delete from jstore.claim where file_id = :f and method = :m", f=f["file_id"], m=NOMINAL_CLAIM)
     db.run("delete from jstore.definition where file_id = :f and created_by = :by", f=f["file_id"], by=BY)
@@ -383,7 +616,16 @@ def interpret(db: DB, f: dict) -> dict:
     fr = db.one("select m, method from jstore.frame where file_id = :f and page_no = 0", f=f["file_id"])
     nominal = None
     if not fr or fr["method"] == NOMINAL:                 # (an estimate of an earlier run is made again)
-        nominal = estimate_scale(boxes, [r["poly"].area for r in rooms], W, H)
+        dims = []
+        for d in db.run("""select attrs from jstore.entity where drawing_key = :d and kind = 'dimension' and status = 'active'
+                           and attrs->>'dim_kind' in ('linear', 'overall') and coalesce(attrs->>'page_no', '0') = '0'
+                           and entity_id in (select entity_id from jstore.entity_source where file_id = :f)""",
+                        d=f["drawing_key"], f=f["file_id"]):
+            ln = ((d["attrs"] or {}).get("px") or {}).get("line")
+            if ln and d["attrs"].get("value_m"):
+                dims.append((math.dist(ln[0], ln[1]), float(d["attrs"]["value_m"])))
+        nominal = estimate_scale(boxes, [dict(px=r["poly"].area, type=r["label_norm"], printed_m2=r["printed_m2"])
+                                         for r in rooms], W, H, dims)
         mpp = nominal["mpp"]
         m = [mpp, 0.0, 0.0, 0.0, -mpp, mpp * H]
         db.run("""insert into jstore.frame (file_id, page_no, m, method) values (:f, 0, cast(:m as double precision[]), :me)
@@ -391,16 +633,54 @@ def interpret(db: DB, f: dict) -> dict:
                f=f["file_id"], m="{" + ",".join(repr(float(v)) for v in m) + "}", me=NOMINAL)
         define(db, f["file_id"], "units", NOMINAL, dict(
             metres_per_pixel=round(mpp, 6), estimated_from=nominal["source"], votes=nominal["votes"],
-            uncertainty=nominal["uncertainty"], version=VERSION,
-            rule="the sheet states no usable scale; a pixel is sized by the things drawn on it: the median long side "
-                 "of the detected door, toilet, washbasin and bathtub boxes against their usual size (one vote per "
-                 "class, median vote), else a median room of 3.15 m x 3.15 m, else the image as 30 m long.  "
-                 "Geometry, areas and lengths under this frame are approximate (uncertainty = the 80th percentile "
-                 "of the error on scans with a known scale); areas scale with its square"), 0.2, BY)
+            uncertainty=nominal["uncertainty"], agreement=nominal["agreement"], implausible=nominal["checks"],
+            version=VERSION,
+            rule="the sheet states no usable scale; a pixel is sized by the things drawn on it, one estimator each "
+                 "(votes): rooms with a printed area against their outline, printed dimensions against their lines, "
+                 "the median long side of the detected door, toilet, washbasin and bathtub boxes against their usual "
+                 "size, the outlines of typed rooms against the usual area of such a room.  Chosen: the weighted "
+                 "median of their logarithms after dropping estimators more than 1.3 x away (used = false); else a "
+                 "median room of 3.15 m x 3.15 m, else the image as 30 m long.  Geometry, areas and lengths under "
+                 "this frame are approximate; the uncertainty grows when the estimators disagree (agreement) or a "
+                 "usual room comes out implausibly small (implausible); areas scale with its square"),
+            round(max(0.05, 0.3 * (1 - nominal["uncertainty"])), 2), BY)
     else:
         m = list(fr["m"])
         mpp = math.sqrt(abs(m[0] * m[4] - m[1] * m[3]))
     is_nominal = nominal is not None
+
+    # spaces without a label: rooms of their own (kind room, label null, attrs.unlabelled)
+    labelled = len(rooms)
+    spaces = unlabelled_spaces(bgr, [r["poly"] for r in rooms], mpp, boxes) \
+        if os.environ.get("JSTORE_UNLABELLED_SPACES", "1") != "0" else []
+    if spaces:
+        d_space = define(db, f["file_id"], "room", "unlabelled_space", dict(
+            version=VERSION, spaces=len(spaces), types=sorted({x["type"] for x in spaces}),
+            rule="an enclosed piece of the plan that no labelled room covers: free space (no ink, no room outline) "
+                 f"opened with a disc of {SPACE_OPEN_M} m, not connected to the sheet background or to the inside of "
+                 "a labelled room, next to the rooms, of a plausible size; flooded up to the filled walls.  The type "
+                 "is taken from the fixtures detected inside (bath, shower, toilet, washbasin), else 'room'; a compact "
+                 "space enclosed by thin lines rather than walls is taken as a balcony.  Its area is an estimate"), 0.3, BY)
+        recs = []
+        for x in spaces:
+            p = x["poly"]
+            did = db.one("""insert into jstore.raster_detection (file_id, page_no, class, x0, y0, x1, y1, detector, attrs, geom)
+                            values (:f, 0, 'room_outline', cast(:x0 as float8), cast(:y0 as float8), cast(:x1 as float8),
+                                    cast(:y1 as float8), :det, cast(:a as jsonb), st_geomfromtext(:w)) returning id""",
+                         f=f["file_id"], x0=p.bounds[0], y0=p.bounds[1], x1=p.bounds[2], y1=p.bounds[3],
+                         det=f"raster_plan {VERSION} unlabelled_space", a=js(dict(by=BY, method="unlabelled_space")),
+                         w=p.wkt)["id"]
+            attrs = dict(by=BY, unlabelled=True, indoor=x["indoor"], outline="free_space", outline_px=round(p.area),
+                         type_from=x["why"], fixtures_inside=x["fixtures"], area_estimate=True, outline_flags=["no_label"],
+                         geom="outline of an enclosed space without a label (jstore.interpret.raster_plan): approximate")
+            claims = [] if is_nominal else [
+                ("net_area_m2", round(p.area * mpp * mpp, 2), None, "m2", "measured_outline", 0, 0.3),
+                ("perimeter_m", round(p.length * mpp, 2), None, "m", "measured_outline", 0, 0.3)]
+            recs.append(dict(kind="room", ifc_class="IfcSpace", number=None, label=None, label_norm=x["type"], zone=None,
+                             geom=None if is_nominal else _apply(m, p), attrs=attrs, always_new=True, claims=claims,
+                             sources=[("raster_detection", str(did), "outline", [round(v, 1) for v in p.bounds], d_space)]))
+        merge(db, f, recs, registered=False)
+        rooms = _room_rows(db, f)
 
     # rooms: geometry and approximate measures where raster_rooms could not place them
     placed = 0
@@ -464,6 +744,7 @@ def interpret(db: DB, f: dict) -> dict:
                          sources=[("raster_detection", str(did), "outline", [round(v, 1) for v in b], d_wall)], claims=[]))
     out = merge(db, f, recs, registered=False) if recs else dict(new=0)
     return dict(walls=out["new"], method=plan_["method"], coverage=plan_["coverage"], rooms_placed=placed,
+                unlabelled_spaces=len(rooms) - labelled,
                 nominal_scale=round(mpp, 6) if nominal else None, scale_from=nominal["source"] if nominal else None,
                 seconds=round(time.time() - t0, 1))
 

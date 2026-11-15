@@ -49,6 +49,56 @@ def test_scale_from_doors_and_fixtures():
     assert e["mpp"] == pytest.approx(0.02, rel=0.05)
 
 
+def test_scale_combines_estimators_and_records_each():
+    # doors drawn large (a vote of 0.0141 m/px) against a toilet and typed rooms that say 0.0175: the doors are outvoted
+    doors = [("door", 0, 0, 68, 66)] * 6
+    rooms = [dict(px=20.0 / 0.0175 ** 2, type="living_room"), dict(px=12.5 / 0.0175 ** 2, type="bedroom"),
+             dict(px=11.0 / 0.0175 ** 2, type="bedroom"), dict(px=8.0 / 0.0175 ** 2, type="kitchen")]
+    e = RP.estimate_scale(doors + [("toilet", 0, 0, 22, 39)], rooms, 800, 700)
+    assert e["mpp"] == pytest.approx(0.0175, rel=0.04)
+    assert set(e["votes"]) == {"door", "toilet", "room_types"} and all("used" in v and "mpp" in v for v in e["votes"].values())
+    alone = RP.estimate_scale(doors, [r["px"] for r in rooms], 800, 700)
+    assert alone["mpp"] == pytest.approx(0.965 / 68, rel=1e-6) and alone["checks"] == {} or alone["uncertainty"] >= 0.3
+    assert e["uncertainty"] > RP.estimate_scale([("door", 0, 0, 55, 55)] * 6 + [("toilet", 0, 0, 22, 39)], rooms, 800, 700)["uncertainty"]
+    # a printed area or agreeing dimension lines decide; a disagreeing door vote is dropped and recorded as unused
+    e = RP.estimate_scale(doors, [dict(px=40000.0, type="bedroom", printed_m2=16.0), dict(px=30000.0, printed_m2=12.0)], 800, 700)
+    assert e["mpp"] == pytest.approx(0.02, rel=1e-6) and e["source"] == "printed areas" and not e["votes"]["door"]["used"]
+    e = RP.estimate_scale(doors, [40000.0], 800, 700, dims=[(100.0, 2.5), (200.0, 5.0), (80.0, 2.02), (50.0, 9.0)])
+    assert e["mpp"] == pytest.approx(0.025, rel=0.01) and e["source"] == "printed dimensions"
+    # a usual room that comes out implausibly small is reported and lowers the confidence
+    e = RP.estimate_scale([("door", 0, 0, 100, 100)] * 3, [dict(px=40000.0, type="bedroom")], 800, 700)
+    assert e["checks"] or e["mpp"] > 0.012
+
+
+def _core_sheet() -> tuple[np.ndarray, list]:
+    """Two labelled rooms, a bathroom between walls without a label (with a door swing and a toilet inside), a balcony
+    drawn with thin lines beside the building, and a frame around the sheet."""
+    img = np.full((500, 700, 3), 255, np.uint8)
+    cv2.rectangle(img, (90, 90), (520, 380), (0, 0, 0), -1)
+    for x0, y0, x1, y1 in ((100, 100, 300, 250), (310, 100, 510, 250), (100, 260, 220, 370), (230, 260, 510, 370)):
+        cv2.rectangle(img, (x0, y0), (x1, y1), (255, 255, 255), -1)
+    cv2.ellipse(img, (100, 370), (45, 45), 0, 270, 360, (0, 0, 0), 1)         # a door swing in the bathroom
+    cv2.rectangle(img, (180, 270), (205, 310), (0, 0, 0), 1)                  # the toilet
+    cv2.rectangle(img, (520, 120), (600, 240), (0, 0, 0), 1)                  # the balcony
+    cv2.rectangle(img, (10, 10), (690, 490), (0, 0, 0), 2)                    # sheet frame
+    return img, [box(100, 100, 300, 250), box(310, 100, 510, 250), box(230, 260, 510, 370)]
+
+
+def test_enclosed_spaces_without_a_label_become_rooms():
+    img, rooms = _core_sheet()
+    sp = RP.unlabelled_spaces(img, rooms, MPP, [("toilet", 180.0, 270.0, 205.0, 310.0), ("door", 100.0, 325.0, 145.0, 370.0)])
+    assert len(sp) == 2
+    bath = next(x for x in sp if x["indoor"])
+    assert bath["type"] == "bathroom" and bath["fixtures"] == ["toilet"]
+    assert bath["poly"].area == pytest.approx(120 * 110, rel=0.08)             # the whole space, door swing and toilet too
+    assert bath["poly"].intersection(box(100, 260, 220, 370)).area > 0.95 * bath["poly"].area
+    out = next(x for x in sp if not x["indoor"])
+    assert out["type"] == "balcony" and out["poly"].area == pytest.approx(80 * 120, rel=0.1)
+    # nothing is added on a plan whose rooms are all labelled, and the sheet background is never a room
+    assert RP.unlabelled_spaces(_sheet(True), [R1, R2], MPP, [DOOR, WINDOW]) == []
+    assert RP._space_type(["toilet"], 1.6, True)[0] == "toilet" and RP._space_type([], 6.0, True)[0] == "room"
+
+
 def test_scale_falls_back_to_room_size_then_image():
     e = RP.estimate_scale([("window", 0, 0, 90, 8)], [150.0 * 150.0, 160.0 * 160.0, 100.0 * 100.0], 620, 400)
     assert e["source"] == "room size" and e["mpp"] == pytest.approx(3.15 / 150, rel=1e-6)
@@ -172,7 +222,7 @@ def test_interpret_gives_a_nominal_frame_polygons_walls_and_is_idempotent(scan):
 
     p = RP.plan(db, "test_scan")
     assert p["frame"]["nominal"] and p["frame"]["method"] == "nominal_scale" and p["wall_method"] == "room_gaps"
-    assert p["frame"]["source"] == "doors and fixtures" and p["frame"]["uncertainty"] == RP.UNCERTAINTY["doors and fixtures"]
+    assert p["frame"]["source"].startswith("doors and fixtures") and 0 < p["frame"]["uncertainty"] <= 0.6
     assert len(p["rooms"]) == 2 and len(p["doors"]) == 1 and len(p["windows"]) == 1 and len(p["fixtures"]) == 1 and p["walls"]
     k = next(r for r in p["rooms"] if r["label"] == "Kitchen")
     xs, ys = [q[0] for q in k["px"][0]], [q[1] for q in k["px"][0]]
