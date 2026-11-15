@@ -22,13 +22,6 @@ log = logging.getLogger(__name__)
 
 VECTOR_FILE = "vector.json"
 PLAN_FILE = "plan.svg"
-RASTER_EXT = (".png", ".jpg", ".jpeg", ".webp")
-
-
-def _vectorizer():
-    from aura import vectorize
-
-    return vectorize.vectorize_image, vectorize.plan_svg
 
 
 # One vectorization at a time: it runs in the API process, and several at once (a batch upload) starve
@@ -47,7 +40,8 @@ def _vector(out_dir: Path) -> dict | None:
             return json.loads(cached.read_text(encoding="utf-8"))
         except ValueError:
             pass
-    vectorize_image, _ = _vectorizer()
+    from aura.vectorize import vectorize_image
+
     with _ONE_AT_A_TIME:
         vec = vectorize_image(src)
     tmp = cached.with_suffix(".json.tmp")
@@ -57,7 +51,8 @@ def _vector(out_dir: Path) -> dict | None:
 
 
 def _write_svg(out_dir: Path, vec: dict) -> None:
-    _, plan_svg = _vectorizer()
+    from aura.vectorize import plan_svg
+
     tmp = out_dir / (PLAN_FILE + ".tmp")
     tmp.write_text(plan_svg(vec), encoding="utf-8")
     os.replace(tmp, out_dir / PLAN_FILE)
@@ -194,7 +189,7 @@ def apply(out_dir: Path, drawing: dict) -> dict:
                   for r in out.get("rooms") or [] if isinstance(r.get("label_at"), (list, tuple))]
         _write_svg(out_dir, vec | {"labels": labels})
         return out
-    except Exception:  # noqa: BLE001 - a rebuild is a bonus; the upload stays usable without it
+    except Exception:
         log.exception("vector rebuild failed for %s", drawing.get("id"))
         return drawing
 
@@ -213,6 +208,6 @@ def apply_file(out_dir: Path) -> bool:
         tmp.write_text(json.dumps(new, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
         return True
-    except Exception:  # noqa: BLE001 - never fails the upload
+    except Exception:
         log.exception("vector rebuild could not update %s", path)
         return False

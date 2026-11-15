@@ -31,8 +31,6 @@ SYMBOL = {"mm": "mm", "cm": "cm", "dm": "dm", "m": "m", "km": "km", "in": "in", 
           "cm3": "cm³", "l": "L", "ft3": "cu ft", "in3": "cu in", "yd3": "cu yd"}
 
 IMPERIAL = {"in", "ft", "yd", "mi", "in2", "ft2", "yd2", "acre", "ft3", "in3", "yd3"}
-# Contract units of the drawing answers (`AnswerArea` is m², `AnswerQuantity` m / m² / m³).
-CONTRACT_UNIT = {"m": "m", "m2": "m2", "m3": "m3"}
 
 _SQ = r"(?:square|sq\.?|quadrat|carr[ée]s?|neliö)\s*"
 _CU = r"(?:cubic|cu\.?|kubik)\s*"
@@ -79,12 +77,12 @@ _FILLER = {
     "from", "and", "can", "you", "calculate", "number", "amount", "value",
     # de
     "umrechnen", "rechne", "rechnen", "um", "wie", "viel", "viele", "sind", "ist", "nach", "bitte", "was",
-    "ergeben", "ergibt", "entspricht", "entsprechen", "von", "zu", "auf", "das", "die", "der", "in",
+    "ergeben", "ergibt", "entspricht", "entsprechen", "von", "zu", "auf", "das", "die", "der",
     # fr
     "convertir", "convertis", "combien", "de", "en", "est", "font", "fait", "font-ils", "quel", "quelle",
     "le", "la", "les", "un", "une", "des", "y", "a-t-il",
     # fi / it
-    "muunna", "kuinka", "monta", "paljon", "on", "ovat", "converti", "quanti", "quante", "sono", "è", "in",
+    "muunna", "kuinka", "monta", "paljon", "on", "ovat", "converti", "quanti", "quante", "sono", "è",
 }
 
 

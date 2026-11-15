@@ -480,7 +480,7 @@ def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]
     probe = " ".join(quoted) + " " + text if quoted else text
     by_base: dict[str, str] = {}
     for lab in labels:
-        by_base.setdefault(label_base(lab), re.sub(r"[\s#№.-]*\d+[a-z]?$|\s+#\s*$", "", lab.strip(), flags=re.I))
+        by_base.setdefault(label_base(lab), re.sub(r"[\s#№.-]*\d+[a-z]?$|\s+#\s*$", "", lab.strip(), flags=re.IGNORECASE))
     for _concept, rx, printed in LABEL_CONCEPTS:
         if rx.search(probe):
             for p in printed:
@@ -690,7 +690,7 @@ _WHOLE_WORDS = {
     "apartments", "unit", "units", "level", "storey", "story", "storeys", "stories", "whole", "entire", "all",
     "every", "total", "rooms", "room", "spaces", "space", "property", "dwelling", "project", "site", "this",
     "that", "it", "them", "everything", "interior", "indoor", "net", "gross", "usable", "living", "area", "areas",
-    "geschoss", "grundriss", "plan", "gebäude", "haus", "wohnung", "wohnungen", "etage", "stockwerk", "zeichnung",
+    "geschoss", "grundriss", "gebäude", "haus", "wohnung", "wohnungen", "etage", "stockwerk", "zeichnung",
     "räume", "raum", "alle", "gesamte", "gesamt", "ganze", "ganzen", "fläche", "étage", "bâtiment", "logement",
     "appartement", "maison", "pièces", "kerros", "rakennus", "asunto", "huoneisto",
 }

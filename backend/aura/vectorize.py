@@ -31,7 +31,6 @@ Pipeline (all on a working copy at most WORK_SIDE px on its long side, coordinat
 from __future__ import annotations
 
 import html
-
 import math
 from pathlib import Path
 

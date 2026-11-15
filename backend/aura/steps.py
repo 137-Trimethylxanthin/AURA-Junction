@@ -1369,7 +1369,8 @@ def _totals(d, rooms: list[dict], tb: Toolbox | None) -> dict:
             try:
                 if d.engine.supports(subj) and (tr := tools.count_objects(d, subj)).value is not None:
                     objs[subj] = int(tr.value)
-            except Exception:  # noqa: BLE001 - a subject the engine cannot count is left out
+            except Exception:  # a subject the engine cannot count is left out
+                log.debug("count of %s unavailable", subj, exc_info=True)
                 continue
         if objs:
             out["objects"] = objs
@@ -1404,7 +1405,6 @@ def _sheet_image(d) -> dict | None:
         return None
     try:
         import base64
-        import os as _os
 
         from PIL import Image
 
@@ -1417,9 +1417,9 @@ def _sheet_image(d) -> dict | None:
                 im.thumbnail((SHEET_SIDE, SHEET_SIDE), Image.LANCZOS, reducing_gap=3.0)
                 tmp = sheet.with_suffix(".jpg.tmp")
                 im.convert("RGB").save(tmp, "JPEG", quality=88)
-            _os.replace(tmp, sheet)
+            os.replace(tmp, sheet)
         return {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(sheet.read_bytes()).decode()}}
-    except Exception:  # noqa: BLE001 - the plan data alone still answers
+    except Exception:
         log.debug("sheet image unavailable", exc_info=True)
         return None
 
@@ -1441,7 +1441,7 @@ def _printed_texts(d) -> list[str]:
         if not res.ok:
             return []
         return [f"{r['text'][:80]} @ {r['px']},{r['py']}" for r in res.rows if r.get("text")]
-    except Exception:  # noqa: BLE001 - extra context only; the plan index stands without it
+    except Exception:
         log.debug("printed texts unavailable", exc_info=True)
         return []
 
