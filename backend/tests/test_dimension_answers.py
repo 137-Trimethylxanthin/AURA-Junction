@@ -84,7 +84,8 @@ def test_room_size_printed_else_measured_in_any_language():
     d = _drawing([], rooms[:1])
     b = da.try_answer("Wie breit ist die Küche?", "de", d)
     assert b.body["answer"] == {"kind": "quantity", "value": 3.2, "unit": "m"}
-    assert "as printed (3.20 x 4.10)" in b.body["explanation"]
+    assert "wie gedruckt (3.20 x 4.10)" in b.body["explanation"]       # the sentence follows the question's language
+    assert "as printed (3.20 x 4.10)" in da.try_answer("How wide is the Küche?", "en", d).body["explanation"]
     assert b.body["evidence"]["rooms"][0]["room_id"] == "r1"
     b = da.try_answer("What are the dimensions of the kitchen?", "en", _drawing([], rooms[1:]))
     assert b.body["answer"]["value"].startswith("TUPAK: ≈ 8.27 m × 4.24 m (an estimate")
@@ -292,3 +293,41 @@ def test_room_words_match_the_abbreviations_a_sheet_prints_without_reinterpretat
         assert [r["room_id"] for r in b.body["evidence"]["rooms"]] == [rid], q
     assert da.classify("How wide is the stair door?", d) is None      # a door, not the room
     assert da.classify("How wide are the stairs?", _drawing([], rooms[1:])) is None   # no stair room on this sheet
+
+
+def test_every_sentence_exists_in_every_language_with_the_same_placeholders():
+    import re
+    from aura.dimension_text import LANGS, TEXT, tx
+    holes = lambda t: sorted(re.findall(r"\{(\w+)\}", t))  # noqa: E731
+    assert LANGS == ("en", "de", "fr", "fi", "it")
+    for key, forms in TEXT.items():
+        assert set(forms) == set(LANGS), key
+        for lang in LANGS:
+            assert forms[lang].strip() and holes(forms[lang]) == holes(forms["en"]), (key, lang)
+            if lang != "en" and not key.startswith(("o_", "src_", "on_")):
+                assert forms[lang] != forms["en"], (key, lang)
+    assert tx("xx", "how_printed") == "as printed"       # an untranslated language falls back to English
+
+
+def test_composed_sentences_follow_the_question_language():
+    size = {"length_m": 6.0, "width_m": 3.0, "source": "measured"}
+    d = _drawing([OVERALL] + CHAIN, [_room("r1", "STAIR", size, rtype="staircase")], {"width_m": 24.0, "depth_m": 9.0})
+    said = {"de": ("Wie breit ist der Plan insgesamt?", "Breite (quer über das Blatt): 80' - 0\" wie gedruckt = 24.38 m"),
+            "fr": ("Quelle est la largeur totale du plan ?", "Largeur (en travers de la page) : 80' - 0\" tel qu’imprimé = 24.38 m"),
+            "fi": ("Mikä on pohjan kokonaisleveys?", "Leveys (sivun poikki): 80' - 0\" kuten painettu = 24.38 m"),
+            "it": ("Qual è la larghezza complessiva della pianta?", "Larghezza (attraverso il foglio): 80' - 0\" come stampato = 24.38 m")}
+    for lang, (q, start) in said.items():
+        token = da._LANG.set(lang)
+        try:
+            b = da._overall(q, lang, d, "width")
+        finally:
+            da._LANG.reset(token)
+        assert b.body["explanation"].startswith(start), (lang, b.body["explanation"])
+        assert b.body["answer"]["value"] == 24.384
+    b = da.try_answer("Quanto è larga la scala?", "it", d)
+    assert b.body["explanation"].startswith("STAIR: 3.00 m di larghezza (il lato più corto; misurato sul contorno tracciato sulla scansione, non stampato: una stima)")
+    b = da.try_answer("Wie breit ist die Treppe?", "de", d)
+    assert "am Umriss gemessen, der auf dem Scan nachgezeichnet wurde, nicht gedruckt: eine Schätzung" in b.body["explanation"]
+    b = da.try_answer("What is the longest dimension?", "en", d)
+    assert b.body["explanation"].startswith("The longest dimension printed on the sheet: 80' - 0\" as printed = 24.38 m (horizontal; of 4")
+    assert da._LANG.get() == "en"                         # the language never leaks into the next answer
