@@ -28,7 +28,6 @@ import { cn } from "@/lib/utils"
 import { useTitle } from "@/hooks/use-title"
 import { PAGE_BTN, PageFrame, WRAP } from "./chrome"
 import {
-  LIMIT_FACTS,
   RESULTS,
   factById,
   fmtDate,
@@ -46,7 +45,6 @@ const ScrollStory = lazy(() => import("./ScrollStory"))
 const NAV = [
   { href: "#how", label: "How it works" },
   { href: "#measured", label: "Measured" },
-  { href: "#limits", label: "Limits" },
   { href: "#use", label: "Use" },
 ]
 
@@ -80,7 +78,6 @@ export default function LandingPage() {
         <Hero />
         <HowItWorks />
         <Measured />
-        <Limits />
         <Use />
       </PageFrame>
     </MotionConfig>
@@ -402,7 +399,7 @@ function Measured() {
     <Section
       id="measured"
       title="Accuracy and cost, measured with their n"
-      lead="These CAD and IFC accuracy figures were measured on AURA’s deterministic geometry engine (0 model calls), with sample size and date shown; scanned and open-ended model estimates are reported separately under Limits."
+      lead="These CAD and IFC accuracy figures were measured on AURA’s deterministic geometry engine (0 model calls), with sample size and date shown."
     >
       <Reveal
         as="ul"
@@ -415,63 +412,6 @@ function Measured() {
         {RESULTS.map((f) => (
           <RevealItem as="li" key={f.id}>
             <FactCard fact={f} />
-          </RevealItem>
-        ))}
-      </Reveal>
-    </Section>
-  )
-}
-
-// ---- limits --------------------------------------------------------------------------------------
-
-const LIMITS: { title: string; body: string }[] = [
-  {
-    title: "The check sees drawn boxes, not missed items",
-    body: "Gemini can doubt a box that is there. It cannot point to a window that was never boxed, so a missed item stays missed.",
-  },
-  {
-    title: "Check scores are ranked within one request",
-    body: "The same tile scores differently from one request to the next, so AURA compares boxes against each other and shows the least certain one.",
-  },
-  {
-    title: "Box positions are not scored yet",
-    body: `The ${factById("swiss-full")?.value ?? "Swiss"} figure scores the numbers in the answers. Where each evidence box sits on the plan has no measurement of its own yet.`,
-  },
-]
-
-function Limits() {
-  return (
-    <Section
-      id="limits"
-      title="What AURA cannot do yet"
-      lead="Without CAD data there is no geometry to compute from, so counts on scans and images are a model estimate for you to check, not an exact answer. Here is how they did on held-out test images."
-    >
-      {LIMIT_FACTS.length ? (
-        <Reveal
-          as="ul"
-          className={cn(
-            "grid gap-4 lg:grid-cols-2",
-            LIMIT_FACTS.length > 2 && "xl:grid-cols-3"
-          )}
-        >
-          {LIMIT_FACTS.map((f) => (
-            <RevealItem as="li" key={f.id}>
-              <FactCard fact={f} tone="warning" />
-            </RevealItem>
-          ))}
-        </Reveal>
-      ) : null}
-      <Reveal as="ul" className="grid gap-x-10 gap-y-6 md:grid-cols-3">
-        {LIMITS.map((l) => (
-          <RevealItem
-            as="li"
-            key={l.title}
-            className="flex flex-col gap-1.5 border-t-2 border-warning/60 pt-4"
-          >
-            <h3 className="text-base font-semibold text-pretty">{l.title}</h3>
-            <p className="text-sm text-pretty text-muted-foreground">
-              {l.body}
-            </p>
           </RevealItem>
         ))}
       </Reveal>
