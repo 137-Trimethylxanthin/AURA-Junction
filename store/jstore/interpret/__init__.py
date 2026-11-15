@@ -74,7 +74,7 @@ def merge(db: DB, f: dict, recs: list[dict], registered: bool = False) -> dict:
                     if o["kind"] == r["kind"] and o["entity_id"] not in taken and g.distance(p) < 0.3]
             if near:
                 eid = min(near)[1]
-        if eid is None and r["kind"] in kinds_before:
+        if eid is None and r["kind"] in kinds_before and not r.get("always_new"):
             unlinked[r["kind"]] = unlinked.get(r["kind"], 0) + 1
             target.append(-1)
             continue
