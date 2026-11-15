@@ -428,3 +428,23 @@ Merged and deployed as `805eaae` (suites: backend 752 passed / 34 skipped, store
 1 skipped, frontend 360 passed). On the live store: backup `store-20261115T0308-pre-wave5.dump`;
 duplicates removed (86); re-interpretation started for the US sheet PDFs (new model calls for room
 outlines) and for the 189 image drawings with an estimated scale (one model call each).
+
+### 03:10–03:40 UTC — Italian interface, live store updated, eighth and ninth deploy
+
+- `on/r-italian` (merged): an Italian interface (every string, switcher, contract language);
+  dimension answers in en/de/fr/fi/it (58 sentences in `backend/aura/dimension_text.py`); the
+  scale footnote in the plan follows the interface language; room lookup understands sheet
+  abbreviations ("STAIR", "MEZZ.", "ELEV.", "BDRM", "KIT." ...) at question time: "How wide is the
+  stair?" 4.51 m, the mezzanine 8.02 m on the live store. Still English: reasoning-tree node
+  titles, credit lines, a few evidence-row fragments.
+- Live store: the 7 showcase PDFs and the other 34 US sheet PDFs were re-interpreted (room outlines
+  on the page render), then the 189 image drawings with an estimated scale (model voter), then the
+  duplicate and false-room clean-ups: 0 failures in every step.
+- Deployed `f5aa2e9` (answer cache version 5). Suites: backend 763 passed / 34 skipped, store 224
+  passed / 1 skipped, frontend 363 passed. The library lists 828 entries (page entries of
+  multi-page PDFs included).
+- Checked through the public API after the deploy (36 questions, 35 with no model call): the US
+  sheet "705 Cherokee Path" now answers "How wide is the bedroom?" 5.21 m, "dimensions of the
+  office" 4.90 × 5.11 m, "area of the utility room" 24.90 m², "largest room" UTILITY 24.90 m²;
+  everything listed in the walkthroughs above still answers the same, except the living room of
+  "High quality 108", which reads ≈ 21 m² under the new scale estimate (was ≈ 22 m²).
