@@ -7,7 +7,7 @@ was checked, and what is still open.
 
 ## Result at a glance (written 02:15 UTC, last updated 05:55 UTC)
 
-Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `b9bbd44`. Not pushed
+Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `4fe7a9d`. Not pushed
 (no GitHub credentials on the devbox): `git push -u origin overnight-improvements`.
 Suites on the final tree: backend 767 passed / 35 skipped, store 225 passed / 1 skipped,
 frontend 368 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
@@ -40,9 +40,8 @@ before non-plan sheets; PDF sheets shown as their page render instead of an unre
 - German, French and Finnish answer sentences are translated for the common cases; Italian and the
   composed dimension sentences are still English.
 - A DWG site plan answers "1 door, Exact" (one CAD door entity in the store).
-- Multi-page PDFs show one page (the header says which); door and window counts follow that page,
-  room counts can still differ from the header (outdoor spaces left out, or a page without rooms
-  answering for the whole document); dimensions on other pages are cited without a box.
+- Multi-page PDFs: every page with content is its own library entry and the header says which page
+  it is; header counts and answers use one definition (see the last log entry).
 - The answer cache was reset by the last deploy (cache key version 3); the main demo questions were
   asked once afterwards so they are warm.
 
@@ -548,3 +547,28 @@ errors, 0 failed requests. Screenshots: `/root/aura-deploy/verify/end-*.png` on 
 
 Deployed `b9bbd44`. Suites: backend 767 passed / 35 skipped, store 225 passed / 1 skipped,
 frontend 368 passed. After the deploy the walkthrough questions answer as stated.
+
+### Later inline fixes — header counts agree with answers; zero counts say why
+
+- Header and library counts count rooms as the answers do: an outdoor space (balcony, terrace) is
+  not a room. Before, a header read "22 rooms" where the answer was 13 "(9 outdoor spaces not
+  counted)".
+- A sheet on which no rooms (doors, windows) were read answers the count with a zero and the
+  reason ("0 rooms: no room was read on this sheet."), labelled by what the sheet was read from
+  (PDF or scan, never "exact CAD geometry"). Before, the question went to the model, which answered
+  with a vague note, sometimes for the whole document.
+- Check on the live site: "How many rooms are there?" on 60 US sheet entries and 25 historic scans:
+  the answer equals the header count on 85 of 85, with 0 model calls.
+- Licence phrases ("Licence of the source dataset", "Uploaded by you", "Licence terms") follow the
+  interface language (de/fr/fi/it).
+- Answer cache key version 8 (cached notes from before these fixes are not replayed); the main
+  demo questions were asked again afterwards and answer as stated.
+
+Deployed `4fe7a9d`. Suites: backend 767 passed / 35 skipped, store 226 passed, frontend 368 passed.
+
+**Open at the end:** reasoning-tree step bodies (the sentences inside each step) are English in
+every interface language; 9 PDF rooms have no outline (site plans, a door schedule, name-only tags
+on pages without a scale); the rescue of railing-bounded balconies was decided against (see above).
+The saved manual group was verified end to end in a browser on a private instance of the same
+code (group two Swiss floors, save, open, "All 2 floors", ask, reload, ask again, ungroup) and
+through the public API; it was not saved on the live site, to keep test data out of it.
