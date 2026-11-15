@@ -75,3 +75,11 @@ def test_dimension_route_never_answers_the_size_of_a_thing_on_the_plan():
                    ("How wide is the building?", "width"), ("What is the length of wall #1?", "wall:1")):
         r = route(q, ctx)
         assert (r.intent, r.subject) == ("dimension", sub), q
+
+
+def test_german_width_of_the_building_is_a_dimension_question():
+    from aura.router import DrawingCtx, route
+
+    ctx = DrawingCtx(labels=["BEDROOM #1"], kind="raster", has_dimensions=True)
+    r = route("Wie breit ist das Gebäude?", ctx)
+    assert (r.intent, r.subject) == ("dimension", "width")

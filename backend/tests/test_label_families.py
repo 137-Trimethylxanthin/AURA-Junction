@@ -69,3 +69,9 @@ def test_how_big_is_a_named_thing():
     ctx = DrawingCtx(labels=["Room"], kind="raster")
     assert route("How big is the Lagerhalle?", ctx).intent == "unknown"
     assert route("How big is the apartment?", ctx).intent == "area"
+
+
+def test_numbered_room_named_in_another_language():
+    ctx = DrawingCtx(labels=["BEDROOM #1", "BEDROOM #2", "BATH"], kind="raster")
+    assert route("Wie groß ist Schlafzimmer 2?", ctx).scope == {"kind": "label", "label": "BEDROOM #2"}
+    assert route("Wie viele Schlafzimmer gibt es?", ctx).scope == {"kind": "label", "label": "BEDROOM"}

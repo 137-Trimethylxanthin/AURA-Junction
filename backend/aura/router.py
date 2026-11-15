@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 20  # 19: named things on sheets read from the sheet; 18: label guesses on room-less scans; 17: sql numbers only for quantity questions; 16: zero SQL counts on sheets go to the reasoning step; 15: "bedroom 2" is BEDROOM #2; 14: printed dimensions of scans; 12/13: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
+ROUTER_VERSION = 21  # 21: 'Schlafzimmer 2', 'wie breit'; 19: named things on sheets read from the sheet; 18: label guesses on room-less scans; 17: sql numbers only for quantity questions; 16: zero SQL counts on sheets go to the reasoning step; 15: "bedroom 2" is BEDROOM #2; 14: printed dimensions of scans; 12/13: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count",
                            "dimension"})
 
@@ -149,7 +149,8 @@ LENGTH = S(r"length|lengths|longueur|pituus|länge|lunghezza|perimeter|périmèt
 WALL_NO = re.compile(r"(?<![\w])(?:wall|mur|seinä|wand|muro)\s*(?:#|no\.?|nr\.?|number|n°)?\s*(\d{1,3})(?!\d)",
                      re.IGNORECASE)
 DIM_WORD = S(r"dimensions?|measurements?|length|long|width|wide|depth|deep|size|span|"
-             r"longueur|largeur|profondeur|pituus|leveys|syvyys|mitat|länge|breite|tiefe|abmessung\w*|"
+             r"longueur|largeur|large|profondeur|profond|pituus|pitkä|leveys|leveä|syvyys|mitat|länge|lang|breite|breit|"
+             r"tiefe|tief|abmessung\w*|"
              r"lunghezza|larghezza|profondità|dimensioni")
 DIM_WHOLE = S(r"overall|outside|exterior|outer|total|whole|entire|building|house|plan|floor ?plan|footprint|"
               r"bâtiment|maison|plan|rakennus|talo|gebäude|haus|grundriss|edificio|casa|pianta")
@@ -485,9 +486,16 @@ def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]
             for p in printed:
                 if _norm(p) in by_norm:
                     return by_norm[_norm(p)], p
-            # Numbered labels of one room type ("BEDROOM #1", "BEDROOM #2"): the family label "BEDROOM".
+            # Numbered labels of one room type ("BEDROOM #1", "BEDROOM #2"): the family label "BEDROOM", or
+            # one member when the question gives its number in any language ("Schlafzimmer 2" → "BEDROOM #2").
+            m_no = re.search(rf"(?:{rx.pattern})\w*\s*(?:#|no\.?|nr\.?|n°|№)?\s*(\d{{1,3}})\b", probe, re.IGNORECASE)
             for p in printed:
                 if _norm(p) in by_base:
+                    if m_no:
+                        member = next((lab for lab in labels if label_base(lab) == _norm(p)
+                                       and re.search(rf"(?<!\d){m_no.group(1)}$", _plain(_norm(lab)))), None)
+                        if member:
+                            return member, member
                     return by_base[_norm(p)], p
             if quoted:
                 return quoted[0], quoted[0]
