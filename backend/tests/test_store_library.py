@@ -742,3 +742,18 @@ def test_plan_svg_gets_the_size_of_its_view_box():
     assert sized_svg(out) == out                                    # already sized: untouched
     assert sized_svg('<svg viewBox="0 0 0 5"></svg>') == '<svg viewBox="0 0 0 5"></svg>'
     assert sized_svg("<svg></svg>") == "<svg></svg>" and sized_svg("no svg") == "no svg"
+
+
+def test_listing_states_origin_and_counts_for_the_library_filter():
+    from aura import store_library as sl
+    from aura.contract import DrawingSummary
+    rows = [{"key": "20180816 - 705 Cherokee Path", "project": "opening_design/cherokee", "usable": True, "has_image": True,
+             "files": [{"file_id": "f1", "format": "pdf", "path": "a/b.pdf"}], "counts": {"room": 6, "door": 2}},
+            {"key": "letter", "project": "opening_design/x", "usable": True, "has_image": True,
+             "files": [{"file_id": "f2", "format": "pdf", "path": "a/c.pdf"}], "counts": {}}]
+    entries = sl.build_entries(rows, set(), [])
+    by = {e.key: e.summary for e in entries}
+    assert by["20180816 - 705 Cherokee Path"]["origin"] == "us_sheets" and by["20180816 - 705 Cherokee Path"]["n_rooms"] == 6
+    assert by["letter"]["n_rooms"] == 0 and by["letter"]["n_doors"] == 0
+    for s in by.values():
+        DrawingSummary.model_validate(s)

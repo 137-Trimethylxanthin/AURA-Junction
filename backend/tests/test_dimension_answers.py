@@ -58,7 +58,7 @@ def test_a_short_chain_does_not_stand_for_the_plan_when_the_outline_is_measured(
     ext = {"width_m": 11.82, "depth_m": 8.78, "source": "rooms", "estimate": False, "box": {"x": 1, "y": 2, "w": 70, "h": 50}}
     b = da.try_answer("What is the overall width of the building?", "en", _drawing(CHAIN, extent=ext))
     assert b.body["answer"] == {"kind": "quantity", "value": 11.82, "unit": "m"}
-    assert "measured on the plan, not printed" in b.body["explanation"]
+    assert "traced on the scan, not printed: an estimate" in b.body["explanation"] and b.body["basis"] == "estimate"
     assert b.body["evidence"]["boxes"][0]["id"] == "extent"
     est = da.try_answer("overall size of the plan?", "en", _drawing([], extent=ext | {"estimate": True}))
     assert est.body["answer"]["kind"] == "note" and "≈ 11.82 m" in est.body["answer"]["value"]
@@ -165,7 +165,7 @@ def test_bundled_cad_drawing_answers_room_sizes_never_a_count():
     b = da.try_answer("How wide is the Reduit 1.02?", "en", d)
     assert b.body["answer"] == {"kind": "quantity", "value": 6.0, "unit": "m"}
     b = da.try_answer("What are the dimensions of the Küche?", "en", d)
-    assert b.body["answer"]["kind"] == "note" and "4.00 m × 4.00 m" in b.body["answer"]["value"]
+    assert b.body["answer"]["kind"] == "note" and "4.00 m wide (across the page) × 4.00 m deep (up the page)" in b.body["answer"]["value"]
 
 
 def test_width_of_the_largest_room_picks_the_room_by_area():
@@ -193,3 +193,71 @@ def test_a_bare_number_in_drawing_units_is_not_quoted_as_if_it_were_metres():
     lone = _dim(8, "864", 21.946, "vertical", [[5, 20], [5, 80]], unit=None)
     b = da.try_answer("How long is the building?", "en", _drawing([lone]))
     assert "at least that deep here" in b.body["answer"]["value"] and "wide here" not in b.body["answer"]["value"]
+
+
+# ---- rooms with a label but no outline: the dimension lines printed beside the label -----------------
+
+
+def _label_room(rid, name, at, area):
+    return {"room_id": rid, "num": "", "name": name, "label_at": list(at), "area_m2": area, "area_source": "printed",
+            "points": [[at[0] - 1, at[1] - 1], [at[0] + 1, at[1] - 1], [at[0] + 1, at[1] + 1], [at[0] - 1, at[1] + 1]]}
+
+
+# 4 page percent per metre: a 5 m line is 20 percent long
+SHEET = [_dim(1, "16' - 5\"", 5.0, "horizontal", [[30, 62], [50, 62]]),       # below the bedroom: its width
+         _dim(2, "13' - 1 1/2\"", 4.0, "vertical", [[28, 44], [28, 60]]),      # left of it: its depth
+         _dim(3, "3 1/2\"", 0.089, "horizontal", [[39, 50], [39.4, 50]]),      # a wall thickness at the label
+         _dim(4, "9' - 10\"", 3.0, "horizontal", [[70, 20], [82, 20]])]        # far away
+
+
+def test_room_without_outline_takes_the_dimension_lines_beside_its_label():
+    d = _drawing(SHEET, [_label_room("r1", "BEDROOM", (40, 52), 20.0)])
+    b = da.try_answer("What are the dimensions of the bedroom?", "en", d)
+    v = b.body["answer"]["value"]
+    assert "16' - 5\" as printed = 5.00 m wide (across the page)" in v
+    assert "13' - 1 1/2\" as printed = 4.00 m deep (up the page)" in v
+    assert "agrees with the room's printed area" in v and "Width is the side across the page" in v
+    assert [m["value"] for m in b.body["measures"]] == [5.0, 4.0]
+    assert {x["id"] for x in b.body["evidence"]["boxes"]} == {"dim-01", "dim-02"}
+    # width is across the page even when it is the longer side: never the depth for a width question
+    b = da.try_answer("How wide is the bedroom?", "en", d)
+    assert b.body["answer"] == {"kind": "quantity", "value": 5.0, "unit": "m"}
+    b = da.try_answer("How deep is the bedroom?", "en", d)
+    assert b.body["answer"] == {"kind": "quantity", "value": 4.0, "unit": "m"}
+    assert b.body["trace"][-1]["tag"] == "read from the sheet · as printed"
+
+
+def test_room_without_outline_and_without_a_plausible_line_abstains_with_the_reason():
+    d = _drawing(SHEET[2:], [_label_room("r1", "BEDROOM", (40, 52), 20.0)])
+    b = da.try_answer("How wide is the bedroom?", "en", d)
+    assert b.body["answer"]["kind"] == "abstain"
+    assert "no dimension line printed beside the label is a plausible side" in b.body["explanation"]
+
+
+def test_every_length_of_a_composite_answer_is_converted_from_its_value():
+    d = _drawing(SHEET, [_label_room("r1", "BEDROOM", (40, 52), 20.0)])
+    b = da.try_answer("What are the dimensions of the bedroom?", "en", d)
+    out = units.apply(b.body, units.plan("dimensions of the bedroom in feet").unit)
+    ms = out["display"]["measures"]
+    assert [(m["label"], m["text"], m["printed"]) for m in ms] == [("width", "16.4 ft", "16' - 5\""),
+                                                                   ("depth", "13.12 ft", "13' - 1 1/2\"")]
+    assert "16.4 ft (5.00 m)" in out["answer"]["value"] and out["measures"][0]["value"] == 5.0
+    from aura.contract import AskResponse
+    AskResponse.model_validate(out | {"calls": 0, "cost_usd": 0, "latency_ms": 1, "source": "api"})
+
+
+def test_basis_says_where_the_value_comes_from():
+    from aura import answer as A
+    d = _drawing(SHEET, [_label_room("r1", "BEDROOM", (40, 52), 20.0)])
+    assert da.try_answer("How wide is the bedroom?", "en", d).body["basis"] == "printed"      # read by a model, still printed
+    scan = _drawing([], [_room("r2", "TUPAK", {"length_m": 8.27, "width_m": 4.24, "source": "measured"}, rtype="kitchen")])
+    b = da.try_answer("What are the dimensions of the kitchen?", "en", scan)
+    assert b.body["basis"] == "estimate" and "traced on the scan" in b.body["answer"]["value"]
+    assert da.try_answer("How wide is the Reduit 1.02?", "en", _bundle(BUNDLE_ROOMS)).body["basis"] == "measured"
+    # areas: printed on an upload is printed although its rooms were found by a model; bundles carry no basis
+    rooms = [{"room_id": "a", "area_source": "printed"}, {"room_id": "b", "area_source": "outline"}, {"room_id": "c"}]
+    up = LoadedDrawing(id="u", dir=None, drawing={"rooms": rooms}, engine=None)  # type: ignore[arg-type]
+    assert A.area_basis(up, ["a"], "vision") == {"basis": "printed"}
+    assert A.area_basis(up, ["a", "b"], "vision") == {"basis": "estimate"}
+    assert A.area_basis(up, ["b"], "cad_geometry") == {"basis": "measured"}
+    assert A.area_basis(up, ["c"], "cad_geometry") == {} and A.area_basis(up, [], "vision") == {}

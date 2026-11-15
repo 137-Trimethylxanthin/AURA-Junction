@@ -362,6 +362,17 @@ class BreakdownItem(_M):
     unit: str | None = None
 
 
+class Measure(_M):
+    """1.2 additive: one length an answer states (a composite answer states several), as a value."""
+
+    label: str                      # "width", "depth", "BEDROOM width"
+    value: FiniteFloat
+    unit: str = "m"
+    source: Literal["printed", "measured", "estimate"] = "printed"
+    printed: str | None = None      # the text on the sheet, e.g. 12' - 6"
+    text: str | None = None         # in the unit asked for (only inside `display`)
+
+
 class Display(_M):
     """1.2 additive: the answer shown in a unit the question asked for ("in square feet").
 
@@ -380,6 +391,7 @@ class Display(_M):
     # the metric prose as answered, so a follow-up ("and in inches?") can show it in another unit
     metric_explanation: str | None = None
     metric_note: str | None = None
+    measures: list[Measure] | None = None   # every length of a composite answer in the unit asked for
 
 
 class AskResponse(_M):
@@ -410,6 +422,10 @@ class AskResponse(_M):
     # 1.2 additive: per-sheet shares of a whole-building answer; evidence items carry their sheet's
     # `drawing_id`, `scope` is the project scope of the sheets that were asked.
     breakdown: list[BreakdownItem] | None = None
+    # 1.2 additive: where the stated value comes from, when the answer knows: printed on the sheet (quoted as
+    # printed, whoever read it), measured on exact geometry, or an estimate (measured on a scan / estimated scale)
+    basis: Literal["printed", "measured", "estimate"] | None = None
+    measures: list[Measure] | None = None  # 1.2 additive: the lengths a dimension answer states, in metres
     display: Display | None = None  # 1.2 additive: only when the question asked for a non-default unit
 
 
@@ -515,6 +531,11 @@ class DrawingSummary(_M):
     project_id: str | None = None
     floor_label: str | None = None
     floor_order: int | FiniteFloat | None = None
+    # 1.2 additive (store drawings): the collection the drawing comes from, for a source filter in the library,
+    # and how many rooms / doors were read, so sheets without a plan can be listed last without a request per card
+    origin: Literal["swiss", "ifc", "cubicasa", "us_sheets", "historic", "other"] | None = None
+    n_rooms: int | None = None
+    n_doors: int | None = None
 
 
 class ProjectFloor(_M):

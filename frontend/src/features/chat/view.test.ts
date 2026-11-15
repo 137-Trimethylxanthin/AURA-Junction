@@ -29,6 +29,19 @@ import { deriveAnswer, emptyToggles } from '@/lib/answer'
 describe('check chip', () => {
   const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
   const d = deriveAnswer(base, emptyToggles())
+  it('a printed value is labelled as printed whoever read it; a measure on a scan is an estimate', () => {
+    const d = deriveAnswer(base, emptyToggles())
+    const area = { kind: 'area' as const, value: 20.25, unit: 'm2' as const }
+    const printed = chips({ ...base, answer: area, method: 'vision', basis: 'printed' }, d, 'en')[0]
+    expect(printed.text).toBe('Read from the sheet · as printed')
+    expect(printed.tone).toBe('success')
+    expect(printed.title).toContain('quoted as printed')
+    expect(chips({ ...base, answer: area, method: 'vision', basis: 'estimate' }, d, 'en')[0].text).toBe('Estimate · measured on the scan')
+    // exact geometry and answers without a basis (the bundles) keep their chips
+    expect(chips({ ...base, method: 'cad_geometry', basis: 'measured' }, d, 'en')[0].text).toBe('Exact · CAD geometry')
+    expect(chips({ ...base, answer: area, method: 'vision' }, d, 'en')[0].text).toBe('Model estimate · vision')
+    expect(footerParts({ ...base, method: 'vision', basis: 'printed' }, 'de')[0]).toContain('vom Plan gelesen (wie gedruckt)')
+  })
   it('a DXF upload with no image says so instead of a sample check', () => {
     const r = { ...base, check: { method: 'decisions_api' as const, status: 'sample' as const, image: 'none' as const } }
     expect(chips(r, d, 'en').find((c) => c.key === 'check')?.text).toBe('No independent image to check against')
