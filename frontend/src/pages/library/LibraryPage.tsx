@@ -304,6 +304,21 @@ export default function LibraryPage() {
       )
     })
   }, [drawings, query, kind, origin, grouping, inProject])
+  const chipIds = useMemo(
+    () =>
+      kind === "all" && origin === "all"
+        ? null
+        : new Set(
+            drawings
+              .filter(
+                (d) =>
+                  (kind === "all" || fileTypeOf(d) === kind) &&
+                  (origin === "all" || originOf(d) === origin)
+              )
+              .map((d) => d.id)
+          ),
+    [drawings, kind, origin]
+  )
   const anyFacts = drawings.some((d) => d.facts)
   const offline = !base || list.state === "error"
 
@@ -427,6 +442,7 @@ export default function LibraryPage() {
                 selectedIds={selectedIds}
                 onSelectedIdsChange={setSelectedIds}
                 onSelectionMetaChange={setSelectionMetaIfChanged}
+                chipIds={chipIds}
               />
             ) : null}
 
