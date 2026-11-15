@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from aura import answer as A
-from aura import dimension_answers, tools, units
+from aura import dimension_answers, overview_answers, tools, units
 from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agent
 from aura.budget import Budget, BudgetError, watch_refusals
 from aura.cache import AnswerCache, CheckCache, answer_key
@@ -1051,6 +1051,19 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 for ev in _tool_events(dim_built):
                     yield ev
                 async for ev in _finalize_and_emit(svc, d, req, dim_built, caller, stats, meters, t0, key, allow_cache=True):
+                    yield ev
+                return
+
+        # 1c. "What does this drawing show?": the drawing's own record (title, source, format, sheet kind, page,
+        # counts of what was read), 0 model calls.
+        if not req.overrides and (scope_dump is None or scope_dump.get("kind") == "floor"):
+            over_built = overview_answers.try_answer(question, lang, d)
+            if over_built is not None:
+                yield "understood", {"detected_lang": over_built.body["detected_lang"],
+                                     "canonical_en": over_built.body["canonical_en"], "route": "template"}
+                for ev in _tool_events(over_built):
+                    yield ev
+                async for ev in _finalize_and_emit(svc, d, req, over_built, caller, stats, meters, t0, key, allow_cache=True):
                     yield ev
                 return
 
