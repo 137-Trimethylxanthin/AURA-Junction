@@ -14,7 +14,7 @@ const en = {
   counted_where: 'Counted {where}.',
   net_floor_area: 'Net floor area',
   area_where: 'Net floor area {where}.',
-  area_estimate_note: "Estimate: the drawing states no scale; areas are measured under a scale estimated from door and fixture sizes.",
+  area_estimate_note: "Estimate: the drawing states no scale; areas are measured under a scale estimated from the sizes of drawn objects (doors, fixtures, rooms).",
   rooms_included: 'Rooms included: {n}.',
   outdoor_left_out: 'Outdoor spaces left out.',
   whatif_used: 'Uses your what-if size for room {room}.',

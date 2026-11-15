@@ -283,3 +283,23 @@ def test_a_long_door_box_across_a_wall_opens_on_that_wall():
     assert axis == "v"
     g, axis = opening((100, 30, 170, 170), "window", wall, 10.0)
     assert axis == "v"
+
+
+def test_model_estimate_votes_and_outweighs_a_lone_door_estimate():
+    from jstore.interpret import scale_model as SM
+    doors = [("door", 0, 0, 48, 48)] * 4                                 # doors say 0.965 / 48 = 0.0201 m per pixel
+    alone = RP.estimate_scale(doors, [200 * 150], 620, 400)
+    ans = dict(objects=[dict(what="bathtub", box_2d=[0, 0, 100, 200], long_side_m=1.7),     # 124 px -> 0.0137
+                        dict(what="bed", box_2d=[0, 0, 400, 100], long_side_m=2.0),         # 160 px -> 0.0125
+                        dict(what="door", box_2d=[0, 0, 100, 100], long_side_m=0.85),       # 62 px -> 0.0137
+                        dict(what="nonsense", box_2d=[1, 2], long_side_m=3)],
+               image_width_m=8.5)                                                           # 620 px -> 0.0137
+    m = SM.read(ans, 620, 400)
+    assert m["n"] == 3 and abs(m["objects_mpp"] - 0.0137) < 2e-4 and abs(m["mpp"] - 0.0137) < 2e-4
+    e = RP.estimate_scale(doors, [200 * 150], 620, 400, None, m)
+    assert abs(e["mpp"] - m["mpp"]) < 1e-6 and e["votes"]["model"]["used"] and not e["votes"]["door"]["used"]
+    assert "judged by the model" in e["source"] and abs(alone["mpp"] - 0.0201) < 2e-4
+    near = RP.estimate_scale(doors, [200 * 150], 620, 400, None, dict(mpp=0.019, n=9))
+    assert near["votes"]["door"]["used"] and near["source"].startswith("doors and ")
+    assert SM.read(dict(objects=[dict(what="door", box_2d=[0, 0, 100, 100], long_side_m=0.85)]), 620, 400) is None
+    assert SM.read(None, 620, 400) is None

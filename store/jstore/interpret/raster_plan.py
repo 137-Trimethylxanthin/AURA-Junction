@@ -17,6 +17,9 @@ What it adds to what raster_rooms (rooms) and symbols (doors, windows, fixtures)
               'nominal_outline' (low confidence, ranked below every printed or measured value by reconcile):
               approximate values, never to be presented as measured.  The definition row (concept 'units', method
               'nominal_scale') says which evidence was used and the uncertainty.
+              A second approach votes with them (scale_model: the model judges the real size of drawn objects
+              and of the whole image, one cached request): on 127 scans with a stated scale the error of
+              metres per pixel falls from 6.5 % median / 52 % at the 90th percentile to 2.3 % / 10.7 %.
   2. walls    Two ways, both computed, one kept per drawing:
               pixel_walls  the thick dark ink near the rooms (opening with a disc as wide as the thinnest wall),
                            blobs that are short or lie inside a room dropped, contours as straight-edged polygons.
@@ -47,16 +50,17 @@ from __future__ import annotations
 
 import math
 import os
+import signal
 import time
 
 import cv2
 import numpy as np
 
 from ..db import DB, js
-from . import define, merge
+from . import define, merge, scale_model
 
 BY = "jstore.interpret.raster_plan"
-VERSION = "rp-2"
+VERSION = "rp-3"
 RASTER = ("png", "jpg")
 NOMINAL = "nominal_scale"
 NOMINAL_CLAIM = "nominal_outline"
@@ -86,7 +90,7 @@ ROOM_AREA_M2 = {"bedroom": (12.5, 1.15), "room": (15.4, 1.21), "living_room": (2
 ROOM_MIN_M2 = {"bedroom": 7.0, "room": 7.0, "living_room": 12.0, "living_dining": 14.0, "kitchen": 3.5}
 # Spread (sigma of the log error) of each estimator, measured on scans with a known scale; weight = 1 / sigma^2.
 SIGMA = {"printed_areas": 0.04, "dimensions": 0.05, "door": 0.22, "toilet": 0.12, "washbasin": 0.15, "bathtub": 0.11,
-         "room_types": 0.25}
+         "room_types": 0.25, "model": 0.10}
 OUTLIER = 1.3               # an estimator this factor away from the weighted median is dropped
 
 
@@ -100,7 +104,8 @@ def _wmedian(logs: list, weights: list) -> float:
     return float(lg[i])
 
 
-def estimate_scale(boxes: list, room_px: list, W: int, H: int, dims: list | None = None) -> dict:
+def estimate_scale(boxes: list, room_px: list, W: int, H: int, dims: list | None = None,
+                   model: dict | None = None) -> dict:
     """Metres per pixel from everything on the sheet that has a known or usual size.
     boxes = [(class, x0, y0, x1, y1)] (kept detections); room_px = one item per room outline: its area in pixels, or
     {"px": area in pixels, "type": room type or None, "printed_m2": area printed in the room or None};
@@ -141,6 +146,9 @@ def estimate_scale(boxes: list, room_px: list, W: int, H: int, dims: list | None
         spread = float(np.median([math.log(ROOM_AREA_M2[r["type"]][1]) for r in rooms if r.get("type") in ROOM_AREA_M2]))
         votes["room_types"] = dict(mpp=float(np.median(rt)), n=len(rt),
                                    sigma=max(SIGMA["room_types"], spread / math.sqrt(len(rt)) * 1.3))
+    if model and model.get("mpp") and model["mpp"] > 0:      # the model's judgement of drawn things (scale_model)
+        votes["model"] = dict(mpp=float(model["mpp"]), n=int(model.get("n") or 0),
+                              sigma=float(model.get("sigma") or SIGMA["model"]))
     checks: dict = {}
     if votes:
         names = list(votes)
@@ -175,8 +183,12 @@ def estimate_scale(boxes: list, room_px: list, W: int, H: int, dims: list | None
             source = "doors and fixtures" if fx and "door" in used else "fixtures" if fx else "doors"
             if "room_types" in used:
                 source += " and room sizes"
-        else:
+        elif "room_types" in used:
             source = "room sizes by type"
+        else:
+            source = ""
+        if "model" in used:
+            source = (source + " and " if source else "") + "the sizes of drawn objects judged by the model"
         unc = round(float(np.clip(unc, 0.04, 0.6)), 2)
     elif rooms:
         mpp, source = ROOM_SIDE_M / math.sqrt(float(np.median([r["px"] for r in rooms]))), "room size"
@@ -624,8 +636,14 @@ def interpret(db: DB, f: dict) -> dict:
             ln = ((d["attrs"] or {}).get("px") or {}).get("line")
             if ln and d["attrs"].get("value_m"):
                 dims.append((math.dist(ln[0], ln[1]), float(d["attrs"]["value_m"])))
+        try:                                              # the second approach: one request, cached
+            left = signal.getitimer(signal.ITIMER_REAL)[0]
+            judged = scale_model.estimate(str(path), min(scale_model.TIMEOUT_S, left - 30) if left > 0
+                                          else scale_model.TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - the estimate must not fail on a request
+            judged = None
         nominal = estimate_scale(boxes, [dict(px=r["poly"].area, type=r["label_norm"], printed_m2=r["printed_m2"])
-                                         for r in rooms], W, H, dims)
+                                         for r in rooms], W, H, dims, judged)
         mpp = nominal["mpp"]
         m = [mpp, 0.0, 0.0, 0.0, -mpp, mpp * H]
         db.run("""insert into jstore.frame (file_id, page_no, m, method) values (:f, 0, cast(:m as double precision[]), :me)
@@ -634,11 +652,12 @@ def interpret(db: DB, f: dict) -> dict:
         define(db, f["file_id"], "units", NOMINAL, dict(
             metres_per_pixel=round(mpp, 6), estimated_from=nominal["source"], votes=nominal["votes"],
             uncertainty=nominal["uncertainty"], agreement=nominal["agreement"], implausible=nominal["checks"],
-            version=VERSION,
+            model=judged, version=VERSION,
             rule="the sheet states no usable scale; a pixel is sized by the things drawn on it, one estimator each "
                  "(votes): rooms with a printed area against their outline, printed dimensions against their lines, "
                  "the median long side of the detected door, toilet, washbasin and bathtub boxes against their usual "
-                 "size, the outlines of typed rooms against the usual area of such a room.  Chosen: the weighted "
+                 "size, the outlines of typed rooms against the usual area of such a room, and the model's judgement of the "
+                 "real size of 8 to 16 drawn objects and of the whole image (model).  Chosen: the weighted "
                  "median of their logarithms after dropping estimators more than 1.3 x away (used = false); else a "
                  "median room of 3.15 m x 3.15 m, else the image as 30 m long.  Geometry, areas and lengths under "
                  "this frame are approximate; the uncertainty grows when the estimators disagree (agreement) or a "
