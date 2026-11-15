@@ -158,7 +158,10 @@ export function CommandPaletteDialog({
     )
   }, [activeProject])
 
-  const suggestions = useMemo(() => suggestionsFor(drawing, activeProject), [drawing, activeProject])
+  const suggestions = useMemo(
+    () => suggestionsFor(drawing, activeProject, crossPlanScope),
+    [drawing, activeProject, crossPlanScope],
+  )
 
   const hasExportableEvidence = Boolean(
     activeTurn?.response &&

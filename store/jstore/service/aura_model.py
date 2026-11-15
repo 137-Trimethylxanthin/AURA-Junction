@@ -722,7 +722,10 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
             except Exception:  # noqa: BLE001
                 at = [_r(v) for v in g.centroid.coords[0]] if not g.is_empty else at
         area = float(r["area_m2"]) if r["area_m2"] is not None and math.isfinite(float(r["area_m2"])) else None
-        room = dict(room_id=rid, num=num, name=(r["label"] or r["room_type"] or "Room").strip() or "Room",
+        # a space the sheet prints no label for is a room all the same: it is named as such, never left blank
+        room = dict(room_id=rid, num=num, name=((r["label"] or "").strip()
+                                                 or ("" if r["room_type"] == "room" else (r["room_type"] or "").strip()) or NO_LABEL),
+                    unlabelled=(not (r["label"] or "").strip()) or None,
                     unit=r["apartment"] or None, area_m2=round(area, 2) if area is not None else None,
                     outdoor=not r["is_indoor"], points=pts, label_at=at,
                     area_source=(None if area is None else
@@ -989,10 +992,13 @@ def dimension_doc(it: dict) -> dict:
                        room_id=it["room_id"], page_no=it["page_no"], line=it["line"], **(it["box"] or {})))
 
 
+NO_LABEL = "Room without label"   # the name of a room the sheet prints no label for (`unlabelled` in the document)
+
+
 def room_poly(r: dict) -> dict:
     """The RoomPoly of the contract (`area_m2` stays null when unknown; every other absent field is omitted)."""
     out = _clean({k: r.get(k) for k in ("room_id", "num", "name", "unit", "outdoor", "points", "label_at", "area_source",
-                                        "size", "room_type")})   # room_type: what the store reads the label as
+                                        "size", "room_type", "unlabelled")})   # room_type: what the store reads the label as
     out["area_m2"] = r["area_m2"]
     return out
 
@@ -1273,7 +1279,7 @@ def _scan_plan_svg(m: Model) -> str:
         xs, ys = [p[0] * sx for p in r["points"]], [p[1] * sy for p in r["points"]]
         x, y = r["label_at"][0] * sx, r["label_at"][1] * sy
         lines = [(r["num"], 700)] if r["num"] else []
-        if r["name"] and r["name"] != "Room":
+        if r["name"] and r["name"] not in ("Room", NO_LABEL):
             lines.append((r["name"][:28], 400))
         if area_text(r):
             lines.append((area_text(r), 400))
@@ -1369,7 +1375,7 @@ def plan_svg(db: DB, m: Model) -> str:
         size = max(5.0, min(11.0, (max(xs) - min(xs)) / 7.0, (max(ys) - min(ys)) / 4.0))
         x, y = r["label_at"][0] * sx, r["label_at"][1] * sy
         lines = [(r["num"], 700)] if r["num"] else []
-        if r["name"] and r["name"] != "Room":
+        if r["name"] and r["name"] not in ("Room", NO_LABEL):
             lines.append((r["name"][:28], 400))
         if r["area_m2"] is not None:
             lines.append((f"{r['area_m2']:.2f} m²", 400))

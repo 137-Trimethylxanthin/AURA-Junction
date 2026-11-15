@@ -30,3 +30,9 @@ def test_room_poly_exports_the_size():
     assert am.room_poly(r)["size"]["width_m"] == 3.0
     r.pop("size")
     assert "size" not in am.room_poly(r)
+
+
+def test_room_poly_marks_a_room_without_a_printed_label():
+    r = dict(room_id="e1", num="", name=am.NO_LABEL, outdoor=False, points=[], label_at=[1, 1], area_m2=4.0, unlabelled=True)
+    assert am.room_poly(r)["unlabelled"] is True and am.room_poly(r)["name"] == "Room without label"
+    assert "unlabelled" not in am.room_poly(r | {"unlabelled": None, "name": "OH"})

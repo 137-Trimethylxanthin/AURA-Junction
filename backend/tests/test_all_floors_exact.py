@@ -133,3 +133,16 @@ def test_this_floor_is_recognised_in_finnish_inflections():
               "Montako huonetta tällä kerroksella on?", "How many windows are on this storey?"):
         assert THIS_FLOOR.search(q), q
     assert not THIS_FLOOR.search("Montako ovea rakennuksessa on?")
+
+
+def test_room_count_says_how_many_rooms_have_no_label():
+    rooms = [_room("1", "OH", 20.0), _room("2", "MH", 10.0),
+             _room("3", "Room without label", 4.0) | {"unlabelled": True}]
+    d = _floor("scan", rooms, kind="raster")
+    tr = tools.count_objects(d, "room", {"kind": "floor"})
+    body = A.count("How many rooms are there?", "en", d, tr, {"kind": "floor"}, None).body
+    assert body["answer"] == {"kind": "count", "value": 3, "subject": "room"}
+    assert body["explanation"].startswith("3 rooms (2 labelled, 1 without a label).")
+    plain = _floor("cad", rooms[:2])
+    body = A.count("How many rooms are there?", "en", plain, tools.count_objects(plain, "room"), {"kind": "floor"}, None).body
+    assert "explanation" not in body
