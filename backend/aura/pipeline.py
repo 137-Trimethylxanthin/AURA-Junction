@@ -1089,7 +1089,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         is_project = eff_scope.get("kind") == "project"
         dkind = d.drawing.get("kind")
         # A PDF/image the drawing store indexed answers exact templates from its index like CAD.
-        indexed = dkind in ("cad_dxf", "ifc") or bool(d.drawing.get("evidence_method"))
+        # ... and so does every sheet the store serves: one without rooms or doors answers a count with a zero and its reason.
+        indexed = (dkind in ("cad_dxf", "ifc") or bool(d.drawing.get("evidence_method"))
+                   or getattr(d, "store_library", False) is True)
         is_pdf = d.drawing.get("source_ext") == ".pdf"
         is_deictic_region = eff_scope.get("kind") == "region" and bool(DEICTIC_SIMILARITY.search(question))
 
