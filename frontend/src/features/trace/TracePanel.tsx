@@ -9,6 +9,7 @@ import { useUi } from '@/i18n/uiLang'
 import { cn } from '@/lib/utils'
 import { callsText, fmtUsd } from '@/features/chat/view'
 import { traceDetail } from './detail'
+import { traceTitle } from './titles'
 
 const ROUTE_KEY: Record<string, 'tr_route_exact' | 'tr_route_cache' | 'tr_route_agent'> = {
   exact: 'tr_route_exact',
@@ -213,7 +214,7 @@ export function TracePanel() {
               >
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span aria-hidden className={cn('size-2 shrink-0 rounded-full', k.dot)} />
-                  <strong className="text-[13px] font-semibold">{node.title}</strong>
+                  <strong className="text-[13px] font-semibold">{traceTitle(node.title, lang)}</strong>
                   <span className="rounded-full bg-muted px-2 py-px text-xs text-muted-foreground">{node.tag}</span>
                   <span className="flex-1" />
                   {conf ? <span className={cn('num text-xs font-semibold', k.conf)}>{conf}</span> : null}

@@ -195,14 +195,26 @@ class Base:
         return mul((100.0 / self.w, 0, 0, 0, 100.0 / self.h, 0), self.to_image)
 
 
-def is_fragment(rooms: list[dict], items: list[dict], share: float = 0.4, min_items: int = 4) -> bool:
+def is_fragment(rooms: list[dict], items: list[dict], share: float = 0.4, min_items: int = 4,
+                sparse_rooms: int = 6, sparse_fill: float = 0.3) -> bool:
     """The rooms read on an image plan cover only a corner of what was detected on it: the doors, windows and
     fixtures spread over an area much larger than the rooms do (few labels were read).  A plan drawn from such
     a model would show a fragment of the building, so the scan itself stays the picture."""
     rx = [x for r in rooms for x, _ in (r.get("points") or [])]
     ry = [y for r in rooms for _, y in (r.get("points") or [])]
     boxes = [i["box"] for i in items if isinstance(i.get("box"), dict)]
-    if not rx or len(boxes) < min_items:
+    if not rx:
+        return False
+    # a handful of rooms scattered over the sheet with most of the space between them unread: the few labels
+    # that were legible (a low-resolution scan) do not make a plan
+    outlined = [r["points"] for r in rooms if len(r.get("points") or []) >= 3]
+    span = (max(rx) - min(rx)) * (max(ry) - min(ry))
+    if 1 <= len(outlined) <= sparse_rooms and span > 0:
+        filled = sum(abs(sum(p[i][0] * p[(i + 1) % len(p)][1] - p[(i + 1) % len(p)][0] * p[i][1]
+                             for i in range(len(p)))) / 2 for p in outlined)
+        if filled < sparse_fill * span:
+            return True
+    if len(boxes) < min_items:
         return False
     ax = rx + [b["x"] for b in boxes] + [b["x"] + b["w"] for b in boxes]
     ay = ry + [b["y"] for b in boxes] + [b["y"] + b["h"] for b in boxes]

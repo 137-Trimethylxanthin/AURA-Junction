@@ -137,3 +137,6 @@ def test_an_image_plan_whose_rooms_cover_a_corner_of_the_detections_is_a_fragmen
     assert not is_fragment([room(8, 8, 40, 80), room(50, 8, 40, 80)], spread)  # the rooms span the detections
     assert not is_fragment([room(40, 40, 15, 15)], spread[:3])               # too few detections to judge
     assert not is_fragment([], spread)
+    # two rooms far apart with nothing read between them: not a plan either
+    assert is_fragment([room(5, 5, 10, 10), room(70, 70, 12, 12)], [])
+    assert not is_fragment([room(5, 5, 40, 40), room(46, 5, 40, 40)], [])    # two rooms side by side fill their span
