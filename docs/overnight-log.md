@@ -375,3 +375,56 @@ library thumbnails of scans show the scan, not the rebuilt plan.
 `on/g-walkthrough-fixes`, `on/h-scan-quality`, `on/i-answers-polish`, `on/j-plan-polish`,
 `on/k-demo-paths`, `on/l-final-fixes`, `on/m-last-polish`, `on/n-regressions`) are merged into it
 and exist only locally; their worktrees are under `/root/aura-work/` on the devbox.
+
+### 02:50–03:10 UTC — wave 5: PDF rooms and pages, scale by a second approach, duplicates, language
+
+**Stream O — PDF sheets (`on/o-pdf-rooms`)**
+- Two approaches for outlining rooms on a PDF sheet were compared on six US sheets. Outlining on
+  the page render with the scan method (a model-drawn polygon per labelled room, snapped to drawn
+  lines) won clearly: rooms whose outline is within 10 % of their printed area: Cherokee 6 of 6,
+  1810 S Park 9 of 9 and 3 of 3 and 7 of 8, Xcel 18 of 18, Laundry Mat 4 of 4. The existing vector
+  free-space method on the same sheets: 1 of 6 on Cherokee, 0 of 18 on Xcel.
+- Answers that abstained now work with no model call: "How wide is the bedroom?" 5.21 m (estimate,
+  traced on the sheet image), office 4.91 × 5.11 m, utility 24.90 m² as printed, repair garage
+  13.55 × 8.71 m; the room polygon is highlighted on the page.
+- Each further page of a multi-page PDF that has content is its own library entry ("… · page 6",
+  "page 6 of 13 · 3 rooms · 2 doors"); a set opens on the page with the most rooms. Pages are not
+  grouped as floors, because project answers would sum rooms repeated on several sheets.
+- Not working: "How wide is the stair?", "… the mezzanine?" (label "MEZZ.").
+
+**Stream P — scans (`on/p-scale-dedupe`)**
+- Scale by a second approach: one model request per drawing names 8–16 objects with their real
+  size and the real width of the whole image. Error of metres per pixel on 127 live scans with a
+  stated scale (printed areas withheld):
+
+  | Estimator | median | 75th | 90th | off by more than 25 % |
+  |---|---|---|---|---|
+  | before (doors, fixtures, room sizes) | 6.5 % | 14.6 % | 52.3 % | 16.5 % |
+  | model, median of objects | 2.9 % | 5.2 % | 13.2 % | 4.7 % |
+  | adopted: model as one more voter | 2.3 % | 5.0 % | 10.7 % | 4.7 % |
+
+  Caveat: these sheets state a scale, so the model may lean on scale bars or dimensions that
+  scale-less scans lack; with such objects dropped the figures are 2.9 % / 14.4 %.
+- Duplicate detections: the pairs are nested boxes (a run of windows boxed again, a shower head
+  inside its cubicle). They are removed at detection time and by
+  `python -m jstore.cli dedupe-detections` (reversible with `--restore`; CAD entities untouched).
+  On the live store: 86 entities on 37 drawings (30 doors, 40 windows, 16 showers). Not validated
+  against CAD truth.
+- Not done: rescuing real balconies dropped by the false-room guard (a door-adjacency rule would
+  restore 46 of 314, some of them doubtful).
+
+**Stream Q — language and UI (`on/q-language-ui`)**
+- A manual group saved through the UI was checked in a browser on a private instance: two Swiss
+  floors, "All 2 floors": 38 doors, 453.12 m²; the same after a reload; ungroup removes it.
+- Counts line, "page N of M", source chips and aria labels follow the interface language (de/fr/fi);
+  Italian answer sentences for room counts, ranking and "0 … model file contains no …". The
+  interface itself has no Italian; composed dimension sentences are still English.
+- SQL-path answers explain themselves in plain sentences ("This is the perimeter of one room. It
+  was measured on the room outline traced from the scan, so it is an estimate.") and highlight the
+  room; the rule and the SQL stay in the reasoning tree.
+- Molio all-floors evidence is complete (119 rows); library thumbnails of scans show the rebuilt plan.
+
+Merged and deployed as `805eaae` (suites: backend 752 passed / 34 skipped, store 189 passed /
+1 skipped, frontend 360 passed). On the live store: backup `store-20261115T0308-pre-wave5.dump`;
+duplicates removed (86); re-interpretation started for the US sheet PDFs (new model calls for room
+outlines) and for the 189 image drawings with an estimated scale (one model call each).
