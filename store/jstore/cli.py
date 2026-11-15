@@ -54,6 +54,8 @@ def main() -> None:
     u.add_argument("--drawing")
     u.add_argument("--dry-run", action="store_true")
     u.add_argument("--restore", action="store_true", help="put them back")
+    rl = sub.add_parser("relabel-rooms", help="re-type labelled rooms after the room vocabulary changed")
+    rl.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
     if a.cmd == "init":
@@ -78,6 +80,21 @@ def main() -> None:
                    and attrs->>'by' = 'jstore.interpret.raster_plan' order by 1""")]
             out = {k: n for k in keys if (n := len(space_guard.prune(db, k, a.dry_run)))}
         print(json.dumps(dict(drawings=len(out), spaces=sum(out.values()), dry_run=a.dry_run, by_drawing=out), indent=1))
+    elif a.cmd == "relabel-rooms":
+        from .interpret import vocab
+        with DB() as db:
+            rows = db.run("""select entity_id, label, label_norm from jstore.entity
+                             where kind = 'room' and status = 'active' and label is not null""")
+            change = [(r["entity_id"], t) for r in rows
+                      if (t := vocab.room_type(r["label"])) is not None and t != r["label_norm"]
+                      and r["label_norm"] in (None, "room", "laundry", "storage")]   # only fills in or sharpens a type
+            if not a.dry_run:
+                for eid, t in change:
+                    db.run("update jstore.entity set label_norm = :t where entity_id = :e", t=t, e=eid)
+        by: dict = {}
+        for _, t in change:
+            by[t] = by.get(t, 0) + 1
+        print(json.dumps(dict(rooms=len(change), by_type=by, dry_run=a.dry_run), indent=1))
     elif a.cmd == "dedupe-detections":
         from . import detection_dupes
         with DB() as db:

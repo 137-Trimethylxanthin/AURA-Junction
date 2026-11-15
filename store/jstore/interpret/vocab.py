@@ -68,7 +68,7 @@ ROOM_TYPES = [
     ("kitchen", r"kuche|cuisine|cucina|kitchen|keittio|keittokomero|\bk\b|\bkt\b|\bkk\b|\bavok\b|\bavokeittio"),
     ("toilet", r"\bwc\b|toilet|gabinetto"),
     ("bathroom", r"\bbad\b|badezimmer|\bbain|bagno|bath|dusche|douche|doccia|shower|kylpyhuone|\bkph\b|\bkh\b|pesuh|\bph\b|\bsh\b|suihkuh"),
-    ("sauna", r"sauna|\bs\b|\bsa\b|loyly"),
+    ("sauna", r"sauna|loyly|(?:^|[/+] ?)sa?\.?(?:$| ?[/+-])"),     # a lone "S" / "SA", not "WOMEN'S" or "S. Transept"
     ("laundry", r"wasch|buanderie|lavanderia|laundry|kodinhoito|\bkhh\b"),
     ("entrance", r"eingang|entree|ingresso|entrance|entry|foyer|eteinen|tuulikaappi|\bet\b|\btk\b|windfang"),
     ("hall", r"(multi.?purpose|sports?|assembly|main|dining|school|gym) hall|\baula\b|mehrzweck(halle|raum)|turnhalle|juhlasali"),
