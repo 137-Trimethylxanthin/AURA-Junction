@@ -595,6 +595,45 @@ def dedupe(cands: list[dict]) -> None:
             seen.append(c)
 
 
+NESTED_SHARE = 0.6        # of the smaller box inside the larger: one of the two is the other again
+
+
+def nested_duplicates(items: list[tuple]) -> dict[int, int]:
+    """{index dropped: index kept} among boxes of ONE page: two boxes of the same label where more than NESTED_SHARE
+    of the smaller lies inside the larger show one thing twice - a box around a whole run of windows and the
+    windows in it, a door and its leaf again, a shower and the room it stands in (merge() leaves these apart when
+    one is far smaller).  The copy whose area is farther (as a ratio) from the usual area of that label on the page
+    goes; on a tie the one with fewer votes, then the lower score.  items = [(label, box, votes, score)]."""
+    by_label: dict[str, list[int]] = {}
+    for i, it in enumerate(items):
+        if _area(it[1]) > 0:
+            by_label.setdefault(it[0], []).append(i)
+    out: dict[int, int] = {}
+    for idx in by_label.values():
+        if len(idx) < 2:
+            continue
+        usual = float(np.median([_area(items[i][1]) for i in idx]))
+        odd = {i: abs(math.log(_area(items[i][1]) / usual)) for i in idx}
+        order = sorted(idx, key=lambda i: (round(odd[i], 6), -(items[i][2] or 0), -(items[i][3] or 0), i))
+        kept: list[int] = []
+        for i in order:                                     # the most usual first; the odd ones meet them
+            a = items[i][1]
+            twin = next((j for j in kept if _inter(a, items[j][1]) >
+                         NESTED_SHARE * min(_area(a), _area(items[j][1]))), None)
+            if twin is None:
+                kept.append(i)
+            else:
+                out[i] = twin
+    return out
+
+
+def drop_nested(cands: list[dict]) -> None:
+    """nested_duplicates() on the kept candidates of a page: the odd copy is not kept."""
+    kept = [c for c in cands if c["kept"]]
+    for i, j in nested_duplicates([(c["label"], c["box"], c.get("votes"), c.get("score")) for c in kept]).items():
+        kept[i]["kept"], kept[i]["why"] = False, f"the same {kept[i]['label']} as a candidate it overlaps (drawn once)"
+
+
 def load(image) -> Image.Image:
     im = image if isinstance(image, Image.Image) else Image.open(image)
     if im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info):
@@ -683,6 +722,7 @@ def detect(image, budget_s: float | None = None, verify: bool = True, force: boo
         for c in todo:
             judge(c)
         dedupe(cands)
+        drop_nested(cands)
     out["candidates"] = cands
     out["objects"] = [dict(label=c["label"], box=c["box"], score=c["score"], view=c["view"]) for c in cands if c["kept"]]
     return done()

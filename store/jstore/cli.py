@@ -50,6 +50,10 @@ def main() -> None:
     g.add_argument("--drawing")
     g.add_argument("--dry-run", action="store_true")
     g.add_argument("--restore", action="store_true", help="put them back")
+    u = sub.add_parser("dedupe-detections", help="count a door, window or fixture detected twice on a page image once")
+    u.add_argument("--drawing")
+    u.add_argument("--dry-run", action="store_true")
+    u.add_argument("--restore", action="store_true", help="put them back")
     a = ap.parse_args()
 
     if a.cmd == "init":
@@ -74,6 +78,22 @@ def main() -> None:
                    and attrs->>'by' = 'jstore.interpret.raster_plan' order by 1""")]
             out = {k: n for k in keys if (n := len(space_guard.prune(db, k, a.dry_run)))}
         print(json.dumps(dict(drawings=len(out), spaces=sum(out.values()), dry_run=a.dry_run, by_drawing=out), indent=1))
+    elif a.cmd == "dedupe-detections":
+        from . import detection_dupes
+        with DB() as db:
+            if a.restore:
+                print(json.dumps(dict(restored=detection_dupes.restore(db, a.drawing))))
+                return
+            out, kinds = {}, {}
+            for k in ([a.drawing] if a.drawing else detection_dupes.keys(db)):
+                drop = detection_dupes.prune(db, k, a.dry_run)
+                if drop:
+                    out[k] = len(drop)
+                    for r in db.run("select kind, count(*) as n from jstore.entity where entity_id = any(cast(:i as bigint[])) group by 1",
+                                    i=list(drop)):
+                        kinds[r["kind"]] = kinds.get(r["kind"], 0) + r["n"]
+        print(json.dumps(dict(drawings=len(out), duplicates=sum(out.values()), by_kind=kinds, dry_run=a.dry_run,
+                              by_drawing=out), indent=1))
     elif a.cmd == "interpret":
         with DB() as db:
             keys = [a.drawing] if a.drawing else [r["drawing_key"] for r in db.run(
