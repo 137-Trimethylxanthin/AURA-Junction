@@ -11,7 +11,7 @@ Branch: `simon/overnight-blueprint-improvements` (pushed). Every fix is its own 
 | 3 | 3D of image uploads extruded ink pixels | The 3D view reads the new `plan.svg` like a CAD plan: real walls, room floors with labels. | `frontend/src/features/viewer3d/viewer3d.test.ts` (vector plan case) |
 | 4 | Rooms from images were boxes | Each labelled room takes the drawn region its label sits in (L-shapes etc.); several labels in one open region split it by nearest label. Area = polygon × scale (net, inside the walls); printed areas are never replaced. | `test_rebuild.py` (L-room net area within 5 %) |
 | 5 | Unit conversion | "convert 12 m² to sq ft" → 129.17 sq ft by code (EN/DE/FR/FI/IT, `12'6"`), 0 model calls. Header menu → "Units in answers": Metric (default) or Imperial; imperial shows every area/length answer in ft / sq ft with the metric value beside it. "area of bedroom 2 in square feet" answers in m² plus a `converted` value the card shows big, with the metric value beside it. Metric stays the default; "in m²" questions are untouched. | `backend/tests/test_units.py`, `frontend/src/lib/units.test.ts` |
-| 6 | Read dimensions/areas from the drawing | Dimension strings (metric and ft-in) are read from the pixels (RapidOCR + one cached Gemini pass, endpoints snapped to the drawn ticks), give the scale when chains agree with the overall, and answer "overall dimensions", "how wide", "length of wall #1" with 0 model calls. For image/PDF uploads the reasoning step now also gets the sheet image and the printed text layer, so it reads printed facts the index lacks. | `store/tests/test_dimensions.py` (43), `backend/tests/test_dimensions_answer.py` |
+| 6 | Read dimensions/areas from the drawing | Dimension strings (metric and ft-in) are read from the pixels (RapidOCR + one cached Gemini pass, endpoints snapped to the drawn ticks), give the scale when chains agree with the overall, and answer "overall dimensions", "how wide", "length of wall #1" with 0 model calls. For image/PDF uploads the reasoning step now also gets the sheet image and the printed text layer, so it reads printed facts the index lacks. | `store/tests/test_dimensions.py` (45), `backend/tests/test_dimensions_answer.py` |
 
 Other fixes found on the way:
 - An area question naming one thing the drawing has no room for ("area of the Lagerhalle") no longer returns the whole-floor total.
@@ -77,6 +77,9 @@ rendered storey cannot answer; they abstain honestly.
 ## Demo script (≈5 min)
 
 1. `scripts/dev.sh` (needs docker or podman; Gemini key in `~/.config/junction/env`). Open http://localhost:5173/app.
+   The demo uses fresh uploads only. The bundled library drawings (swiss-46639 etc.) are served by the API only when
+   `backend/build/drawings*` exists (build it as before, or set `AURA_BUILD_DIR`); without it the frontend shows the
+   bundled drawing from its local data.
 2. Upload `b1.jpg` and `b2.jpeg` together on the upload page (one project). Wait for "Indexed" (~2–3 min each).
 3. Open b2: show the plan, toggle **Compare with original** (swipe photo ↔ vector rebuild, aligned), then **3D**.
 4. Ask: "Show all bedrooms" (polygons light up), "What is the area of bedroom 2 in square feet?", "What are the overall dimensions of the building?", "convert 12 m² to sq ft". Then switch the header menu (EN) → Units → Imperial and ask "How big is bedroom 1?" → 251.77 sq ft = 23.39 m².
