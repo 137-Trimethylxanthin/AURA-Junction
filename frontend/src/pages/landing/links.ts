@@ -7,3 +7,5 @@ export const THIRD_PARTY_URL = `${REPO_URL}/blob/main/THIRD_PARTY.md`
 export const APP_ROUTE = "/app"
 /** The sample drawing: the /demo route opens one the server has (the bundled one without a backend). */
 export const DEMO_ROUTE = "/demo"
+/** The recorded demo video. */
+export const DEMO_VIDEO_URL = "https://youtu.be/xUSIuCK70Go"

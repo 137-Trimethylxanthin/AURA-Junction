@@ -11,6 +11,7 @@ import {
   ArrowDownIcon,
   ArrowRightIcon,
   MousePointerClickIcon,
+  PlayIcon,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -34,7 +35,7 @@ import {
   fmtInt,
   type Fact,
 } from "./facts"
-import { DEMO_ROUTE } from "./links"
+import { DEMO_ROUTE, DEMO_VIDEO_URL } from "./links"
 import { CountUp, Reveal, RevealItem } from "./motion"
 import { usePrefersReducedMotion } from "./springs"
 
@@ -163,6 +164,12 @@ function Hero() {
                 Try it on the sample drawing
                 <ArrowRightIcon data-icon="inline-end" />
               </Link>
+            </Button>
+            <Button asChild variant="outline" className={PAGE_BTN}>
+              <a href={DEMO_VIDEO_URL} target="_blank" rel="noopener noreferrer">
+                <PlayIcon data-icon="inline-start" />
+                Watch the demo video
+              </a>
             </Button>
             <Button asChild variant="outline" className={PAGE_BTN}>
               <a href="#how">
