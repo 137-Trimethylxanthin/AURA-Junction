@@ -1,3 +1,4 @@
+import type { UiKey } from "@/i18n/strings"
 import type { DrawingSummary } from "@/api/contract"
 
 /** The collection a library entry comes from: the source filter beside the file-type chips. */
@@ -13,6 +14,20 @@ export const ORIGIN_LABEL: Record<Origin, string> = {
   historic: "Historic scans",
   uploads: "Uploads",
   other: "Other",
+}
+
+const ORIGIN_KEY: Partial<Record<Origin, UiKey>> = {
+  ifc: "origin_ifc",
+  us_sheets: "origin_us_sheets",
+  historic: "origin_historic",
+  uploads: "origin_uploads",
+  other: "origin_other",
+}
+
+/** The chip of a source in the interface language; the names of data sets (Swiss Dwellings, CubiCasa) stay. */
+export function originLabel(o: Origin, tu: (k: UiKey) => string): string {
+  const key = ORIGIN_KEY[o]
+  return key ? tu(key) : ORIGIN_LABEL[o]
 }
 
 /** The server says it for store drawings; bundles and uploads are told from what the summary already carries. */

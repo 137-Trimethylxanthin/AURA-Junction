@@ -1,3 +1,5 @@
+import { uiLang } from '@/i18n/uiLang'
+import { NO_LABEL, roomDisplayName } from '@/lib/subtitle'
 import { useMemo } from 'react'
 import { useStore } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
@@ -38,7 +40,24 @@ export const selectActiveProject = (s: AppState) => s.activeProject
 export const selectCrossPlanScope = (s: AppState) => s.crossPlanScope
 export const selectFocusedGroupId = (s: AppState) => s.ui.focusedGroupId
 export const selectDrawingById = (s: AppState) => s.drawingById
-export const selectDrawing = (s: AppState) => s.session.drawing
+const localized = new WeakMap<object, Map<string, AppState['session']['drawing']>>()
+/**
+ * The open drawing as it is shown: a room the sheet prints no label for carries the store's English
+ * "Room without label", shown in the interface language (plan, 3D, lists). Same object while nothing changes.
+ */
+export const selectDrawing = (s: AppState) => {
+  const d = s.session.drawing
+  const lang = uiLang.get()
+  if (lang === 'en' || !d?.rooms?.some((r) => r.name === NO_LABEL)) return d
+  let per = localized.get(d)
+  if (!per) localized.set(d, (per = new Map()))
+  let out = per.get(lang)
+  if (!out) {
+    out = { ...d, rooms: d.rooms.map((r) => (r.name === NO_LABEL ? { ...r, name: roomDisplayName(r.name, lang) } : r)) }
+    per.set(lang, out)
+  }
+  return out
+}
 export const selectSessionLang = (s: AppState) => s.session.lang
 export const selectCanUndo = (s: AppState) => s.undoStack.length > 0
 export const selectZoom = (s: AppState) => s.ui.zoom

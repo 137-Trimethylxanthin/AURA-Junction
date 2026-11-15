@@ -305,7 +305,7 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
             answer_body = (f"{value} {noun(subject, value)} ({value - n_bare} labelled, {n_bare} without a label). "
                            "Each room is lit on the plan for you to check.")
             # the sentence people read, in the language they asked in (the trace stays English)
-            said = UNLABELLED_NOTE.get(contract_lang(lang)) if value > 1 else None
+            said = UNLABELLED_NOTE.get(said_lang(lang)) if value > 1 else None
             unlabelled_note = said.format(n=value, a=value - n_bare, b=n_bare) if said else answer_body
         if subject == "apartment":
             canonical = ("How many apartments are on this floor plan" if scope.get("kind") == "floor"
@@ -320,7 +320,7 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                   "kind": "model" if vision else "exact", "evidence_ids": answer_ids})
     evidence: dict = {"boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
                       "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]}
-    if tr.meta.get("rows") and not tr.boxes:
+    if tr.meta.get("rows") and (not tr.boxes or tr.meta.get("rows_beside_boxes")):
         evidence["rows"] = tr.meta["rows"]  # IFC elements without a 2D footprint
     if tr.groups:
         evidence["groups"] = [g.model_dump(exclude_none=True) for g in tr.groups]
@@ -345,7 +345,7 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
         n_out = sum(1 for r in tr.rooms if not r.included and r.room_id in outdoor
                     and not getattr(r, "drawing_id", None))
         if n_out:
-            one, many = OUTDOOR_NOTE.get(contract_lang(lang), OUTDOOR_NOTE["en"])
+            one, many = OUTDOOR_NOTE.get(said_lang(lang), OUTDOOR_NOTE["en"])
             note = (one if n_out == 1 else many).format(n=n_out)
             body["explanation"] = f"{body['explanation']} {note}" if body.get("explanation") else note
     return Built(body, [tr], check_ids, subject)
@@ -469,11 +469,18 @@ def quantity(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: 
     return Built(body, [tr], ids if is_agent else [], tr.subject)
 
 
+def said_lang(lang: str) -> str:
+    """The language an answer sentence is written in: the question's, Italian included (the contract's
+    `Lang` has no Italian, so the interface around an Italian answer stays English)."""
+    return "it" if lang == "it" else contract_lang(lang)
+
+
 #: "10 rooms (8 labelled, 2 without a label)" in the other interface languages
 UNLABELLED_NOTE = {
     "de": "{n} Räume ({a} beschriftet, {b} ohne Beschriftung). Jeder Raum ist im Plan markiert, zum Nachprüfen.",
     "fr": "{n} pièces ({a} avec libellé, {b} sans libellé). Chaque pièce est mise en évidence sur le plan pour vérification.",
     "fi": "{n} huonetta ({a} nimettyä, {b} ilman nimeä). Jokainen huone on korostettu pohjapiirroksessa tarkistusta varten.",
+    "it": "{n} locali ({a} con etichetta, {b} senza etichetta). Ogni locale è evidenziato sulla pianta per la verifica.",
 }
 
 #: "(1 outdoor space not counted)": why a room count is lower than the number of spaces on the sheet
@@ -482,6 +489,7 @@ OUTDOOR_NOTE = {
     "de": ("({n} Außenbereich nicht mitgezählt)", "({n} Außenbereiche nicht mitgezählt)"),
     "fr": ("({n} espace extérieur non compté)", "({n} espaces extérieurs non comptés)"),
     "fi": ("({n} ulkotilaa ei laskettu mukaan)", "({n} ulkotilaa ei laskettu mukaan)"),
+    "it": ("({n} spazio esterno non contato)", "({n} spazi esterni non contati)"),
 }
 
 #: "0 windows: the model file contains no window elements" in the other interface languages
@@ -489,6 +497,7 @@ NONE_IN_MODEL = {
     "de": "0 {things}: {where} enthält keine {element}-Elemente.",
     "fr": "0 {things} : {where} ne contient aucun élément de type {element}.",
     "fi": "0 {things}: {where} ei sisällä {element}-elementtejä.",
+    "it": "0 {things}: {where} non contiene elementi di tipo {element}.",
 }
 _NONE_WORDS = {
     "de": {"door": ("Türen", "Tür"), "window": ("Fenster", "Fenster"), "room": ("Räume", "Raum"),
@@ -497,12 +506,14 @@ _NONE_WORDS = {
            "floor": "cet étage de la maquette", "model": "la maquette"},
     "fi": {"door": ("ovea", "ovi"), "window": ("ikkunaa", "ikkuna"), "room": ("huonetta", "tila"),
            "floor": "mallitiedoston tämä kerros", "model": "mallitiedosto"},
+    "it": {"door": ("porte", "porta"), "window": ("finestre", "finestra"), "room": ("locali", "locale"),
+           "floor": "questo piano del modello", "model": "il file del modello"},
 }
 
 
 def none_in_model_said(lang: str, subject: str, summary: str) -> str:
     """The reason of a real zero from a model file, in the language of the question (English otherwise)."""
-    code = contract_lang(lang)
+    code = said_lang(lang)
     words = _NONE_WORDS.get(code, {})
     if code not in NONE_IN_MODEL or subject not in words or "contains no" not in summary:
         return summary
@@ -520,6 +531,8 @@ RANK_SAID = {
            "next": " ; vient ensuite {name} avec {area}", "tied": " (à égalité)", "estimate": "estimation", "room": "Pièce"},
     "fi": {"max": "{name} on suurin huone: {area}", "min": "{name} on pienin huone: {area}",
            "next": "; seuraavana on {name}, {area}", "tied": " (tasan)", "estimate": "arvio", "room": "Huone"},
+    "it": {"max": "{name} è il locale più grande: {area}", "min": "{name} è il locale più piccolo: {area}",
+           "next": "; segue {name} con {area}", "tied": " (a pari merito)", "estimate": "stima", "room": "Locale"},
 }
 
 #: an id the store gives a room or thing that carries no number on the sheet ("e143313"): never shown to people
@@ -628,7 +641,7 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
              + (f"; next is {_n(ru, 'room')} at {_a(ru)}" if ru else "")
              + (" (tied)" if m.get("tie") else "") + ".")
     # the sentence people read, in the language they asked in (the trace stays English); only for plain rooms
-    t = RANK_SAID.get(contract_lang(lang)) if what == "room" else None
+    t = RANK_SAID.get(said_lang(lang)) if what == "room" else None
     said = value
     if t:
         def _al(room: dict) -> str:

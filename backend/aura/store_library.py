@@ -691,19 +691,36 @@ class StoreLibrary:
                     return _cached(d.dir / f"original-{tag}.png", lambda: self.source.plan_png(e.key, e.slug, 2000))
                 return None
             if name == "thumb.png":
+                if page is not None and _has_vector_plan(d.drawing):
+                    # A scan the store rebuilt as a vector plan: the library shows the rebuilt plan.
+                    # Drawn once from the store model, then served from disk; the scan if that fails.
+                    try:
+                        made = _cached(d.dir / f"thumb-plan-{tag}.png",
+                                       lambda: self.source.plan_png(e.key, e.slug, 640))
+                    except Exception:  # noqa: BLE001
+                        log.exception("store library: no plan thumbnail, showing the scan")
+                        made = None
+                    if made is not None:
+                        return made
                 if page is not None:
                     return _cached(d.dir / f"thumb-{tag}.jpg", lambda: _thumb_jpeg(page))
                 if synthetic:
                     return _cached(d.dir / f"thumb-{tag}.png", lambda: self.source.plan_png(e.key, e.slug, 640))
                 return None
             if name == "plan.svg":
-                urls = [*(d.drawing.get("images") or {}).values(), d.drawing.get("thumbnail")]
-                if not any(isinstance(u, str) and "/plan.svg" in u for u in urls):
+                if not _has_vector_plan(d.drawing):
                     return None  # this drawing shows its page; no rebuilt plan to make
                 return _cached(d.dir / f"plan-v5-{tag}.svg", lambda: _bytes(self.source.plan_svg(e.key, e.slug, page)))
         except Exception:  # a missing image is a 404, never a 500
             log.exception("store library: %s could not be made", name)
         return None
+
+
+def _has_vector_plan(drawing: dict) -> bool:
+    """True when the drawing is shown as a plan rebuilt from the store model (its document points at
+    plan.svg), False when it shows its page (a PDF sheet, an image nothing was rebuilt from)."""
+    urls = [*(drawing.get("images") or {}).values(), drawing.get("thumbnail")]
+    return any(isinstance(u, str) and "/plan.svg" in u for u in urls)
 
 
 def _on_loop() -> bool:

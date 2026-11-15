@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { useUi } from "@/i18n/uiLang"
+import { localizeSubtitle } from "@/lib/subtitle"
 import { cn } from "@/lib/utils"
 import { fileTypeOf } from "./ownUploads"
 
@@ -51,8 +52,9 @@ function CardBody({
   floorLabel?: string | null
   badge?: React.ReactNode
 }) {
-  const { tu } = useUi()
+  const { tu, lang: uiLanguage } = useUi()
   const title = displayDrawingTitle(d)
+  const subtitle = d.subtitle ? localizeSubtitle(d.subtitle, uiLanguage) : undefined
   const sourceExt = (d as DrawingSummary & { source_ext?: string }).source_ext
   const own = d.source === "upload"
   // Own uploads name their file type (PNG, JPG, SVG ...); bundled drawings their kind.
@@ -129,12 +131,12 @@ function CardBody({
             {title}
           </h3>
         </CardTitle>
-        {d.subtitle ? (
+        {subtitle ? (
           <CardDescription
             className="num min-w-0 truncate text-xs"
-            title={d.subtitle}
+            title={subtitle}
           >
-            {d.subtitle}
+            {subtitle}
           </CardDescription>
         ) : null}
         <CardAction>
@@ -221,8 +223,9 @@ export function DrawingCard({
   /** Own uploads: delete through the stored token (a confirm dialog first). */
   onDelete?: () => void
 }) {
-  const { tu } = useUi()
+  const { tu, lang: uiLanguage } = useUi()
   const title = displayDrawingTitle(d)
+  const subtitle = d.subtitle ? localizeSubtitle(d.subtitle, uiLanguage) : undefined
   if (d.status !== "ready")
     return (
       <article className="h-full" data-drawing-card={d.id}>
@@ -237,7 +240,7 @@ export function DrawingCard({
           type="button"
           aria-pressed={selected}
           aria-label={
-            d.subtitle ? `${title}, ${d.subtitle}` : title
+            subtitle ? `${title}, ${subtitle}` : title
           }
           onClick={() => onToggleSelect?.(d)}
           className="group/drawing block size-full rounded-xl text-left transition-transform duration-200 ease-out outline-none focus-visible:ring-3 focus-visible:ring-ring active:scale-[0.985] active:duration-75 motion-reduce:transition-none [@media(hover:hover)_and_(pointer:fine)]:hover:-translate-y-0.5"
@@ -261,8 +264,8 @@ export function DrawingCard({
         to={`/d/${encodeURIComponent(d.id)}`}
         onClick={() => onOpen?.(d)}
         aria-label={
-          d.subtitle
-            ? tu("card_open_sub", { title, subtitle: d.subtitle })
+          subtitle
+            ? tu("card_open_sub", { title, subtitle: subtitle })
             : tu("card_open", { title })
         }
         className="group/drawing block h-full rounded-xl transition-transform duration-200 ease-out active:scale-[0.985] active:duration-75 motion-reduce:transition-none [@media(hover:hover)_and_(pointer:fine)]:hover:-translate-y-0.5"

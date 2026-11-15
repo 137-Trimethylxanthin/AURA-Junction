@@ -1038,11 +1038,11 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
         num = int(v) if float(v).is_integer() else round(float(v), 4)
         ans = {"kind": "note", "value": what, "number": num}
         shown = f"{num:g}" if isinstance(num, float) else str(num)
-    text = (f"{what}: {shown}. Rule: {taken['rule']}. Source: SQL over the drawing store"
-            + (f" (estimate: {why})" if estimate else "") + ".")
+    text = f"{what}: {shown}. " + store_sql.said(taken, q.get("views") or [], method, why, lang)
     trace.append(A.stage_node(
         "answer", "answer", "Answer", ("estimate · " if estimate else "exact · ") + "sql over the store",
-        text + f" {calls} model call(s); the number was read from the rows by code.",
+        text + f" Rule: {taken['rule']}" + (f" ({why})" if estimate else "")
+        + f". {calls} model call(s); the number was read from the rows by code.",
         kind="model" if estimate else "exact",
         detail={"source": "sql", "method": method, "estimate": estimate, "calls": calls, "cost_usd": 0.0,
                 "set": rs.desc, "rule": taken["rule"], "planner": model},
@@ -1053,7 +1053,8 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
                for i in ids[:200]]
     evidence: dict[str, Any] = {"boxes": boxes,
                                 "rooms": [{"room_id": r, "included": True} for r in room_ids],
-                                **({"rows": rows_ev} if rows_ev else {})}
+                                # listed only where the plan cannot show them all (a thing drawn is not listed twice)
+                                **({"rows": rows_ev} if rows_ev and len(boxes) + len(room_ids) < len(ids) else {})}
     body = A._base(question, lang, scope) | {
         "answer": ans, "evidence": evidence, "method": method, "trace": trace, "explanation": text,
         "canonical_en": str(fin.get("restated") or "").strip()[:300] or question,

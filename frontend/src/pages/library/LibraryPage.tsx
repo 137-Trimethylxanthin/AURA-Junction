@@ -1,6 +1,6 @@
 import { useUi } from "@/i18n/uiLang"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ORIGIN_LABEL, type Origin, originCounts, originOf, plansFirst } from "./origin"
+import { type Origin, originLabel, originCounts, originOf, plansFirst } from "./origin"
 import { Link } from "react-router"
 import {
   FileUpIcon,
@@ -408,8 +408,8 @@ export default function LibraryPage() {
                 >
                   <ToggleGroupItem value="all">{tu("lib_all")}</ToggleGroupItem>
                   {origins.map(({ o, n }) => (
-                    <ToggleGroupItem key={o} value={o} aria-label={`${ORIGIN_LABEL[o]} (${n})`}>
-                      {ORIGIN_LABEL[o]}
+                    <ToggleGroupItem key={o} value={o} aria-label={`${originLabel(o, tu)} (${n})`}>
+                      {originLabel(o, tu)}
                       <span className="num text-muted-foreground">{n}</span>
                     </ToggleGroupItem>
                   ))}

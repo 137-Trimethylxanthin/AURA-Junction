@@ -1,4 +1,5 @@
 import { useUi } from "@/i18n/uiLang"
+import { localizeSubtitle } from "@/lib/subtitle"
 import { Suspense, lazy, useMemo } from "react"
 import { BlocksIcon, HistoryIcon, SquarePenIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -23,6 +24,7 @@ const NEW_CHAT_UNDO_TOAST = "new-chat-undo"
 
 export function DrawingTitle() {
   const d = useAppStore(selectDrawing)
+  const { lang: uiLanguage } = useUi()
   const activeProject = useAppStore(selectActiveProject)
   const floorLabel = useMemo(() => {
     const fromProject = activeProject?.floors.find((f) => f.drawing_id === d.id)?.label
@@ -43,8 +45,8 @@ export function DrawingTitle() {
         </span>
       ) : null}
       {d.subtitle ? (
-        <span className="num hidden truncate text-xs text-muted-foreground sm:inline">
-          {d.subtitle}
+        <span className="num hidden truncate text-xs text-muted-foreground sm:inline" data-header-subtitle>
+          {localizeSubtitle(d.subtitle, uiLanguage)}
         </span>
       ) : null}
     </h1>

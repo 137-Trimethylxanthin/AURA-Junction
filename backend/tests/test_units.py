@@ -315,7 +315,11 @@ def test_said_in_the_language_of_the_question():
 
     en = "0 windows: this storey of the model file contains no window elements."
     assert A.none_in_model_said("en", "window", en) == en
-    assert A.none_in_model_said("it", "window", en) == en  # Italian answers in English
+    assert A.none_in_model_said("it", "window", en) == "0 finestre: questo piano del modello non contiene elementi di tipo finestra."
+    for table in (A.UNLABELLED_NOTE, A.NONE_IN_MODEL, A._NONE_WORDS, A.RANK_SAID):  # every sentence in every language
+        assert set(table) >= {"de", "fr", "fi", "it"}
+        assert len({frozenset(v) if isinstance(v, dict) else None for v in table.values()}) == 1
+    assert set(A.OUTDOOR_NOTE) == {"en", "de", "fr", "fi", "it"}
     assert A.none_in_model_said("de", "window", en) == "0 Fenster: dieses Geschoss der Modelldatei enthält keine Fenster-Elemente."
     assert A.none_in_model_said("fr", "door", "0 doors: the model file contains no door elements.").startswith("0 portes : la maquette")
     assert A.OUTDOOR_NOTE["en"][0].format(n=1) == "(1 outdoor space not counted)"

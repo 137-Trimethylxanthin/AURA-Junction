@@ -72,3 +72,29 @@ def test_project_scope_counts_each_floor_and_tags_its_boxes(monkeypatch):
     assert tr.value == 3
     assert [(b.id, b.drawing_id) for b in tr.boxes] == [('win-01@eg', 'b--eg'), ('win-02@eg', 'b--eg'), ('win-01@og', 'b--og')]
     assert 'across 2 floors (EG: 2; OG: 1)' in tr.summary and 'Not counted: DG, b--gone' in tr.summary
+
+
+def test_project_scope_lists_the_elements_of_floors_that_box_none(monkeypatch):
+    """A floor whose drawing lists its elements without boxes still shows each of them in the evidence."""
+    import aura.answer as A
+    import aura.tools as T
+    from aura.contract import Box, ToolResult
+
+    def fake(d, subject, scope=None):
+        if d.id == 'b--eg':
+            return ToolResult(result_id='x', tool='count_objects', kind='count', subject=subject, value=1,
+                              boxes=[Box(id='door-01', x=0, y=0, w=1, h=1, subject='door')])
+        return ToolResult(result_id='x', tool='count_objects', kind='count', subject=subject, value=2,
+                          meta={'rows': [{'id': 'g1', 'name': 'D1'}, {'id': 'g2'}]})
+
+    monkeypatch.setattr(T, 'count_objects', fake)
+    floors = {i: SimpleNamespace(id=i, drawing={'floor_label': i.split('--')[1].upper()}) for i in ('b--eg', 'b--og')}
+    reg = FakeRegistry(floors)
+    for f in floors.values():
+        f.registry = reg
+    scope = {'kind': 'project', 'project_id': 'p', 'drawing_ids': ['b--eg', 'b--og']}
+    tr = T._count_across_floors(floors['b--eg'], 'door', scope, {'scope': scope})
+    assert tr.value == 3 and len(tr.boxes) == 1
+    assert tr.meta['rows'] == [{'id': 'g1', 'name': 'D1 · OG'}, {'id': 'g2', 'name': 'OG'}]
+    assert tr.meta['rows_beside_boxes'] is True
+    assert len(tr.boxes) + len(tr.meta['rows']) == tr.value

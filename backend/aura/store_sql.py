@@ -211,6 +211,18 @@ def entity_ids_of(rows: list[dict]) -> list[int]:
     return list(dict.fromkeys(out))
 
 
+_NAMED_ID = re.compile(r"\bentity_id\s*(?:=\s*(\d+)\b|in\s*\(\s*(\d+(?:\s*,\s*\d+)*)\s*\))", re.IGNORECASE)
+
+
+def named_entity_ids(query: str) -> list[int]:
+    """Entity ids the statement itself names (`where entity_id = 143313`, `entity_id in (1, 2)`):
+    the things a result without an id column is about, so the answer can still be shown on the plan."""
+    out: list[int] = []
+    for m in _NAMED_ID.finditer(query or ""):
+        out.extend(int(x) for x in re.findall(r"\d+", m.group(1) or m.group(2) or ""))
+    return list(dict.fromkeys(out))[:20]
+
+
 def _reader(scope: StoreScope):
     """jstore's Reader (role jreader, scoped views) with our per-statement timeout."""
     from jstore.db import DB
@@ -254,7 +266,7 @@ def run(query: str, d, scope: StoreScope, reader=None) -> SqlResult:
             total = int(reader._run(f"select count(*) as n from (\n{q}\n) _q")[0]["n"])
         res.rows, res.total = rows[:MAX_ROWS], total
         res.columns = list(rows[0].keys()) if rows else []
-        res.entity_ids = entity_ids_of(res.rows)
+        res.entity_ids = entity_ids_of(res.rows) or (named_entity_ids(q) if 0 < total <= 20 else [])
         if res.entity_ids:
             lit = "array[" + ",".join(str(int(i)) for i in res.entity_ids[:5000]) + "]::bigint[]"
             res.methods = sorted({str(r["method"]) for r in reader._run(
@@ -452,3 +464,125 @@ def boxes_for(d, ids: list[int]) -> tuple[list[dict], list[str]]:
                 boxes.append({k: v for k, v in b.items() if k in Box.model_fields})
     rooms = [r["room_id"] for r in d.drawing.get("rooms", []) if eid(r) in want]
     return boxes, rooms
+
+
+# ---- the explanation people read ------------------------------------------------------------------
+
+_MEASURES = (("perimeter", "perimeter"), ("circumference", "perimeter"), ("area", "area"), ("m2", "area"),
+             ("volume", "volume"), ("m3", "volume"), ("length", "length"), ("width", "width"),
+             ("height", "height"), ("thickness", "thickness"))
+_THINGS = (("room", "room"), ("door", "door"), ("window", "window"), ("fixture", "fixture"), ("wall", "wall"),
+           ("dimension", "dimension"), ("detection", "symbol"), ("text", "text"), ("ocr", "text"))
+SAID = {
+    "en": {
+        "perimeter": "perimeter", "area": "area", "volume": "volume", "length": "length", "width": "width",
+        "height": "height", "thickness": "thickness", "value": "value",
+        "room": ("room", "rooms"), "door": ("door", "doors"), "window": ("window", "windows"),
+        "fixture": ("fixture", "fixtures"), "wall": ("wall", "walls"), "dimension": ("printed dimension", "printed dimensions"),
+        "symbol": ("detected symbol", "detected symbols"), "text": ("text", "texts"), "item": ("item", "items"),
+        "count": "Counted on this plan: {n} {things}.", "counted": "The {things} of this plan were counted.",
+        "one": "This is the {measure} of one {thing}.", "sum": "The {measure} of {n} {things}, added up.",
+        "read": "This is what the plan records for one {thing}.",
+        "outline": "It was measured on the room outline traced from the scan, so it is an estimate.",
+        "symbols": "It comes from symbols detected on the image, so it is an estimate.",
+        "model": "It comes from what was recognised on the image, so it is an estimate.",
+        "ocr": "It was read from the text printed on the sheet.",
+        "exact": "It was taken from the geometry in the drawing file.",
+    },
+    "de": {
+        "perimeter": "Umfang", "area": "Fläche", "volume": "Volumen", "length": "Länge", "width": "Breite",
+        "height": "Höhe", "thickness": "Dicke", "value": "Wert",
+        "room": ("Raum", "Räume"), "door": ("Tür", "Türen"), "window": ("Fenster", "Fenster"),
+        "fixture": ("Einrichtungsgegenstand", "Einrichtungsgegenstände"), "wall": ("Wand", "Wände"),
+        "dimension": ("Maßangabe", "Maßangaben"), "symbol": ("erkanntes Symbol", "erkannte Symbole"),
+        "text": ("Text", "Texte"), "item": ("Element", "Elemente"),
+        "count": "Auf diesem Plan gezählt: {n} {things}.", "counted": "Gezählt wurden die {things} dieses Plans.",
+        "one": "Das ist der Messwert „{measure}“ für ein Element der Art „{thing}“.",
+        "sum": "{measure} von {n} {things}, zusammengezählt.",
+        "read": "Das ist der Eintrag des Plans für ein Element der Art „{thing}“.",
+        "outline": "Gemessen am Raumumriss, der aus dem Scan nachgezeichnet wurde; der Wert ist daher eine Schätzung.",
+        "symbols": "Grundlage sind im Bild erkannte Symbole; der Wert ist daher eine Schätzung.",
+        "model": "Grundlage ist, was im Bild erkannt wurde; der Wert ist daher eine Schätzung.",
+        "ocr": "Gelesen aus dem auf dem Blatt gedruckten Text.",
+        "exact": "Entnommen aus der Geometrie der Zeichnungsdatei.",
+    },
+    "fr": {
+        "perimeter": "périmètre", "area": "surface", "volume": "volume", "length": "longueur", "width": "largeur",
+        "height": "hauteur", "thickness": "épaisseur", "value": "valeur",
+        "room": ("pièce", "pièces"), "door": ("porte", "portes"), "window": ("fenêtre", "fenêtres"),
+        "fixture": ("équipement", "équipements"), "wall": ("mur", "murs"), "dimension": ("cote", "cotes"),
+        "symbol": ("symbole détecté", "symboles détectés"), "text": ("texte", "textes"), "item": ("élément", "éléments"),
+        "count": "Comptés sur ce plan : {n} {things}.", "counted": "Éléments comptés sur ce plan : {things}.",
+        "one": "Mesure « {measure} » pour un élément de type « {thing} ».",
+        "sum": "Mesure « {measure} » additionnée pour {n} {things}.",
+        "read": "C’est ce que le plan indique pour un élément de type « {thing} ».",
+        "outline": "Mesuré sur le contour de la pièce retracé à partir du scan : c’est une estimation.",
+        "symbols": "D’après les symboles détectés sur l’image : c’est une estimation.",
+        "model": "D’après ce qui a été reconnu sur l’image : c’est une estimation.",
+        "ocr": "Lu dans le texte imprimé sur la feuille.",
+        "exact": "Tiré de la géométrie du fichier de dessin.",
+    },
+    "fi": {
+        "perimeter": "piiri", "area": "pinta-ala", "volume": "tilavuus", "length": "pituus", "width": "leveys",
+        "height": "korkeus", "thickness": "paksuus", "value": "arvo",
+        "room": ("huone", "huoneet"), "door": ("ovi", "ovet"), "window": ("ikkuna", "ikkunat"),
+        "fixture": ("kaluste", "kalusteet"), "wall": ("seinä", "seinät"), "dimension": ("mittamerkintä", "mittamerkinnät"),
+        "symbol": ("tunnistettu symboli", "tunnistetut symbolit"), "text": ("teksti", "tekstit"), "item": ("kohde", "kohteet"),
+        "count": "Tästä piirustuksesta laskettu: {things}, {n} kpl.", "counted": "Laskettu tästä piirustuksesta: {things}.",
+        "one": "Mitta: {measure}; kohde: {thing}.", "sum": "Mitta: {measure}; laskettu yhteen: {things}, {n} kpl.",
+        "read": "Piirustukseen kirjattu tieto; kohde: {thing}.",
+        "outline": "Mitattu skannauksesta piirretystä huoneen ääriviivasta, joten arvo on arvio.",
+        "symbols": "Perustuu kuvasta tunnistettuihin symboleihin, joten arvo on arvio.",
+        "model": "Perustuu kuvasta tunnistettuun sisältöön, joten arvo on arvio.",
+        "ocr": "Luettu arkille painetusta tekstistä.",
+        "exact": "Otettu piirustustiedoston geometriasta.",
+    },
+    "it": {
+        "perimeter": "perimetro", "area": "superficie", "volume": "volume", "length": "lunghezza", "width": "larghezza",
+        "height": "altezza", "thickness": "spessore", "value": "valore",
+        "room": ("locale", "locali"), "door": ("porta", "porte"), "window": ("finestra", "finestre"),
+        "fixture": ("arredo", "arredi"), "wall": ("muro", "muri"), "dimension": ("quota", "quote"),
+        "symbol": ("simbolo rilevato", "simboli rilevati"), "text": ("testo", "testi"), "item": ("elemento", "elementi"),
+        "count": "Contati su questa pianta: {n} {things}.", "counted": "Elementi contati su questa pianta: {things}.",
+        "one": "Misura «{measure}» per un elemento di tipo «{thing}».",
+        "sum": "Misura «{measure}» sommata per {n} {things}.",
+        "read": "È quanto la pianta riporta per un elemento di tipo «{thing}».",
+        "outline": "Misurato sul contorno del locale ricalcato dalla scansione: è una stima.",
+        "symbols": "In base ai simboli rilevati nell’immagine: è una stima.",
+        "model": "In base a quanto riconosciuto nell’immagine: è una stima.",
+        "ocr": "Letto dal testo stampato sul foglio.",
+        "exact": "Ricavato dalla geometria del file del disegno.",
+    },
+}
+
+
+def said(taken: dict, views: list[str], method: str, why: str, lang: str = "en") -> str:
+    """What was measured or counted, on what, and how it was obtained: one or two plain sentences in
+    the language of the question, without column or table names (those stay in the reasoning tree)."""
+    w = SAID.get(lang) or SAID["en"]
+    rule = str(taken.get("rule") or "").lower()
+    col = (re.search(r"(?:the cell|sum of column)\s+(\S+)", rule) or [None, ""])[1]
+    measure = next((m for k, m in _MEASURES if k in col), "value")
+    names = " ".join(views).lower()
+    thing = next((t for k, t in _THINGS if k in names), "item")
+    one, many = w[thing]
+    counting = bool(re.fullmatch(r"count|n|cnt|total|num(?:ber)?(?:_of)?_?\w*|\w*_count", col))
+    if taken.get("kind") == "count":
+        v = taken.get("value") or 0
+        first = w["count"].format(n=v, things=one if v == 1 else many)
+    elif rule.startswith("sum of"):
+        n = int((re.search(r"over (\d+) rows", rule) or [0, 0])[1])
+        first = w["sum"].format(measure=w[measure], n=n, things=one if n == 1 else many)
+        first = first[:1].upper() + first[1:]
+    elif counting:
+        first = w["counted"].format(things=many)
+    elif taken.get("kind") == "text" or measure == "value":
+        first = w["read"].format(thing=one)
+    else:
+        first = w["one"].format(measure=w[measure], thing=one)
+    if method == "vision":
+        how = "outline" if (thing == "room" and not counting and taken.get("kind") != "count") else (
+            "symbols" if thing in ("door", "window", "fixture", "symbol") or "detect" in why else "model")
+    else:
+        how = "ocr" if method == "ocr" else "exact"
+    return f"{first} {w[how]}"

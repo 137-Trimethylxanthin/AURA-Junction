@@ -1558,6 +1558,17 @@ def plan_png(m: Model, side: int = 640) -> bytes:
             pts = [(x * sx, y * sy) for x, y in r["points"]]
             dr.polygon(pts, fill="#f4f1e6" if r["outdoor"] else "#e6eef7")
             dr.line(pts + pts[:1], fill="#94a3b8", width=lw)
+    if m.walls:                                      # an image plan: its wall polygons as fill, their holes left open
+        mask = Image.new("L", im.size, 0)
+        md = ImageDraw.Draw(mask)
+        polys = [g for w in m.walls for g in getattr(w, "geoms", [w]) if g.geom_type == "Polygon" and not g.is_empty]
+        for geom in sorted(polys, key=lambda g: -g.area):   # an island inside a hole is drawn after the hole
+            if True:
+                md.polygon([(x * sx, y * sy) for x, y in geom.exterior.coords], fill=255)
+                for hole in geom.interiors:
+                    md.polygon([(x * sx, y * sy) for x, y in hole.coords], fill=0)
+        im.paste(Image.new("RGB", im.size, "#334155"), (0, 0), mask)
+        dr = ImageDraw.Draw(im, "RGBA")
     drawn = {i["kind"] for i in m.items if i.get("shape") is not None}
     for style, fill, outline in (("light", None, "#94a3b8"), ("door", None, "#b45309"), ("window", None, "#1d4ed8"),
                                  ("solid", "#cbd5e1", "#475569")):

@@ -282,3 +282,32 @@ async def test_no_scale_offers_only_sql_and_finish(d, store_on):
     built, _, client = await ask(nd, [[("sql", {"query": "select count(*) as n from q.texts", "finish_as": "cell"})]])
     assert built is not None
     assert {x["name"] for x in client.sent[0]["tools"][0]["functionDeclarations"]} == {"finish", "sql"}
+
+
+def test_said_is_plain_in_every_language():
+    """The explanation of an SQL-path answer names what was measured and how, never a column or table."""
+    cell = {"kind": "number", "value": 63.57, "unit": "m", "rule": "the cell perimeter_m = 63.57"}
+    en = store_sql.said(cell, ["rooms"], "vision", "found by raster_detection", "en")
+    assert en == ("This is the perimeter of one room. It was measured on the room outline traced from the "
+                  "scan, so it is an estimate.")
+    cnt = {"kind": "count", "value": 4, "unit": None, "rule": "count = 4 rows"}
+    assert store_sql.said(cnt, ["doors"], "vision", "", "en").startswith("Counted on this plan: 4 doors. It comes from symbols")
+    agg = {"kind": "number", "value": 0, "unit": None, "rule": "the cell count = 0"}
+    assert store_sql.said(agg, ["windows"], "cad_geometry", "", "en") == (
+        "The windows of this plan were counted. It was taken from the geometry in the drawing file.")
+    total = {"kind": "number", "value": 10.0, "unit": "m2", "rule": "sum of column area_m2 over 3 rows = 10"}
+    assert store_sql.said(total, ["rooms"], "ocr", "", "en").startswith("The area of 3 rooms, added up. It was read")
+    keys = set(store_sql.SAID["en"])
+    for lang in ("de", "fr", "fi", "it"):
+        assert set(store_sql.SAID[lang]) == keys, lang
+        for t in (cell, cnt, agg, total):
+            s = store_sql.said(t, ["rooms"], "vision", "", lang)
+            assert s and "perimeter_m" not in s and "area_m2" not in s and "Rule" not in s and "SQL" not in s
+            assert s != store_sql.said(t, ["rooms"], "vision", "", "en")
+    assert store_sql.said(cell, ["rooms"], "vision", "", "xx") == store_sql.said(cell, ["rooms"], "vision", "", "en")
+
+
+def test_ids_named_by_the_statement():
+    assert store_sql.named_entity_ids("select perimeter_m from q.rooms where entity_id = 143313") == [143313]
+    assert store_sql.named_entity_ids("select 1 from q.rooms where entity_id in (4, 5 ,4)") == [4, 5]
+    assert store_sql.named_entity_ids("select count(*) from q.rooms where entity_id = other.entity_id") == []
