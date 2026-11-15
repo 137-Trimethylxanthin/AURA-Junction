@@ -1,4 +1,5 @@
 import { useUi } from '@/i18n/uiLang'
+import { useUnitPref } from '@/lib/unitPref'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useReducedMotion } from 'motion/react'
@@ -747,6 +748,7 @@ function ClampedProse({
 /** Memoised on the turn object: patchAgent keeps other turns referentially stable, so a streaming turn re-renders alone. */
 export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { turn: AgentTurn; lang: Lang }) {
   const active = useAppStore((s) => s.ui.activeTurnId === turn.id)
+  useUnitPref() // the answer re-renders in the viewer's unit system when it changes
   const derived = useDerived(turn.id)
   const drawing = useAppStore(selectDrawing)
   const activeProject = useAppStore(selectActiveProject)

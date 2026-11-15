@@ -1,7 +1,8 @@
 import type { AgentFailure, AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
 import { LOCALE, fmtArea, fmtCount, noun } from '@/lib/format'
-import { convertTo, METRIC_SYMBOL } from '@/lib/units'
+import { convertTo, imperialOf, METRIC_SYMBOL } from '@/lib/units'
+import { unitPref } from '@/lib/unitPref'
 import { t, type StringKey, type UiKey } from '@/i18n/strings'
 
 /** Pure view-model helpers for the answer card. Every number comes from the response or Derived. */
@@ -96,12 +97,14 @@ function metricOf(resp: AskResponse, d: Derived): [number, string] | null {
  * plus the metric value to show beside it. Null when the question asked for no other unit.
  */
 export function convertedParts(resp: AskResponse, d: Derived, lang: Lang): { value: [string, string]; metric: string } | null {
-  if (!resp.converted) return null
   const m = metricOf(resp, d)
   if (!m) return null
-  const v = convertTo(m[0], m[1], resp.converted.unit)
+  // The unit the question asked for wins; otherwise the viewer's unit system (imperial shows ft / sq ft).
+  const target = resp.converted?.unit ?? (unitPref.get() === 'imperial' ? imperialOf(m[1]) : null)
+  if (!target) return null
+  const v = convertTo(m[0], m[1], target)
   if (v === null) return null
-  return { value: [fmtArea(v, lang), resp.converted.unit], metric: `${fmtArea(m[0], lang)} ${METRIC_SYMBOL[m[1]] ?? m[1]}` }
+  return { value: [fmtArea(v, lang), target], metric: `${fmtArea(m[0], lang)} ${METRIC_SYMBOL[m[1]] ?? m[1]}` }
 }
 
 export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, string] | null {

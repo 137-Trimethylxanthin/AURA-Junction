@@ -13,3 +13,19 @@ describe('units', () => {
     expect(imperialOf('m')).toBe('ft')
   })
 })
+
+describe('unit preference', () => {
+  it('imperial shows areas in sq ft with the metric value beside; metric shows nothing extra', async () => {
+    const { unitPref } = await import('./unitPref')
+    const { convertedParts } = await import('@/features/chat/view')
+    const resp = { answer: { kind: 'area', value: 10, unit: 'm2' } } as unknown as Parameters<typeof convertedParts>[0]
+    const d = { value: 10 } as unknown as Parameters<typeof convertedParts>[1]
+    unitPref.set('metric')
+    expect(convertedParts(resp, d, 'en')).toBeNull()
+    unitPref.set('imperial')
+    const c = convertedParts(resp, d, 'en')
+    expect(c?.value).toEqual(['107.64', 'sq ft'])
+    expect(c?.metric).toBe('10.00 m²')
+    unitPref.set('metric')
+  })
+})
