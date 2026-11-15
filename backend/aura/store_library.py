@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("aura.store_library")
 
 PREFIX = "st-"
-VERSION = 2            # bump when the generated document or images change shape: every cache is rebuilt
+VERSION = 3            # bump when the generated document or images change shape: every cache is rebuilt
 LIST_TTL_S = 30.0      # how often the listing's store signature is re-read
 DOC_TTL_S = 30.0       # how often an open drawing's signature is re-read
 FILE_IDS_TTL_S = 60.0
@@ -255,11 +255,13 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
             did = make_id(key)
             what = [_n(counts.get("room", 0), "room"), _n(counts.get("door", 0), "door"),
                     _n(counts.get("window", 0), "window"), _n(fixtures, "fixture")]
+            sheet = r.get("sheet")   # one page of a PDF of several: the counts are that page's
+            page = f"page {sheet[0]} of {sheet[1]}" if sheet else None
             summ = base | {
                 "id": did, "n_rooms": int(counts.get("room", 0)), "n_doors": int(counts.get("door", 0)),
                 "thumbnail": (f"/drawings/{did}/thumb.png{version}" if r.get("has_image")
                               else f"/drawings/{did}/plan.svg{version}"),
-                "subtitle": " · ".join(x for x in (source_name, fmt, r.get("scale"),
+                "subtitle": " · ".join(x for x in (source_name, fmt, page, r.get("scale"),
                                                    *(what if interpreted else ["not interpreted"])) if x)[:300],
             }
             out.append(Entry(did, key, None, None, project, file_ids, summ,
@@ -302,7 +304,7 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
     return good
 
 
-DOC_VERSION = 5          # raised when the document of an unchanged drawing is built differently (cached ones are rebuilt)
+DOC_VERSION = 6          # raised when the document of an unchanged drawing is built differently (cached ones are rebuilt)
 
 # ---- the document (pure: what the source built -> our drawing.json) -------------------------------
 
@@ -348,6 +350,8 @@ def to_drawing(entry: Entry, built: dict, signature: str) -> dict:
     doc["thumbnail"] = ours(sdoc.get("thumbnail")) or doc["images"].get("rebuilt")
     doc["status"] = "ready"
     doc["source"] = "library"
+    if sdoc.get("sheet_page") and sdoc.get("sheet_pages"):   # one page of a PDF of several
+        doc["sheet"] = {"page": int(sdoc["sheet_page"]), "pages": int(sdoc["sheet_pages"])}
     if sdoc.get("printed_dimensions"):                 # dimensions printed on the sheet (q.dimensions): lengths are askable
         doc["printed_dimensions"] = int(sdoc["printed_dimensions"])
     # Layer 2 (q.rooms, q.doors ...) has no storey scope: on one storey of a multi-storey model a query
@@ -838,6 +842,21 @@ class JStoreSource:
                                where status = 'active' group by 1, 2"""):
                 counts.setdefault(c["drawing_key"], {})[c["kind"]] = int(c["n"])
             storeys = am.storey_index(db) if any("ifc" in r["formats"] for r in rows) else {}
+            # a PDF of several pages is shown as one of them: its counts are those of that page (the same
+            # definition the document is built with), and the listing says which page it is
+            sheets: dict[str, tuple[int, int]] = {}
+            several = {r["file_id"] for r in db.run(
+                """select p.file_id from jstore.page p join jstore.source_file f using (file_id)
+                   where f.format = 'pdf' group by 1 having count(*) > 1""")}
+            for r in rows:
+                if several.intersection(r["file_ids"]) and r["key"] not in storeys:
+                    try:
+                        scoped = am.page_counts(db, r["key"])
+                    except Exception:  # noqa: BLE001 - the listing never fails over one drawing
+                        log.warning("page counts not read for a store drawing")
+                        scoped = None
+                    if scoped is not None:
+                        sheets[r["key"]], counts[r["key"]] = scoped
         out = []
         for r in rows:
             out.append({
@@ -846,7 +865,7 @@ class JStoreSource:
                 "has_image": bool(r["has_image"]), "has_cad": bool(r["has_cad"]),
                 "files": [{"file_id": i, "path": p, "format": f}
                           for i, p, f in zip(r["file_ids"], r["paths"], r["formats"], strict=True)],
-                "counts": counts.get(r["key"], {}),
+                "counts": counts.get(r["key"], {}), "sheet": sheets.get(r["key"]),
                 "storeys": [{"slug": s.slug, "name": s.name, "elevation": s.elevation, "n_rooms": s.n_rooms,
                              "n_items": s.n_items, "n_shapes": s.n_shapes} for s in storeys.get(r["key"], [])],
             })
