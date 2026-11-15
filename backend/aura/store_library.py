@@ -68,6 +68,7 @@ FILE_IDS_TTL_S = 60.0
 DB_TIMEOUT_S = 30.0    # socket timeout of every store connection opened here
 MAX_DOCS = 512         # documents kept in memory (each is a few KB to a few hundred KB)
 MAX_FLOORS = 50        # ProjectBundle.floors max_length
+MAX_PAGES = 30         # pages of one PDF listed as drawings of their own
 
 EXACT_TABLES = {"cad_entity", "ifc_element"}
 VECTOR_TABLES = {"pdf_path", "pdf_text"}
@@ -266,6 +267,23 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
             }
             out.append(Entry(did, key, None, None, project, file_ids, summ,
                              rank=(not interpreted, src_rank, title.lower(), 0)))
+            # the other pages with content of a PDF of several: each a drawing of its own, listed after the
+            # page the drawing opens on (they are sheets of one set, not floors: nothing is summed over them)
+            for pg in (r.get("pages") or [])[:MAX_PAGES] if sheet else []:
+                pid, pc = make_id(key, pg["slug"]), pg.get("counts") or {}
+                n, of = pg["sheet"]
+                pfix = sum(pc.get(k, 0) for k in FIXTURE_KINDS)
+                pwhat = [_n(pc.get("room", 0), "room"), _n(pc.get("door", 0), "door"),
+                         _n(pc.get("window", 0), "window"), _n(pfix, "fixture")]
+                if not any(pwhat):
+                    pwhat = [_n(pc.get("dimension", 0), "dimension")]
+                psumm = base | {
+                    "id": pid, "title": f"{title} · page {n}"[:160], "n_rooms": int(pc.get("room", 0)),
+                    "n_doors": int(pc.get("door", 0)), "thumbnail": f"/drawings/{pid}/thumb.png{version}",
+                    "subtitle": " · ".join(x for x in (source_name, fmt, f"page {n} of {of}", r.get("scale"), *pwhat) if x)[:300],
+                }
+                out.append(Entry(pid, key, pg["slug"], None, project, file_ids, psumm,
+                                 rank=(not interpreted, src_rank, title.lower(), int(n))))
             continue
         by_height = sorted(storeys, key=lambda s: (s.get("elevation") is None, s.get("elevation") or 0.0,
                                                    s.get("name") or ""))
@@ -359,7 +377,7 @@ def to_drawing(entry: Entry, built: dict, signature: str) -> dict:
     owner = "store" if entry.slug is None or entry.siblings <= 1 else "ours"
     doc["store"] = {"drawing_key": entry.key, "file_ids": list(entry.file_ids), "owner": owner,
                     "signature": signature, "doc": DOC_VERSION, "page": built.get("page"), "synthetic": bool(built.get("synthetic")),
-                    **({"storey": entry.storey} if entry.slug is not None else {})}
+                    **({"storey": entry.storey} if entry.slug is not None and entry.storey is not None else {})}
     return apply_entry(doc, entry)
 
 
@@ -862,6 +880,7 @@ class JStoreSource:
             # a PDF of several pages is shown as one of them: its counts are those of that page (the same
             # definition the document is built with), and the listing says which page it is
             sheets: dict[str, tuple[int, int]] = {}
+            pages: dict[str, list[dict]] = {}
             several = {r["file_id"] for r in db.run(
                 """select p.file_id from jstore.page p join jstore.source_file f using (file_id)
                    where f.format = 'pdf' group by 1 having count(*) > 1""")}
@@ -874,6 +893,10 @@ class JStoreSource:
                         scoped = None
                     if scoped is not None:
                         sheets[r["key"]], counts[r["key"]] = scoped
+                        try:
+                            pages[r["key"]] = am.other_pages(db, r["key"])
+                        except Exception:  # noqa: BLE001
+                            log.warning("pages not read for a store drawing")
         out = []
         for r in rows:
             out.append({
@@ -882,7 +905,7 @@ class JStoreSource:
                 "has_image": bool(r["has_image"]), "has_cad": bool(r["has_cad"]),
                 "files": [{"file_id": i, "path": p, "format": f}
                           for i, p, f in zip(r["file_ids"], r["paths"], r["formats"], strict=True)],
-                "counts": counts.get(r["key"], {}), "sheet": sheets.get(r["key"]),
+                "counts": counts.get(r["key"], {}), "sheet": sheets.get(r["key"]), "pages": pages.get(r["key"], []),
                 "storeys": [{"slug": s.slug, "name": s.name, "elevation": s.elevation, "n_rooms": s.n_rooms,
                              "n_items": s.n_items, "n_shapes": s.n_shapes} for s in storeys.get(r["key"], [])],
             })

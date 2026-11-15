@@ -82,3 +82,21 @@ def test_a_cad_page_drawn_from_geometry_fills_with_the_plan_not_a_far_block(made
     (x0, y1), (x1, y0) = am.apply(back, 0, 0), am.apply(back, base.w, base.h)
     assert 23800 < x0 < 24000 and 26000 <= x1 < 26300 and -22700 < y0 < -22500 and -21550 < y1 < -21300
     assert (x1 - x0) < 2500                               # the plan fills the page (with the far block: 26 000 units)
+
+
+def test_the_other_pages_with_content_are_drawings_of_their_own(made: dict) -> None:
+    with DB() as db:
+        pages = am.other_pages(db, SHEETS)
+        models = am.Models()
+        first, last = models.get(db, SHEETS, "p1"), models.get(db, SHEETS, "p3")
+        assert models.get(db, SHEETS, "p9") is None and models.get(db, SHEETS, "attic") is None
+        assert am.other_pages(db, SPECK) == [] and models.get(db, SPECK, "p1") is None      # not a PDF of several pages
+        with_rooms = am.pick_base(db, SHEETS)
+    # the page the drawing opens on (most rooms) is not listed again; slugs count the pages kept, labels as the PDF numbers them
+    assert [(p["slug"], p["sheet"], p["counts"]) for p in pages] == [
+        ("p1", (1, 4), {"room": 1}), ("p3", (4, 4), {"room": 2, "door": 1})]
+    assert with_rooms.page_no == 1
+    assert first.id == am.drawing_id(SHEETS) + am.STOREY_SEP + "p1" and first.sheet == (1, 4) and len(first.rooms) == 1
+    assert last.base.page_no == 2 and last.sheet == (4, 4) and len(last.rooms) == 2
+    assert sum(1 for i in last.items if i["kind"] == "door") == 1
+    assert am.drawing_doc(last)["sheet_page"] == 4

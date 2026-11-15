@@ -789,3 +789,20 @@ def test_thumbnail_is_the_scan_where_no_plan_was_rebuilt_or_drawing_it_fails(tmp
     d.drawing["images"] = {k: v for k, v in d.drawing["images"].items() if "/plan.svg" not in str(v)}
     d.drawing["thumbnail"] = None
     assert d.file("thumb.png") == thumb and d.file("plan.svg") is None
+
+
+def test_the_other_pages_of_a_pdf_are_entries_of_their_own_after_the_page_shown():
+    r = row("set_of_sheets", "opening_design/CTR", ("pdf",), counts={"room": 22, "door": 15})
+    r["sheet"] = (7, 16)
+    r["pages"] = [{"slug": "p2", "sheet": (2, 16), "counts": {"room": 3, "door": 9, "toilet": 1}},
+                  {"slug": "p9", "sheet": (9, 16), "counts": {"dimension": 12}}]
+    main, p2, p9 = build_entries([r], set(), DEFAULT_EXCLUDE)
+    assert main.slug is None and "--" not in main.id
+    assert (p2.id, p2.slug, p2.key) == (main.id + "--p2", "p2", main.key)
+    assert p2.summary["title"].endswith("· page 2") and (p2.summary["n_rooms"], p2.summary["n_doors"]) == (3, 9)
+    assert p2.summary["subtitle"] == "OpeningDesign · CTR · PDF · page 2 of 16 · 3 rooms · 9 doors · 1 fixture"
+    assert p9.summary["subtitle"].endswith("page 9 of 16 · 12 dimensions") and p9.summary["thumbnail"].startswith(f"/drawings/{p9.id}/")
+    assert "project_id" not in p2.summary                    # sheets of a set are not floors: nothing is summed over them
+    one = row("one_page", "opening_design/CTR", ("pdf",), counts={"room": 2})
+    one["pages"] = [{"slug": "p2", "sheet": (2, 2), "counts": {"room": 1}}]     # without a sheet nothing is listed
+    assert len(build_entries([one], set(), DEFAULT_EXCLUDE)) == 1

@@ -416,18 +416,24 @@ def signature(db: DB, key: str) -> tuple | None:
     return None if not r or not r["files"] else tuple(r.values())
 
 
-def pick_base(db: DB, key: str, only: set[str] | None = None) -> Base | None:
+def pick_base(db: DB, key: str, only: set[str] | None = None, page: tuple[str, int] | None = None) -> Base | None:
     """The page to show: a raster or PDF page that is registered in the drawing's frame, else the CAD render,
     else the page most entities were read from, else the first rendered page.  With `only` (file ids: the plan
     files of one storey) the page must be one of those files and registered in the shared frame, else None."""
     pages = db.run("""
         select p.file_id, p.page_no, p.name, p.image, p.image_w, p.image_h, p.to_image, f.format, fr.m, fr.method,
-               (select count(*) from jstore.entity_source s where s.file_id = p.file_id and s.page_no = p.page_no) as n_src
+               (select count(*) from jstore.entity_source s where s.file_id = p.file_id and s.page_no = p.page_no) as n_src,
+               (select count(distinct e.entity_id) from jstore.entity_source s join jstore.entity e using (entity_id)
+                 where s.file_id = p.file_id and s.page_no = p.page_no and e.kind = 'room' and e.status = 'active') as n_rooms
         from jstore.page p join jstore.source_file f using (file_id)
         left join jstore.frame fr on fr.file_id = p.file_id and fr.page_no = p.page_no
         where f.drawing_key = :k and p.image is not null and p.to_image is not null and p.image_w > 0 and p.image_h > 0
         order by p.file_id, p.page_no""", k=key)
     pages = [p for p in pages if len(p["to_image"] or []) == 6 and inv(p["to_image"])]
+    if page is not None:                 # one given page of a file (a page of a PDF of several, shown on its own)
+        pages = [p for p in pages if (p["file_id"], p["page_no"]) == tuple(page)]
+        if not pages:
+            return None
     if only is not None:
         pages = [p for p in pages if p["file_id"] in only and p["m"] and len(p["m"]) == 6 and inv(p["m"])
                  and p["method"] not in ("scale_text", "pixel_scale", "nominal_scale")]
@@ -446,7 +452,10 @@ def pick_base(db: DB, key: str, only: set[str] | None = None) -> Base | None:
         framed = usable(p)
         tier = 3 if framed and p["format"] not in CAD else 2 if framed else 1 if p["n_src"] else 0
         # a storey's plan: of two registered pages the PDF, whose strokes plan.svg can redraw
-        return (tier, p["n_src"], p["format"] not in CAD, only is not None and p["format"] == "pdf", -p["page_no"])
+        # pages that share no frame (the sheets of one PDF set): the one with the most rooms, whether or not it
+        # states a scale; a set without rooms opens as before
+        rooms_first = 0 if shared or only is not None else p["n_rooms"]
+        return (rooms_first, tier, p["n_src"], p["format"] not in CAD, only is not None and p["format"] == "pdf", -p["page_no"])
     p = max(pages, key=score)
     return Base(file_id=p["file_id"], page_no=p["page_no"], format=p["format"], name=p["name"], image=p["image"],
                 w=int(p["image_w"]), h=int(p["image_h"]), to_image=tuple(p["to_image"]),
@@ -519,10 +528,55 @@ def sheet_of(db: DB, base: Base | None) -> tuple[int, int] | None:
     return shown, max(len(pages), max(int(p["name"]) for p in pages) if numbered else 0)
 
 
-def page_counts(db: DB, key: str) -> tuple[tuple[int, int], dict[str, int]] | None:
-    """For a drawing shown as one page of a PDF of several: (page shown, pages) and the active entities per kind
-    that are on it (or in another file of the drawing); None for every other drawing."""
+PAGE_SLUG = re.compile(r"^p(\d{1,4})$")          # the slug of one page of a PDF of several: p<position, from 1>
+PAGE_CONTENT = ("room", "door", "window", "dimension")
+PAGE_MIN_ITEMS = 3                              # a page without rooms needs this many doors, windows and dimensions
+
+
+def page_of_slug(db: DB, key: str, slug: str | None) -> tuple[str, int] | None:
+    """(file, page_no) a page slug names: the n-th page of the PDF the drawing is shown from."""
+    hit = PAGE_SLUG.match(slug or "")
+    base = pick_base(db, key) if hit else None
+    if base is None or base.format != "pdf":
+        return None
+    pages = db.run("select page_no from jstore.page where file_id = :f order by page_no", f=base.file_id)
+    n = int(hit.group(1))
+    return (base.file_id, pages[n - 1]["page_no"]) if 1 <= n <= len(pages) and len(pages) > 1 else None
+
+
+def other_pages(db: DB, key: str) -> list[dict]:
+    """The other pages with content of a drawing shown as one page of a PDF of several: [{slug, sheet (page,
+    pages), counts per kind}], in page order.  Content: a room, or PAGE_MIN_ITEMS doors, windows and dimensions
+    read on the page.  Each is a drawing of its own (Models.get with the slug); the page the drawing opens on
+    keeps the drawing's id and is not listed here."""
     base = pick_base(db, key)
+    if sheet_of(db, base) is None:
+        return []
+    pages = db.run("""select p.page_no, p.image is not null and p.to_image is not null as shown from jstore.page p
+                      where p.file_id = :f order by p.page_no""", f=base.file_id)
+    on = db.run("""select s.page_no, e.kind, count(distinct e.entity_id) as n from jstore.entity e
+                   join jstore.entity_source s using (entity_id)
+                   where e.drawing_key = :k and e.status = 'active' and s.file_id = :f and e.kind = any(:kinds)
+                   group by 1, 2""", k=key, f=base.file_id, kinds=list(PAGE_CONTENT))
+    per: dict[int, dict[str, int]] = {}
+    for r in on:
+        per.setdefault(r["page_no"], {})[r["kind"]] = int(r["n"])
+    out = []
+    for n, p in enumerate(pages, 1):
+        c = per.get(p["page_no"], {})
+        if p["page_no"] == base.page_no or not p["shown"] or not (c.get("room") or sum(c.values()) >= PAGE_MIN_ITEMS):
+            continue
+        scoped = page_counts(db, key, (base.file_id, p["page_no"]))
+        if scoped is not None:
+            out.append(dict(slug=f"p{n}", sheet=scoped[0], counts=scoped[1]))
+    return out
+
+
+def page_counts(db: DB, key: str, page: tuple[str, int] | None = None) -> tuple[tuple[int, int], dict[str, int]] | None:
+    """For a drawing shown as one page of a PDF of several: (page shown, pages) and the active entities per kind
+    that are on it (or in another file of the drawing); None for every other drawing.  `page`: that page instead
+    of the one the drawing opens on."""
+    base = pick_base(db, key, page=page)
     sheet = sheet_of(db, base)
     if sheet is None:
         return None
@@ -643,7 +697,7 @@ def load(db: DB, key: str) -> dict | None:
 
 
 def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] | None = None,
-          data: dict | None = None) -> Model | None:
+          data: dict | None = None, page_slug: str | None = None) -> Model | None:
     """The whole drawing on its page, or (a drawing with an IFC model) one storey of it: on the plan page of that
     storey when a file shows it, else on a page drawn from the model."""
     data = data or load(db, key)
@@ -657,7 +711,14 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
     m.issues = data["issues"]
     m.frames = dict(data["frames"])
     if storey is None:
-        m.base = pick_base(db, key)
+        if page_slug is not None:            # one page of a PDF of several, as a drawing of its own
+            page = page_of_slug(db, key, page_slug)
+            m.base = pick_base(db, key, page=page) if page is not None else None
+            if m.base is None:
+                return None
+            m.id = drawing_id(key) + STOREY_SEP + page_slug
+        else:
+            m.base = pick_base(db, key)
         m.sheet = sheet_of(db, m.base)
         if m.sheet is not None:          # one page of several: rooms, doors and fixtures of the other pages are not on it
             rooms = [r for r in rooms if not off_page(srcs.get(r["entity_id"], []), m.base)]
@@ -1012,7 +1073,8 @@ class Models:
             return None
         data, storeys = shared
         if not storeys:
-            model = build(db, key, data=data) if slug is None else None
+            model = (build(db, key, data=data) if slug is None else
+                     build(db, key, data=data, page_slug=slug) if PAGE_SLUG.match(slug) else None)
         elif slug is None:
             model = self.get(db, key, default_storey(storeys).slug)
             model = dataclasses.replace(model, id=drawing_id(key)) if model is not None else None

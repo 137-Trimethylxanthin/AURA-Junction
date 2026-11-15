@@ -246,6 +246,11 @@ def _weakest(dims: list[dict]) -> str:
     return max((x.get("method") or "vision" for x in dims), key=lambda m: rank.get(m, 3), default="vision")
 
 
+def _traced_on(d: LoadedDrawing) -> str:
+    """What the outlines were traced on: a scan, or the page image of a PDF sheet (which is not a scan)."""
+    return "sheet image" if str(d.drawing.get("source_ext") or "").lower().lstrip(".") == "pdf" else "scan"
+
+
 def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built | None:
     dims = _usable(d)
     scope = {"kind": "floor"}
@@ -257,7 +262,7 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
     est = bool(ext.get("estimate"))
     scan = (d.drawing.get("evidence_method") or {}).get("room") in ("vision", "ocr")
     label = ("an estimate: the sheet states no scale" if est else
-             "measured on the outlines traced on the scan, not printed: an estimate" if scan else
+             f"measured on the outlines traced on the {_traced_on(d)}, not printed: an estimate" if scan else
              "measured on the plan, not printed")
     parts, used, values, printed_any, lower_bound = [], [], [], False, False
     measures: list[dict] = []
@@ -479,7 +484,7 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         est_any |= src == "estimate"
         how = (f"as printed ({s['text']})" if printed and s.get("text") else "as printed" if printed else
                "an estimate from the room outline: the sheet states no scale" if src == "estimate" else
-               "measured on the outline traced on the scan, not printed: an estimate" if scan else
+               f"measured on the outline traced on the {_traced_on(d)}, not printed: an estimate" if scan else
                "measured on the room outline, not printed")
         approx = "≈ " if src == "estimate" else ""
         if printed and s.get("text") and ("'" in s["text"] or '"' in s["text"]):
