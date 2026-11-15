@@ -28,7 +28,7 @@ from aura.contract import (
     EvidenceRoom,
     ToolResult,
 )
-from aura.router import LABEL_CONCEPTS, DrawingCtx
+from aura.router import LABEL_CONCEPTS, STORE_ROOM_CONCEPT, DrawingCtx
 
 log = logging.getLogger("aura.tools")
 
@@ -279,12 +279,22 @@ class BundleEngine:
             if scope.get("kind") == "room" and rooms:
                 r0 = rooms[0]
                 summary = f"Room {r0['room_id']} ({r0['name']}), net area {ev[0]['area_m2']:.2f} m²."
+                if r0.get("area_source") == "estimate" and not ev[0].get("edited"):
+                    summary = (f"Room {r0['room_id']} ({r0['name']}), net area ≈ {ev[0]['area_m2']:.0f} m² (estimate: "
+                               "the drawing states no scale, so the outline was measured under a scale estimated "
+                               "from the sizes of drawn objects: doors, fixtures, rooms).")
             else:
                 summary = (f"Sum of {len(parts)} net room areas {where} = {value:.2f} m²"
                            + (f"; {n_out} outdoor left out" if n_out else "")
                            + (f"; {n_unknown} without a printed area left out" if n_unknown else "")
                            + ".")
-            return {"answer": {"kind": "area", "value": value, "unit": "m2"}, "value": value,
+            est = sum(1 for r, e in zip(rooms, ev, strict=False)
+                      if e["included"] and not e.get("edited") and r.get("area_source") == "estimate")
+            if est and scope.get("kind") != "room":
+                summary += (f" Approximate: {est} of these areas are estimates, measured under a scale estimated from "
+                            "door and fixture sizes because the drawing states none.")
+            return {"answer": {"kind": "area", "value": value, "unit": "m2"} | ({"approximate": True} if est else {}),
+                    "value": value,
                     "numbers": [value, *parts], "evidence": {"boxes": [], "rooms": ev},
                     "summary": summary} | self._method(family)
         raise ValueError(f"unknown family {family!r}")
@@ -427,12 +437,15 @@ class LoadedDrawing:
             room_ids=[r["room_id"] for r in rooms],
             units=[u["id"] for u in self.drawing.get("units", [])],
             kind=self.drawing.get("kind", "cad_dxf"),
+            printed_dimensions=int(self.drawing.get("printed_dimensions") or 0),
+            label_concepts={r["name"]: STORE_ROOM_CONCEPT[r["room_type"]] for r in rooms
+                            if r.get("room_type") in STORE_ROOM_CONCEPT},
         )
 
     def public_drawing(self) -> dict:
         """Drawing as served: contract fields only (evidence/gold/texts stripped)."""
         out = {k: v for k, v in self.drawing.items()
-               if k not in ("evidence", "gold", "texts", "anchors", "detection")}
+               if k not in ("evidence", "gold", "texts", "anchors", "detection", "dimensions")}
         out.setdefault("capabilities", self.engine.capabilities())
         out.setdefault("kind", "cad_dxf")
         out.setdefault("source", self.source)
@@ -585,6 +598,13 @@ def load_dir(p: Path, drawing_id: str | None = None) -> LoadedDrawing:
         from aura.solvers import ifc
 
         engine = IfcEngine(ifc.IfcModel.from_json(json.loads((p / "model.json").read_text())))
+        # a drawing built before placeholder project names were replaced ("Default Project · kjeller"):
+        # title it after the model file, as a new build does
+        head, sep, tail = str(data.get("title") or "").partition(" · ")
+        stem = re.sub(r"^ifc-", "", str(drawing_id or data.get("id") or p.name)).split("--", 1)[0]
+        if stem and ifc.PLACEHOLDER_PROJECT.fullmatch(head):
+            data["title"] = ifc.project_title(None, stem) + sep + tail
+            engine.model.project = ifc.project_title(engine.model.project, stem)
     elif (p / "model.json").is_file():
         if kind != "cad_dxf":
             raise UnreadableDrawing(f"unknown drawing kind {kind!r}")
@@ -677,6 +697,11 @@ def measure(d: LoadedDrawing, family: str, scope: dict | None = None) -> ToolRes
     return tr.model_copy(update={"meta": tr.meta | ({"unit": unit} if unit else {})})
 
 
+def _element_name(subject: str) -> str:
+    """What a model file calls the elements of a subject (its rooms are "space" elements)."""
+    return "room (space)" if subject == "room" else subject
+
+
 def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> ToolResult:
     scope = scope or {"kind": "floor"}
     args = {"subject": subject, "scope": scope}
@@ -685,6 +710,25 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
     if (bad := _model_scope_unsupported(d, "count_objects", args)) is not None:
         return bad
     t0 = time.perf_counter()
+    if (not d.engine.supports(subject) and d.drawing.get("kind") == "ifc" and subject in ("door", "window", "room")
+            and scope.get("kind") in ("floor", "model")):
+        # A model file lists its elements: when it has none of this class, the count is 0, not unknown.
+        where = "this storey of the model file" if scope.get("kind") == "floor" else "the model file"
+        return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                          kind="count", subject=subject, value=0.0, numbers=[0.0], ms=_ms(t0),
+                          summary=f"0 {noun(subject, 2)}: {where} contains no {_element_name(subject)} elements.",
+                          meta={"none_in_model": True})
+    if (not d.engine.supports(subject) and getattr(d, "store_library", False) is True
+            and subject in ("door", "window", "room") and scope.get("kind") == "floor"):
+        # A sheet the drawing store read (a site plan, a detail sheet, one page of a set): when nothing of this
+        # kind was read on it, say so, as a zero with its reason; a model would only guess.
+        return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                          kind="count", subject=subject, value=0.0, numbers=[0.0], ms=_ms(t0),
+                          summary=f"0 {noun(subject, 2)}: no {noun(subject, 1)} was read on this sheet.",
+                          # what the sheet was read from decides the label: never "exact CAD geometry" for a PDF or a scan
+                          method=("pdf_vector" if d.drawing.get("source_ext") == ".pdf" else
+                                  "vision" if d.drawing.get("kind") == "raster" else "cad_geometry"),
+                          meta={"none_in_model": True})
     if not d.engine.supports(subject):
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects",
                           args=args, kind="none", subject=subject, supported=False,
@@ -707,7 +751,9 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
     rooms: list[EvidenceRoom] = []
     parts: list[str] = []
     missing: list[str] = []
+    rows: list[dict] = []  # elements of a floor whose drawing boxes none of them (a model file without footprints)
     counted = 0
+    none_in_model = True
     for fid in ids:
         fd = d if fid == d.id else (d.registry.get(fid) if d.registry is not None else None)
         if fd is None:
@@ -718,12 +764,17 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
             missing.append(fd.drawing.get("floor_label") or fd.drawing.get("title") or fid)
             continue
         counted += 1
+        none_in_model &= bool(tr.meta.get("none_in_model"))
         n = int(tr.value)
         total += n
         tag = fid.split("--", 1)[-1] if "--" in fid else fid
         boxes += [b.model_copy(update={"id": f"{b.id}@{tag}", "drawing_id": fid}) for b in tr.boxes]
         rooms += [r.model_copy(update={"drawing_id": fid}) for r in tr.rooms]
-        parts.append(f"{fd.drawing.get('floor_label') or fd.drawing.get('title') or fid}: {n}")
+        floor = str(fd.drawing.get('floor_label') or fd.drawing.get('title') or fid)
+        if not tr.boxes:  # listed, not drawn: every counted element still appears in the evidence, with its floor
+            rows += [{**r, "name": " · ".join(x for x in (str(r.get("name") or ""), floor) if x)[:120]}
+                     for r in tr.meta.get("rows") or []]
+        parts.append(f"{floor}: {n}")
     if counted == 0:
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
                           kind="none", subject=subject, supported=False, meta={"abstain": "not_supported_yet"},
@@ -731,10 +782,15 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
     summary = f"{total} {noun(subject, total)} across {counted} floors ({'; '.join(parts)})."
     if missing:
         summary += f" Not counted: {', '.join(missing)}."
+    if none_in_model and total == 0:
+        summary = (f"0 {noun(subject, 2)}: the model file contains no {_element_name(subject)} elements on "
+                   f"{'these ' + str(counted) + ' floors' if counted > 1 else 'this floor'}.")
     return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
                       kind="count", subject=subject, value=float(total), numbers=[float(total)],
                       boxes=boxes, rooms=rooms, summary=summary, ms=_ms(t0),
-                      meta={"floors_counted": counted, "floors_missing": missing})
+                      meta={"floors_counted": counted, "floors_missing": missing}
+                           | ({"rows": rows, "rows_beside_boxes": True} if rows else {})
+                           | ({"none_in_model": True} if none_in_model and total == 0 else {}))
 
 
 def _box_on_sibling_floors(d: LoadedDrawing, subject: str, raw: dict) -> dict:
@@ -803,6 +859,8 @@ def room_areas(d: LoadedDrawing, scope: dict | None = None,
     args: dict[str, Any] = {"scope": scope}
     if overrides:
         args["overrides"] = overrides
+    if scope.get("kind") == "project":
+        return _areas_across_floors(d, scope, overrides, tool, args)
     if (bad := _model_scope_unsupported(d, tool, args)) is not None:
         return bad
     t0 = time.perf_counter()
@@ -810,9 +868,61 @@ def room_areas(d: LoadedDrawing, scope: dict | None = None,
     return _to_result(d, tool, args, raw, _ms(t0), "area", None)
 
 
+def _areas_across_floors(d: LoadedDrawing, scope: dict, overrides: list[dict] | None, tool: str,
+                         args: dict) -> ToolResult:
+    """The net floor area over the floors of a building or group ("All N floors"): each floor drawing in the scope
+    is summed on its own (the same rule as on one floor), the sums are added, and every room is tagged with its
+    floor. A floor that cannot be loaded or has no room areas is named in the summary and left out of the sum."""
+    t0 = time.perf_counter()
+    ids = list(dict.fromkeys(i for i in scope.get("drawing_ids") or [] if isinstance(i, str))) or [d.id]
+    total, summed = 0.0, 0
+    rooms: list[EvidenceRoom] = []
+    parts: list[str] = []
+    missing: list[str] = []
+    methods: list[str] = []
+    approx = False
+    rank = {"cad_geometry": 0, "pdf_vector": 1, "ocr": 2, "vision": 3}
+    for fid in ids:
+        fd = d if fid == d.id else (d.registry.get(fid) if d.registry is not None else None)
+        if fd is None:
+            missing.append(fid)
+            continue
+        name = fd.drawing.get("floor_label") or fd.drawing.get("title") or fid
+        tr = (room_areas(fd, {"kind": "floor"}, overrides if fid == d.id else None)
+              if fd.engine.supports("area") else None)
+        if tr is None or not tr.supported or tr.kind == "none" or tr.value is None:
+            missing.append(name)
+            continue
+        summed += 1
+        total += float(tr.value)
+        methods.append(tr.method)
+        estimates = {r.get("room_id") for r in fd.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
+        approx |= any(r.included and r.room_id in estimates for r in tr.rooms)
+        rooms += [r.model_copy(update={"drawing_id": fid}) for r in tr.rooms]
+        parts.append(f"{name}: {float(tr.value):.2f} m²")
+    if summed == 0:
+        return ToolResult(result_id=_rid(d.id, tool, args), tool=tool, args=args, kind="none", supported=False,
+                          meta={"abstain": "not_supported_yet"},
+                          summary="No floor in this scope has rooms with areas.", ms=_ms(t0))
+    total = round(total, 2)
+    summary = f"{total:.2f} m² across {summed} floor{'s' if summed != 1 else ''} ({'; '.join(parts)})."
+    if missing:
+        summary += f" Not included: {', '.join(missing)}."
+    return ToolResult(result_id=_rid(d.id, tool, args), tool=tool, args=args, kind="area", value=total,
+                      numbers=[total], rooms=rooms, summary=summary, ms=_ms(t0),
+                      method=max(methods, key=lambda m: rank.get(m, 3)),
+                      meta={"floors_counted": summed, "floors_missing": missing, "floor_sums": parts}
+                           | ({"approximate": True} if approx else {}))
+
+
 def _label_hits(name: str, printed: list[str]) -> bool:
     n = (name or "").casefold().strip()
     return any(n == p.casefold() or n.startswith(p.casefold() + "/") for p in printed)
+
+
+# An IFC space that stands for a whole storey's gross area ("Bruttoareal 1etg", "BGF EG") is not a room.
+_GROSS_SPACE = re.compile(r"^\s*(?:brutto\s*-?\s*(?:areal|fl(?:ä|ae)che|grundfl(?:ä|ae)che)|gross\s+(?:floor\s+)?area|"
+                          r"bruttoareal|bta|bgf|gfa)\b", re.IGNORECASE)
 
 
 def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
@@ -821,6 +931,8 @@ def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
     if one is named) and pick the largest (`order='max'`) or smallest. 0 model calls."""
     scope = scope or {"kind": "floor"}
     args: dict[str, Any] = {"scope": scope, "order": order, **({"room_type": concept} if concept else {})}
+    if scope.get("kind") == "project":
+        return _rank_across_floors(d, order, scope, printed, concept, args)
     if (bad := _model_scope_unsupported(d, "list_rooms", args)) is not None:
         return bad
     t0 = time.perf_counter()
@@ -831,6 +943,7 @@ def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
         a = _area(r)
         reason = ("no printed or outlined area" if a is None else
                   "outdoor space" if r.get("outdoor") else
+                  "gross-area space, not a room" if _GROSS_SPACE.search(r.get("name") or "") else
                   f"not a {concept}" if printed and not _label_hits(r.get("name", ""), printed) else None)
         if reason:
             dropped.append({"id": r["room_id"], "name": r.get("name", ""), "reason": reason})
@@ -862,6 +975,40 @@ def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
                              "area_m2": runner[1]} if runner else None),
               "kept": [r["room_id"] for r, _ in kept], "dropped": dropped, "order": order,
               "concept": concept, "tie": tie})
+
+
+def _rank_across_floors(d: LoadedDrawing, order: str, scope: dict, printed: list[str] | None,
+                        concept: str | None, args: dict) -> ToolResult:
+    """The largest / smallest room over the floors of a building or group ("All N floors"): each floor is
+    ranked by the one-floor rule and the extreme of the floor winners is the answer, named with its floor."""
+    t0 = time.perf_counter()
+    ids = list(dict.fromkeys(i for i in scope.get("drawing_ids") or [] if isinstance(i, str))) or [d.id]
+    best: tuple[ToolResult, str, str] | None = None
+    seen = 0
+    for fid in ids:
+        fd = d if fid == d.id else (d.registry.get(fid) if d.registry is not None else None)
+        if fd is None:
+            continue
+        tr = rank_rooms(fd, order, {"kind": "floor"}, printed, concept)
+        if not tr.supported or tr.kind == "none" or tr.value is None:
+            continue
+        seen += 1
+        better = best is None or (tr.value > best[0].value if order == "max" else tr.value < best[0].value)
+        if better:
+            best = (tr, fid, str(fd.drawing.get("floor_label") or fd.drawing.get("title") or fid))
+    if best is None:
+        return ToolResult(result_id=_rid(d.id, "list_rooms", args), tool="list_rooms", args=args, kind="none",
+                          subject="room", summary=f"No floor in this scope has an indoor {concept or 'room'} "
+                                                  "with an area.", ms=_ms(t0), meta={"grabbed": 0, "dropped": []})
+    tr, fid, name = best
+    meta = dict(tr.meta or {})
+    win = dict(meta.get("winner") or {})
+    win["name"] = f"{win.get('name') or 'Room'} ({name})"
+    meta.update(winner=win, runner_up=None, floor=name, floors_ranked=seen)
+    return tr.model_copy(update={
+        "result_id": _rid(d.id, "list_rooms", args), "args": args, "ms": _ms(t0), "meta": meta,
+        "rooms": [r.model_copy(update={"drawing_id": fid}) for r in tr.rooms if r.included],
+        "summary": f"Ranked the rooms of {seen} floor{'s' if seen != 1 else ''}; the winner is on {name}. {tr.summary}"})
 
 
 # A door's box spans its wall opening, so it touches the outline of the room on each side of the
@@ -1158,7 +1305,7 @@ _CATEGORY_LABELS: dict[str, str] = {
 }
 
 
-def _room_category(name: str, outdoor: bool = False) -> tuple[str, str]:
+def _room_category(name: str, outdoor: bool = False, store_type: str | None = None) -> tuple[str, str]:
     if outdoor:
         return "cat-outdoor", "Balcony & Terrace"
     raw = (name or "").strip()
@@ -1167,6 +1314,9 @@ def _room_category(name: str, outdoor: bool = False) -> tuple[str, str]:
     for concept, rx, _printed in LABEL_CONCEPTS:
         if rx.search(raw):
             return f"cat-{concept}", _CATEGORY_LABELS.get(concept, concept.title())
+    if store_type in STORE_ROOM_CONCEPT:               # an abbreviation the store's vocabulary knows ("MH", "OH")
+        concept = STORE_ROOM_CONCEPT[store_type]
+        return f"cat-{concept}", _CATEGORY_LABELS.get(concept, concept.title())
     if raw:
         slug = re.sub(r"[^a-z0-9]+", "-", raw.casefold()).strip("-")[:24] or "other"
         return f"cat-{slug}", raw
@@ -1196,7 +1346,7 @@ def color_code_rooms(
             if not row.get("included", True):
                 continue
             rm = meta_by_id.get(row["room_id"], {})
-            gid, glabel = _room_category(rm.get("name", ""), bool(rm.get("outdoor")))
+            gid, glabel = _room_category(rm.get("name", ""), bool(rm.get("outdoor")), rm.get("room_type"))
             groups_map.setdefault(gid, glabel)
             row["group_id"] = gid
         # If every included room fell into a single category, color individual rooms distinctly

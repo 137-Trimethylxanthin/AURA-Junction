@@ -83,6 +83,39 @@ left join q.facts a on a.entity_id = e.entity_id and a.property = 'net_area_m2'
 left join q.facts p on p.entity_id = e.entity_id and p.property = 'perimeter_m'
 where e.kind = 'room' and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
 
+-- Printed (else measured) length and width of each room: the room size printed in it ("3.20 x 4.10"), else the
+-- sides of the smallest rotated rectangle around its outline.
+create view q.room_sizes as
+select e.entity_id, e.drawing_key as drawing, e.number, e.label,
+       coalesce(l.value, round(greatest(st_distance(st_pointn(b.ring, 1), st_pointn(b.ring, 2)),
+                                        st_distance(st_pointn(b.ring, 2), st_pointn(b.ring, 3)))::numeric, 2)::double precision) as length_m,
+       coalesce(w.value, round(least(st_distance(st_pointn(b.ring, 1), st_pointn(b.ring, 2)),
+                                     st_distance(st_pointn(b.ring, 2), st_pointn(b.ring, 3)))::numeric, 2)::double precision) as width_m,
+       case when l.value is not null then 'printed' when b.ring is not null then 'measured_bounding_box' end as size_source,
+       l.value_text as size_text
+from jstore.entity e
+left join q.facts l on l.entity_id = e.entity_id and l.property = 'length_m' and l.method = 'printed'
+left join q.facts w on w.entity_id = e.entity_id and w.property = 'width_m' and w.method = 'printed'
+left join lateral (select st_exteriorring(st_orientedenvelope(e.geom)) as ring
+                   where geometrytype(e.geom) in ('POLYGON', 'MULTIPOLYGON') and st_area(e.geom) > 0) b on true
+where e.kind = 'room' and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
+
+-- Dimensions printed on the sheet: one row per dimension line, room size, printed area or level mark.
+-- value_m is the printed value in metres (room_size: the longer side; a_m x b_m as printed), geom the dimension
+-- line in the drawing frame (null on a page without a frame), `check` = printed value / length of the drawn line.
+create view q.dimensions as
+select e.entity_id, e.drawing_key as drawing, e.attrs->>'dim_kind' as kind, e.attrs->>'text' as text,
+       (e.attrs->>'value_m')::double precision as value_m, e.attrs->>'unit' as unit,
+       (e.attrs->>'a_m')::double precision as a_m, (e.attrs->>'b_m')::double precision as b_m,
+       (e.attrs->>'area_m2')::double precision as area_m2,
+       e.attrs->>'orientation' as orientation, e.attrs->>'room' as room,
+       (e.attrs->>'room_id')::bigint as room_id,
+       coalesce((e.attrs->>'page_no')::int, 0) as page_no, (e.attrs->>'check')::double precision as "check",
+       (select min(s.file_id) from jstore.entity_source s where s.entity_id = e.entity_id) as file_id,
+       e.geom
+from jstore.entity e
+where e.kind = 'dimension' and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
+
 create view q.apartments as
 select e.entity_id, e.drawing_key as drawing, e.storey, e.number as apartment, e.label,
        (select count(*) from q.rooms r where r.drawing = e.drawing_key and r.apartment = e.number) as rooms,
@@ -103,11 +136,20 @@ select e.entity_id, e.drawing_key as drawing, e.storey, e.kind, e.ifc_class, e.n
        e.duplicate_of is not null as is_duplicate, e.duplicate_of,
        e.attrs, e.geom
 from jstore.entity e
-where e.kind not in ('room', 'apartment') and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
+where e.kind not in ('room', 'apartment', 'wall', 'dimension') and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
 
 create view q.doors    as select * from q.items where kind = 'door';
 create view q.windows  as select * from q.items where kind = 'window';
 create view q.fixtures as select * from q.items where kind not in ('door', 'window');
+
+-- Walls of plans that exist only as an image (jstore.interpret.raster_plan): polygons in metres, same frame as the
+-- rooms.  attrs.method = pixel_walls (vectorised wall ink) | room_gaps (derived from the room polygons);
+-- attrs.scale = nominal when the frame is an estimate.
+create view q.walls as
+select e.entity_id, e.drawing_key as drawing, e.storey, e.attrs->>'method' as method, e.attrs->>'scale' as scale,
+       (e.attrs->>'thickness_m')::double precision as thickness_m, e.attrs, e.geom
+from jstore.entity e
+where e.kind = 'wall' and e.status = 'active' and e.drawing_key = any (q.scope_drawings());
 
 -- Where each entity was read from: one row per source file and primitive.
 create view q.entity_sources as

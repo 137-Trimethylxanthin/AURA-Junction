@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 11  # 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
+ROUTER_VERSION = 13  # 13: rooms by door/window count merged with length answers; 12: length answers on bundled CAD drawings, no-dimension sheets, all-floors areas; 11: plain length questions answered from printed dimensions / outline;  8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",
@@ -125,8 +125,8 @@ def detect_lang(text: str) -> tuple[InternalLang, bool]:
 
 
 def contract_lang(lang: str) -> str:
-    """Contract Lang is en|fr|fi|de; Italian answers in English."""
-    return lang if lang in ("en", "fr", "fi", "de") else "en"
+    """Contract Lang is en|fr|fi|de|it; anything else answers in English."""
+    return lang if lang in ("en", "fr", "fi", "de", "it") else "en"
 
 
 # ---- vocab -----------------------------------------------------------------------------------
@@ -295,6 +295,15 @@ LABEL_CONCEPTS: list[tuple[str, re.Pattern[str], list[str]]] = [
      ["Cage d'escalier", "Treppenhaus", "Vano scala", "Staircase", "Stair"]),
 ]
 
+# The store's reading of a room label (jstore.interpret.vocab: "OH" is a living_room, "MH" a bedroom) as the
+# concept a question names: a short printed name is found by what it means, not only by how it is written.
+STORE_ROOM_CONCEPT: dict[str, str] = {
+    "bedroom": "bedroom", "living_room": "living", "living_dining": "living", "dining_room": "living",
+    "kitchen": "kitchen", "kitchen_dining": "kitchen", "bathroom": "bathroom", "toilet": "bathroom",
+    "storage": "storage", "corridor": "corridor", "entrance": "corridor", "hall": "corridor",
+    "balcony": "outdoor", "loggia": "outdoor", "terrace": "outdoor", "staircase": "stairs",
+}
+
 _QUOTED = re.compile(r"'([^']{1,60})'|‘([^’]{1,60})’|«\s?([^»]{1,60}?)\s?»|„([^“”]{1,60})[“”]|"
                      r"\"([^\"]{1,60})\"|“([^”]{1,60})”")
 _UNIT_RE = re.compile(
@@ -334,6 +343,10 @@ class DrawingCtx:
     room_ids: list[str] = field(default_factory=list)
     units: list[str] = field(default_factory=list)
     kind: str = "cad_dxf"
+    #: the store read dimensions printed on this sheet: a length question has something to answer from
+    printed_dimensions: int = 0
+    #: printed label -> concept ("bedroom", "living" ...) by the store's room type, where it has one
+    label_concepts: dict[str, str] = field(default_factory=dict)
 
 
 WHOLE_MODEL = S(r"whole building|entire building|in the (?:ifc )?model|whole model|all storeys|"
@@ -416,6 +429,10 @@ def label_of(text: str, ctx: DrawingCtx | None) -> tuple[str | None, str | None]
             for p in printed:
                 if _norm(p) in by_norm:
                     return by_norm[_norm(p)], p
+            typed = [lab for lab in labels if ctx and ctx.label_concepts.get(lab) == _concept]
+            if typed:                                  # the store reads a label of this drawing as that room
+                best = max(typed, key=ctx.labels.count)
+                return best, best
             if quoted:
                 return quoted[0], quoted[0]
             return (printed[0] if not labels else None), None
@@ -626,6 +643,8 @@ def route(text: str, ctx: DrawingCtx | None = None) -> Routed:
         # tool steps; only a plain length question ("how long is the corridor") is not supported.
         if SELECTOR.search(s) or QUALIFIER_GUARD.search(s) or ROOMS_WITH.search(s):
             return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["length_filter"])
+        if ctx is not None and ctx.printed_dimensions:      # printed on the sheet: the SQL tool step reads them
+            return Routed("unknown", lang, signal, scope=_scope(s, ctx), matched=["length_printed"])
         return Routed("abstain", lang, signal, reason="not_supported_yet", topic="length",
                       matched=["length"])
 
@@ -774,18 +793,21 @@ WHERE_TO_FIND = {
         "fr": "Un tableau des portes ou la maquette IFC l’indiquerait.",
         "fi": "Tieto löytyy ovikaaviosta tai IFC-mallista.",
         "de": "Das steht in der Türliste oder im IFC-Modell.",
+        "it": "Si troverebbe in un abaco delle porte o nel modello IFC.",
     },
     "height": {
         "en": "A section drawing or the IFC model would have it.",
         "fr": "Une coupe ou la maquette IFC l’indiquerait.",
         "fi": "Tieto löytyy leikkauspiirustuksesta tai IFC-mallista.",
         "de": "Das steht in einem Schnitt oder im IFC-Modell.",
+        "it": "Si troverebbe in una sezione o nel modello IFC.",
     },
     "material": {
         "en": "The specification or the IFC model would have it.",
         "fr": "Le descriptif ou la maquette IFC l’indiquerait.",
         "fi": "Tieto löytyy rakennustapaselostuksesta tai IFC-mallista.",
         "de": "Das steht in der Baubeschreibung oder im IFC-Modell.",
+        "it": "Si troverebbe nel capitolato o nel modello IFC.",
     },
 }
 

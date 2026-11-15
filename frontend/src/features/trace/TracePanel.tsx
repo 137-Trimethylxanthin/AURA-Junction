@@ -9,6 +9,7 @@ import { useUi } from '@/i18n/uiLang'
 import { cn } from '@/lib/utils'
 import { callsText, fmtUsd } from '@/features/chat/view'
 import { traceDetail } from './detail'
+import { traceBody, traceHint, traceTag, traceTitle } from './titles'
 
 const ROUTE_KEY: Record<string, 'tr_route_exact' | 'tr_route_cache' | 'tr_route_agent'> = {
   exact: 'tr_route_exact',
@@ -213,12 +214,12 @@ export function TracePanel() {
               >
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span aria-hidden className={cn('size-2 shrink-0 rounded-full', k.dot)} />
-                  <strong className="text-[13px] font-semibold">{node.title}</strong>
-                  <span className="rounded-full bg-muted px-2 py-px text-xs text-muted-foreground">{node.tag}</span>
+                  <strong className="text-[13px] font-semibold">{traceTitle(node.title, lang)}</strong>
+                  <span className="rounded-full bg-muted px-2 py-px text-xs text-muted-foreground">{traceTag(node.tag, lang)}</span>
                   <span className="flex-1" />
                   {conf ? <span className={cn('num text-xs font-semibold', k.conf)}>{conf}</span> : null}
                 </div>
-                <p className="text-[13px] text-foreground/85">{node.body}</p>
+                <p className="text-[13px] text-foreground/85">{traceBody(node.body, lang)}</p>
                 {detail.decision ? (
                   <div className="flex flex-wrap items-center gap-1.5" data-decision>
                     {detail.decision.decider === 'gemini-decision-1' ? (
@@ -332,7 +333,7 @@ export function TracePanel() {
         })}
       </ol>
       <footer className="border-t bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground">
-        Point at a step to light what it used on the plan. Geometry steps are exact; the Gemini check covers the drawn boxes only.
+        {traceHint(lang)}
       </footer>
     </motion.section>
   )

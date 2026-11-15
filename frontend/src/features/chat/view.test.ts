@@ -29,6 +29,19 @@ import { deriveAnswer, emptyToggles } from '@/lib/answer'
 describe('check chip', () => {
   const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
   const d = deriveAnswer(base, emptyToggles())
+  it('a printed value is labelled as printed whoever read it; a measure on a scan is an estimate', () => {
+    const d = deriveAnswer(base, emptyToggles())
+    const area = { kind: 'area' as const, value: 20.25, unit: 'm2' as const }
+    const printed = chips({ ...base, answer: area, method: 'vision', basis: 'printed' }, d, 'en')[0]
+    expect(printed.text).toBe('Read from the sheet · as printed')
+    expect(printed.tone).toBe('success')
+    expect(printed.title).toContain('quoted as printed')
+    expect(chips({ ...base, answer: area, method: 'vision', basis: 'estimate' }, d, 'en')[0].text).toBe('Estimate · measured on the scan')
+    // exact geometry and answers without a basis (the bundles) keep their chips
+    expect(chips({ ...base, method: 'cad_geometry', basis: 'measured' }, d, 'en')[0].text).toBe('Exact · CAD geometry')
+    expect(chips({ ...base, answer: area, method: 'vision' }, d, 'en')[0].text).toBe('Model estimate · vision')
+    expect(footerParts({ ...base, method: 'vision', basis: 'printed' }, 'de')[0]).toContain('vom Plan gelesen (wie gedruckt)')
+  })
   it('a DXF upload with no image says so instead of a sample check', () => {
     const r = { ...base, check: { method: 'decisions_api' as const, status: 'sample' as const, image: 'none' as const } }
     expect(chips(r, d, 'en').find((c) => c.key === 'check')?.text).toBe('No independent image to check against')
@@ -45,7 +58,7 @@ describe('check chip', () => {
   })
 })
 
-import { valueParts, sentence } from '@/features/chat/view'
+import { metricText, valueParts, sentence } from '@/features/chat/view'
 import { isAskResponse, isRewriteResponse, isScope } from '@/api/contract'
 import { bundledDrawing } from '@/data/drawing'
 
@@ -57,6 +70,49 @@ describe('1.1 answer kinds', () => {
     const d = deriveAnswer(r, emptyToggles())
     expect(valueParts(r, d, 'en')).toEqual(['42.50', 'm³'])
     expect(sentence(r, d, bundledDrawing, 'en')).toContain('in the whole model')
+  })
+  it('a printed or measured length explains itself: no "as given by the model file" line', () => {
+    const r = {
+      ...base,
+      answer: { kind: 'quantity' as const, value: 24.384, unit: 'm' as const },
+      explanation: 'Depth (up the page): 80\' - 0" as printed = 24.38 m (the overall dimension printed on the sheet).',
+    }
+    expect(isAskResponse(r)).toBe(true)
+    const d = deriveAnswer(r, emptyToggles())
+    expect(valueParts(r, d, 'en')).toEqual(['24.38', 'm'])
+    expect(sentence(r, d, bundledDrawing, 'en')).toBe('')
+    expect(sentence(r, d, { ...bundledDrawing, kind: 'ifc' }, 'en')).toContain('model file')
+  })
+  it('an answer asked in another unit shows that unit, with the metric value beside it', () => {
+    const display = {
+      unit: 'sqft', label: 'sq ft', style: 'decimal' as const,
+      factors: { m: 3.280839895, m2: 10.76391042, m3: 35.31466672 },
+      labels: { m: 'ft', m2: 'sq ft', m3: 'cu ft' },
+      value: 3675.01, text: '3,675 sq ft', metric_text: '341.42 m²',
+    }
+    const area = { ...base, answer: { kind: 'area' as const, value: 341.42, unit: 'm2' as const }, display }
+    expect(isAskResponse(area)).toBe(true)
+    const d = deriveAnswer(area, emptyToggles())
+    expect(valueParts(area, d, 'en')).toEqual(['3,675', 'sq ft'])
+    expect(metricText(area, d, 'en')).toBe('341.42 m²')
+    // measured under an estimated scale: both values say so, and the metric one has no false decimals
+    const est = { ...area, answer: { ...area.answer, approximate: true } }
+    expect(valueParts(est, d, 'en')).toEqual(['≈ 3,675', 'sq ft'])
+    expect(metricText(est, d, 'en')).toBe('≈ 341 m²')
+    const estNote = { ...base, answer: { kind: 'note' as const, value: 'OH: 22.30 m².', number: 22.3, unit: 'm2', approximate: true }, display: { ...display, value: 240.04, text: '240 sq ft', metric_text: '22.30 m²' } }
+    const dn = deriveAnswer(estNote, emptyToggles())
+    expect(valueParts(estNote, dn, 'en')).toEqual(['≈ 240', 'sq ft'])
+    expect(metricText(estNote, dn, 'en')).toBe('≈ 22 m²')
+    expect(valueParts({ ...estNote, display: undefined }, dn, 'de')).toEqual(['≈ 22', 'm² (Schätzung)'])
+    const len = { ...base, answer: { kind: 'quantity' as const, value: 3.81, unit: 'm' as const }, display: { ...display, unit: 'ftin', label: 'ft-in', style: 'ft_in' as const } }
+    expect(valueParts(len, deriveAnswer(len, emptyToggles()), 'en')).toEqual(["12' 6\"", ''])
+    const note = { ...base, answer: { kind: 'note' as const, value: 'Wall 2400 mm.', number: 2400, unit: 'mm' }, display: { ...display, unit: 'ft', label: 'ft', value: 7.874, text: '7.87 ft', metric_text: '2,400 mm' } }
+    expect(valueParts(note, deriveAnswer(note, emptyToggles()), 'en')).toEqual(['7.87', 'ft'])
+    expect(metricText(note, deriveAnswer(note, emptyToggles()), 'en')).toBe('2,400 mm')
+    // no display, or a malformed one: metric as before
+    const bad = { ...area, display: { unit: 'sqft' } as unknown as typeof display }
+    expect(valueParts(bad, d, 'en')).toEqual(['341.42', 'm²'])
+    expect(metricText({ ...area, display: undefined }, d, 'en')).toBeNull()
   })
   it('a text answer shows the printed text itself', () => {
     const r = { ...base, answer: { kind: 'text' as const, value: 'EI 30', subject: 'fire_rating' as const } }
@@ -153,6 +209,32 @@ describe('rooms with no printed area', () => {
     t.included['room-x-1'] = true
     t.included[`room-${room.room_id}`] = true
     expect(deriveAnswer(resp, t).value).toBe(deriveAnswer(base, t).value)
+  })
+})
+
+describe('a note whose number is an area', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+  it('writes m², and an estimated area without false decimals, like its evidence row', () => {
+    const exact = { ...base, method: 'cad_geometry' as const, answer: { kind: 'note' as const, value: 'OH is the largest room: 11.95 m².', number: 11.95, unit: 'm2' } }
+    expect(valueParts(exact, deriveAnswer(exact, emptyToggles()), 'en')).toEqual(['11.95', 'm²'])
+    const est = { ...base, method: 'vision' as const, answer: { ...exact.answer, approximate: true } }
+    expect(isAskResponse(est)).toBe(true)
+    const d = deriveAnswer(est, emptyToggles())
+    expect(valueParts(est, d, 'en')).toEqual(['≈ 12', 'm² (estimate)'])
+    expect(sentence(est, d, bundledDrawing, 'en')).toContain('Estimate')
+    expect(sentence(est, d, bundledDrawing, 'en')).not.toContain('Read from the drawing')
+  })
+})
+
+describe('room rows of a drawing with an estimated scale', () => {
+  it('mark each area approximate, as the headline does', () => {
+    const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'Net floor area of apartment A' })
+    const id = base.evidence.rooms[0].room_id
+    const drawing = { ...bundledDrawing, rooms: bundledDrawing.rooms.map((r) => (r.room_id === id ? { ...r, area_source: 'estimate' as const } : r)) }
+    const all = evidenceRows(base, emptyToggles(), drawing, 'en').filter((r) => r.kind === 'room')
+    const text = (r: (typeof all)[number]) => JSON.stringify(r)
+    expect(text(all[0])).toMatch(/≈ \d+ m² \(estimate\)/)
+    expect(all.slice(1).some((r) => text(r).includes('≈'))).toBe(false)
   })
 })
 
@@ -897,5 +979,7 @@ describe('not_answerable abstain', () => {
     expect(announce(r, deriveAnswer(r, emptyToggles()))).toBe('Not in this drawing’s data. Nothing guessed.')
     expect(triedText(r)).toBe('the tools found no answer within their limits.')
     expect(triedText({ ...r, trace: [] })).toBeNull()
+    // the card writes "Tried:" itself: a reason that starts with it is not doubled
+    expect(triedText({ ...r, trace: [], explanation: 'Tried: the exact templates. None gives this answer.' })).toBe('the exact templates. None gives this answer.')
   })
 })

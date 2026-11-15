@@ -7,6 +7,7 @@ reported with the dataset line for the question's language.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from aura.contract import CONTRACT_VERSION, ToolResult
@@ -77,6 +78,60 @@ PICK_SOURCE = {
 }
 
 
+_METHOD_RANK = {"cad_geometry": 0, "pdf_vector": 1, "ocr": 2, "vision": 3}
+_HONEST = {  # method -> (answer tag, node kind, where the numbers come from)
+    "vision": ("estimate · measured on the image", "model",
+               "outlines found on the page image by a model, so this is an estimate"),
+    "ocr": ("estimate · read by OCR", "model",
+            "values read by OCR from the page image, so this is an estimate"),
+    "pdf_vector": ("PDF vectors", "exact", "the PDF's vector lines and printed text"),
+}
+
+
+def honest_method(body: dict, d: LoadedDrawing, subject: str | None = None) -> None:
+    """The last word on `method` for a drawing the store indexed (`evidence_method` per subject).
+
+    A solver may call its result exact CAD geometry because it only read the drawing index; whether
+    that index was drawn (CAD / IFC) or found on pixels is a fact of the drawing. Whatever the
+    answer used (its subject, its rooms, its boxes) decides, the weakest source winning, and an
+    answer never stays `cad_geometry` over geometry that came from a scan, OCR or a detection."""
+    em: dict = d.drawing.get("evidence_method") or {}
+    if em and body.get("method") in ("vision", "ocr"):
+        # already an estimate: its answer node must not read as exact either
+        for n in body.get("trace") or []:
+            if n.get("id") == "answer" and n.get("kind") == "exact":
+                n["kind"] = "model"
+                if "estimate" not in str(n.get("tag", "")):
+                    n["tag"] = f"estimate · {n.get('tag') or 'answer'}"
+        return
+    if not em or body.get("method") != "cad_geometry":
+        return
+    ev = body.get("evidence") or {}
+    used = {"room" if subject in ("room", "area", "apartment") else subject}
+    if ev.get("rooms"):
+        used.add("room")
+    used |= {b.get("subject") for b in ev.get("boxes") or [] if isinstance(b, dict)}
+    methods = [em[u] for u in used if u in em] or list(em.values())
+    method = max(methods, key=lambda m: _METHOD_RANK.get(m, 3))
+    if _METHOD_RANK.get(method, 3) == 0:
+        return
+    tag, kind, source = _HONEST.get(method, _HONEST["vision"])
+    body["method"] = method if method in _HONEST else "vision"
+    for n in body.get("trace") or []:
+        exact_claim = "CAD" in str(n.get("tag", "")) or str(n.get("tag", "")).startswith("exact")
+        if not (exact_claim or (n.get("id") == "answer" and n.get("kind") == "exact")):
+            continue
+        if n.get("id") == "answer":
+            n["tag"] = tag
+            n["body"] = (str(n.get("body", "")).split(" Source: indexed CAD")[0].rstrip()
+                         + f" Source: {source}.")
+        else:
+            n["tag"] = str(n["tag"]).replace("exact · ", "").replace("CAD", "drawing index")
+        n["kind"] = kind
+        if isinstance(n.get("detail"), dict) and n["detail"].get("source") == "cad_geometry":
+            n["detail"]["source"] = body["method"]
+
+
 def pick_source(method: str | None, d: LoadedDrawing) -> dict:
     """The 'Pick the best source' node, worded after the evidence the answer really used."""
     store = bool(d.drawing.get("evidence_method"))
@@ -122,6 +177,22 @@ def _base(question: str, lang: str, scope: dict) -> dict:
         "cost_usd": 0.0,
         "source": "api",
     }
+
+
+def area_basis(d: Any, room_ids: list[str], method: str | None) -> dict:
+    """{"basis": ...} for an area built from these rooms, when their drawing says where each area comes from
+    (`area_source`): all printed on the sheet -> printed (whoever read it); any measured under an estimated scale,
+    or measured on outlines a model found on a scan -> estimate; measured on exact geometry -> measured.
+    Rooms without `area_source` (the bundled library) leave the answer as it was."""
+    src = {r.get("room_id"): r.get("area_source") for r in d.drawing.get("rooms", [])}
+    got = [src.get(i) for i in room_ids]
+    if not got or any(g is None for g in got):
+        return {}
+    if all(g == "printed" for g in got):
+        return {"basis": "printed"}
+    if "estimate" in got or method in ("vision", "ocr", "detector", "agent_estimate"):
+        return {"basis": "estimate"}
+    return {"basis": "measured"}
 
 
 def abstain(question: str, lang: str, scope: dict, reason: str, canonical: str, look: str,
@@ -187,6 +258,7 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
         return unclear(question, lang, d, intent_tag=intent_tag,
                        look="The tool returned no value for this count.")
     value = int(tr.value)
+    unlabelled_note: str | None = None
     plural = noun(subject, 2)
     gold = None if overrides or scope.get("kind") == "region" or tr.method in ("vision", "agent_estimate") else (
         gold_for(d, lang, "count", subject, scope, value))
@@ -215,6 +287,8 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                        "found, check the boxes." if vision else
                        f"{value} {noun(subject, value)}. Each one is drawn on the plan for you to "
                        "check.")
+        if value == 0 and tr.meta.get("none_in_model"):
+            answer_body = tr.summary  # a model file without elements of this class: a real zero, said as such
         canonical = f"How many {plural} are drawn {where_en(scope)}"
     else:
         all_ids = [room_eid(r.room_id) for r in tr.rooms]
@@ -224,6 +298,15 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                       "evidence_ids": all_ids, "tool": tool_meta(tr)})
         check_ids = []
         answer_body = f"{value} {noun(subject, value)}. Each room is lit on the plan for you to check."
+        bare = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("unlabelled")}
+        n_bare = sum(1 for r in tr.rooms if r.included and r.room_id in bare and not getattr(r, "drawing_id", None))
+        if subject == "room" and n_bare and scope.get("kind", "floor") == "floor":
+            # spaces the sheet prints no label for are rooms too: the count says how many of each
+            answer_body = (f"{value} {noun(subject, value)} ({value - n_bare} labelled, {n_bare} without a label). "
+                           "Each room is lit on the plan for you to check.")
+            # the sentence people read, in the language they asked in (the trace stays English)
+            said = UNLABELLED_NOTE.get(said_lang(lang)) if value > 1 else None
+            unlabelled_note = said.format(n=value, a=value - n_bare, b=n_bare) if said else answer_body
         if subject == "apartment":
             canonical = ("How many apartments are on this floor plan" if scope.get("kind") == "floor"
                          else f"How many apartments are {where_en(scope)}")
@@ -237,7 +320,7 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                   "kind": "model" if vision else "exact", "evidence_ids": answer_ids})
     evidence: dict = {"boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
                       "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]}
-    if tr.meta.get("rows") and not tr.boxes:
+    if tr.meta.get("rows") and (not tr.boxes or tr.meta.get("rows_beside_boxes")):
         evidence["rows"] = tr.meta["rows"]  # IFC elements without a 2D footprint
     if tr.groups:
         evidence["groups"] = [g.model_dump(exclude_none=True) for g in tr.groups]
@@ -252,6 +335,19 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
     }
     if gold:
         body["gold"] = gold
+    if value == 0 and tr.meta.get("none_in_model"):
+        body["explanation"] = none_in_model_said(lang, subject, tr.summary)
+    if unlabelled_note:
+        body["explanation"] = unlabelled_note
+    if subject == "room" and scope.get("kind", "floor") == "floor" and not overrides:
+        # the header counts every space of the sheet; the answer leaves the outdoor ones out, and says so
+        outdoor = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("outdoor")}
+        n_out = sum(1 for r in tr.rooms if not r.included and r.room_id in outdoor
+                    and not getattr(r, "drawing_id", None))
+        if n_out:
+            one, many = OUTDOOR_NOTE.get(said_lang(lang), OUTDOOR_NOTE["en"])
+            note = (one if n_out == 1 else many).format(n=n_out)
+            body["explanation"] = f"{body['explanation']} {note}" if body.get("explanation") else note
     return Built(body, [tr], check_ids, subject)
 
 
@@ -269,6 +365,11 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     inc_ids = [room_eid(r.room_id) for r in included]
     used = [o for o in overrides or [] if any(r.room_id == o["room_id"] for r in rooms)]
     k = scope.get("kind", "floor")
+    # areas measured under an estimated scale (a scan that states none) make the answer approximate
+    estimates = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
+    approx = (any(r.room_id in estimates and not getattr(r, "edited", False) for r in included)
+              or bool(tr.meta.get("approximate")))
+    floors = tr.meta.get("floor_sums") or []   # an all-floors sum: one line per floor
     canonical = ("What is the net floor area of all numbered indoor rooms" if k == "floor" else
                  f"What is the total area of rooms labelled {scope['label']}" if k == "label" else
                  f"What is the net floor area inside {scope.get('label')}" if k == "region" else
@@ -297,6 +398,8 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     trace.append(check_placeholder(inc_ids))
     trace.append({"id": "answer", "parent": "q", "title": "Answer", "tag": "sum",
                   "body": (f"{value:.2f} m², shown on the plan." if len(included) == 1 else
+                           f"Sum of {len(included)} net room areas on {len(floors)} floors = {value:.2f} m² "
+                           f"({'; '.join(floors)})." if len(floors) > 1 else
                            f"Sum of {len(included)} net room areas = {value:.2f} m², shown room by room."),
                   "kind": "exact", "evidence_ids": inc_ids})
     # A model's free-form answer is not the template the dataset row asks ("the area of the rooms with two doors" is
@@ -309,11 +412,12 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     if tr.links:
         ev_dict["links"] = [lk.model_dump(exclude_none=True) for lk in tr.links]
     body = _base(question, lang, scope) | {
-        "answer": {"kind": "area", "value": value, "unit": "m2"},
+        "answer": {"kind": "area", "value": value, "unit": "m2"} | ({"approximate": True} if approx else {}),
         "evidence": ev_dict,
         "canonical_en": canonical,
         "method": tr.method,
         "trace": trace,
+        **area_basis(d, [r.room_id for r in included if not getattr(r, "edited", False)] if not used else [], tr.method),
     }
     if gold:
         body["gold"] = gold
@@ -368,10 +472,91 @@ def quantity(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: 
     return Built(body, [tr], ids if is_agent else [], tr.subject)
 
 
+def said_lang(lang: str) -> str:
+    """The language an answer sentence is written in: the question's, Italian included."""
+    return contract_lang(lang)
+
+
+#: "10 rooms (8 labelled, 2 without a label)" in the other interface languages
+UNLABELLED_NOTE = {
+    "de": "{n} Räume ({a} beschriftet, {b} ohne Beschriftung). Jeder Raum ist im Plan markiert, zum Nachprüfen.",
+    "fr": "{n} pièces ({a} avec libellé, {b} sans libellé). Chaque pièce est mise en évidence sur le plan pour vérification.",
+    "fi": "{n} huonetta ({a} nimettyä, {b} ilman nimeä). Jokainen huone on korostettu pohjapiirroksessa tarkistusta varten.",
+    "it": "{n} locali ({a} con etichetta, {b} senza etichetta). Ogni locale è evidenziato sulla pianta per la verifica.",
+}
+
+#: "(1 outdoor space not counted)": why a room count is lower than the number of spaces on the sheet
+OUTDOOR_NOTE = {
+    "en": ("({n} outdoor space not counted)", "({n} outdoor spaces not counted)"),
+    "de": ("({n} Außenbereich nicht mitgezählt)", "({n} Außenbereiche nicht mitgezählt)"),
+    "fr": ("({n} espace extérieur non compté)", "({n} espaces extérieurs non comptés)"),
+    "fi": ("({n} ulkotilaa ei laskettu mukaan)", "({n} ulkotilaa ei laskettu mukaan)"),
+    "it": ("({n} spazio esterno non contato)", "({n} spazi esterni non contati)"),
+}
+
+#: "0 windows: the model file contains no window elements" in the other interface languages
+NONE_IN_MODEL = {
+    "de": "0 {things}: {where} enthält keine {element}-Elemente.",
+    "fr": "0 {things} : {where} ne contient aucun élément de type {element}.",
+    "fi": "0 {things}: {where} ei sisällä {element}-elementtejä.",
+    "it": "0 {things}: {where} non contiene elementi di tipo {element}.",
+}
+_NONE_WORDS = {
+    "de": {"door": ("Türen", "Tür"), "window": ("Fenster", "Fenster"), "room": ("Räume", "Raum"),
+           "floor": "dieses Geschoss der Modelldatei", "model": "die Modelldatei"},
+    "fr": {"door": ("portes", "porte"), "window": ("fenêtres", "fenêtre"), "room": ("pièces", "espace"),
+           "floor": "cet étage de la maquette", "model": "la maquette"},
+    "fi": {"door": ("ovea", "ovi"), "window": ("ikkunaa", "ikkuna"), "room": ("huonetta", "tila"),
+           "floor": "mallitiedoston tämä kerros", "model": "mallitiedosto"},
+    "it": {"door": ("porte", "porta"), "window": ("finestre", "finestra"), "room": ("locali", "locale"),
+           "floor": "questo piano del modello", "model": "il file del modello"},
+}
+
+
+def none_in_model_said(lang: str, subject: str, summary: str) -> str:
+    """The reason of a real zero from a model file, in the language of the question (English otherwise)."""
+    code = said_lang(lang)
+    words = _NONE_WORDS.get(code, {})
+    if code not in NONE_IN_MODEL or subject not in words or "contains no" not in summary:
+        return summary
+    things, element = words[subject]
+    where = words["floor"] if "this storey" in summary or "this floor" in summary else words["model"]
+    text = NONE_IN_MODEL[code].format(things=things, where=where, element=element)
+    return text[:1].upper() + text[1:] if not text[0].isdigit() else text
+
+
+#: "X is the largest room: 45.60 m²; next is Y at 45.50 m²" in the other interface languages
+RANK_SAID = {
+    "de": {"max": "{name} ist der größte Raum: {area}", "min": "{name} ist der kleinste Raum: {area}",
+           "next": "; danach folgt {name} mit {area}", "tied": " (gleichauf)", "estimate": "Schätzung", "room": "Raum"},
+    "fr": {"max": "{name} est la plus grande pièce : {area}", "min": "{name} est la plus petite pièce : {area}",
+           "next": " ; vient ensuite {name} avec {area}", "tied": " (à égalité)", "estimate": "estimation", "room": "Pièce"},
+    "fi": {"max": "{name} on suurin huone: {area}", "min": "{name} on pienin huone: {area}",
+           "next": "; seuraavana on {name}, {area}", "tied": " (tasan)", "estimate": "arvio", "room": "Huone"},
+    "it": {"max": "{name} è il locale più grande: {area}", "min": "{name} è il locale più piccolo: {area}",
+           "next": "; segue {name} con {area}", "tied": " (a pari merito)", "estimate": "stima", "room": "Locale"},
+}
+
+#: an id the store gives a room or thing that carries no number on the sheet ("e143313"): never shown to people
+# a store entity id ("e143313") or an IFC GlobalId (22 characters): never shown beside a room name
+INTERNAL_ID = re.compile(r"e\d{3,}|[0-9A-Za-z_$]{22}")
+
+
+def plain_ids(text: str, drawing: dict) -> str:
+    """Prose without the store's internal ids: "Hall (e143313)" -> "Hall", "with ID e143299" -> "",
+    "room e143304" -> "room Enclosed Walkway" (the room's name when the drawing has it; else the id stays)."""
+    if not text or "e" not in text:
+        return text
+    names = {str(r.get("room_id")): str(r.get("name") or "").strip() for r in drawing.get("rooms", [])}
+    text = re.sub(r"\s*\((?:(?:entity[ _]?)?id[:= ]*)?e\d{3,}\)", "", text, flags=re.I)
+    text = re.sub(r",?\s*\b(?:with|having)\s+(?:the\s+)?(?:entity[ _]?)?id[:= ]*e\d{3,}\b", "", text, flags=re.I)
+    return re.sub(r"\be\d{3,}\b", lambda m: names.get(m.group(0)) or m.group(0), text)
+
+
 def note(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict,
          intent_tag: str = "router") -> Built:
     """Open-ended answer from the deep agent (`AnswerNote`, contract 1.2)."""
-    value = tr.text or tr.summary or ""
+    value = plain_ids(tr.text or tr.summary or "", d.drawing)
     ans: dict[str, Any] = {"kind": "note", "value": value}
     if tr.value is not None:
         ans["number"] = float(tr.value)
@@ -443,9 +628,32 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
     win, ru = m["winner"], m.get("runner_up")
     word = "largest" if m["order"] == "max" else "smallest"
     what = m.get("concept") or "room"
-    value = (f"{win['name'] or 'Room'} ({win['id']}) is the {word} {what}: {win['area_m2']:.2f} m²"
-             + (f"; next is {ru['name'] or 'room'} ({ru['id']}) at {ru['area_m2']:.2f} m²" if ru else "")
+    # areas measured under an estimated scale (a scan that states none) are approximate: no decimals they do not have
+    estimates = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
+    approx = win["id"] in estimates
+
+    def _a(room: dict) -> str:
+        return f"≈ {round(room['area_m2'])} m² (estimate)" if room["id"] in estimates else f"{room['area_m2']:.2f} m²"
+
+    def _n(room: dict, default: str) -> str:
+        # a room number the sheet prints ("1.03") tells rooms of one name apart; a store id ("e143313") tells nobody anything
+        shown = "" if INTERNAL_ID.fullmatch(str(room["id"])) else f" ({room['id']})"
+        return f"{room['name'] or default}{shown}"
+
+    value = (f"{_n(win, 'Room')} is the {word} {what}: {_a(win)}"
+             + (f"; next is {_n(ru, 'room')} at {_a(ru)}" if ru else "")
              + (" (tied)" if m.get("tie") else "") + ".")
+    # the sentence people read, in the language they asked in (the trace stays English); only for plain rooms
+    t = RANK_SAID.get(said_lang(lang)) if what == "room" else None
+    said = value
+    if t:
+        def _al(room: dict) -> str:
+            if room["id"] in estimates:
+                return f"≈ {round(room['area_m2'])} m² ({t['estimate']})"
+            return f"{room['area_m2']:.2f}".replace(".", ",") + " m²"
+        said = (t[m["order"] if m["order"] in ("max", "min") else "max"].format(name=_n(win, t["room"]), area=_al(win))
+                + (t["next"].format(name=_n(ru, t["room"]), area=_al(ru)) if ru else "")
+                + (t["tied"] if m.get("tie") else "") + ".")
     all_ids = [room_eid(r.room_id) for r in tr.rooms]
     win_ids = [room_eid(win["id"])]
     dropped = m.get("dropped") or []
@@ -477,9 +685,11 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
                    evidence_ids=win_ids),
     ]
     body = _base(question, lang, scope) | {
-        "answer": {"kind": "note", "value": value, "number": round(float(win["area_m2"]), 2), "unit": "m2"},
+        "answer": {"kind": "note", "value": said, "number": round(float(win["area_m2"]), 2), "unit": "m2"}
+                  | ({"approximate": True} if approx else {}),
         "evidence": {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]},
         "canonical_en": f"Which is the {word} {what} {where_en(scope)}",
+        **area_basis(d, [win["id"]], tr.method),
         "method": "cad_geometry",
         "trace": trace,
     }

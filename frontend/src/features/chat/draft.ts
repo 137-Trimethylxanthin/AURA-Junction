@@ -79,23 +79,100 @@ const IFC_SUGGESTIONS: Suggestion[] = [
   STAIRS_SUGGESTION,
 ]
 
+const LARGEST_ROOM_DE: Suggestion = { lang: 'DE', text: 'Welcher Raum ist der größte?', short: 'Größter Raum?' }
+
 const RASTER_SUGGESTIONS: Suggestion[] = [
   { lang: 'EN', text: 'How many doors are shown on this floor plan?', short: 'How many doors?' },
   { lang: 'FR', text: 'Combien de fenêtres figurent sur ce plan ?', short: 'Combien de fenêtres ?' },
   { lang: 'FI', text: 'Montako huonetta tässä pohjapiirroksessa näkyy?', short: 'Montako huonetta?' },
-  { lang: 'DE', text: 'Welche Räume und Flächen sind im Plan beschriftet?', short: 'Räume & Flächen?' },
+  LARGEST_ROOM_DE,
   STAIRS_SUGGESTION,
 ]
+
+/** Offered when the usual questions do not fit: each still passes the capability filter. */
+const FALLBACK_SUGGESTIONS: Suggestion[] = [
+  { lang: 'EN', text: 'How many doors are shown on this floor plan?', short: 'How many doors?' },
+  { lang: 'EN', text: 'How many windows are drawn on this floor plan?', short: 'How many windows?' },
+  LARGEST_ROOM_DE,
+]
+
+const OVERVIEW_SUGGESTION: Suggestion = { lang: 'EN', text: 'What does this drawing show?', short: 'What does it show?' }
+
+const STAIR_WORDS = /stair|trepp|stiege|escalier|\btrapp|scala|porras/i
+
+/** A room the store typed as a staircase, or one whose printed name says so. */
+function hasStairs(drawing: Drawing): boolean {
+  return drawing.rooms.some(
+    (r) => STAIR_WORDS.test((r as { room_type?: string }).room_type ?? '') || STAIR_WORDS.test(r.name ?? ''),
+  )
+}
+
+/**
+ * Does the drawing hold what a starter question asks about? Windows and doors follow the drawing's
+ * capabilities, room and area questions need rooms, stair questions a stair room, apartment questions units.
+ * A drawing without a capability list (older bundles) keeps every question.
+ */
+export function suggestionFits(s: Suggestion, drawing?: Drawing): boolean {
+  if (!drawing || !drawing.capabilities || drawing.id === 'swiss-46639') return true
+  const caps = new Set<Subject>(drawing.capabilities)
+  const t = s.text
+  if (/window|fenêtre|fenster|ikkun/i.test(t) && !caps.has('window')) return false
+  if (/\bdoors?\b|\bove[an]\b|\bportes?\b|\btüre?n?\b/i.test(t) && !/fire rating/i.test(t) && !caps.has('door')) return false
+  // the stair questions follow rooms and the doors between them; a model's stairs are elements without either
+  // (on an IFC building both questions abstained or listed storeys), so a model is not offered them
+  if (/stairs?|shafts?/i.test(t)) return drawing.kind !== 'ifc' && hasStairs(drawing)
+  if (/apartments?|appartement/i.test(t)) return drawing.units.length > 0
+  if (/rooms?\b|räume|raum\b|huone|surface|\barea\b|fläche/i.test(t)) return drawing.rooms.length > 0
+  return true
+}
+
+/** What a starter question is about, so a fallback never repeats a question in another language. */
+function topicOf(s: Suggestion): string {
+  if (/window|fenêtre|fenster|ikkun/i.test(s.text)) return 'window'
+  if (/\bdoors?\b|\bove[an]\b|\bportes?\b|\btüre?n?\b/i.test(s.text)) return 'door'
+  return s.text
+}
+
+function fitted(list: Suggestion[], drawing?: Drawing): Suggestion[] {
+  if (!drawing || drawing.id === 'swiss-46639' || !drawing.capabilities) return list
+  const kept = list.filter((s) => suggestionFits(s, drawing))
+  for (const f of FALLBACK_SUGGESTIONS) {
+    if (kept.length >= 3) break
+    if (suggestionFits(f, drawing) && !kept.some((k) => topicOf(k) === topicOf(f))) kept.push(f)
+  }
+  return kept.length >= 3 ? kept : [...kept, OVERVIEW_SUGGESTION]
+}
 
 function inActiveProject(drawing: Drawing | undefined, activeProject?: ProjectBundle | null): boolean {
   if (!activeProject || activeProject.floors.length < 2) return false
   return !drawing || activeProject.floors.some((f) => f.drawing_id === drawing.id)
 }
 
-/** Capability-aware starter questions for the active drawing (preserves exact SUGGESTIONS on single bundled/Swiss CAD). */
-export function suggestionsFor(drawing?: Drawing, activeProject?: ProjectBundle | null): Suggestion[] {
+/** Questions about the whole building, for the "All N floors" scope: none of them says "this floor". */
+const ALL_FLOORS_SUGGESTIONS: Suggestion[] = [
+  MATCH_FLOORS_SUGGESTION,
+  { lang: 'EN', text: 'How many apartments are there across all floors?', short: 'Apartments across floors' },
+  { lang: 'EN', text: 'How many doors are there across all floors?', short: 'Doors across floors' },
+  { lang: 'EN', text: 'How many windows are there across all floors?', short: 'Windows across floors' },
+  { lang: 'EN', text: 'What is the total floor area across all floors?', short: 'Floor area across floors' },
+  { lang: 'EN', text: 'How many rooms are there across all floors?', short: 'Rooms across floors' },
+]
+
+/**
+ * Starter questions for the active drawing: only questions the drawing can answer (see `suggestionFits`).
+ * The single bundled Swiss sample keeps the exact SUGGESTIONS; `allFloors` = the "All N floors" scope is on.
+ */
+export function suggestionsFor(
+  drawing?: Drawing,
+  activeProject?: ProjectBundle | null,
+  allFloors = false,
+): Suggestion[] {
   const base = singleDrawingSuggestions(drawing)
-  if (!inActiveProject(drawing, activeProject)) return base
+  if (!inActiveProject(drawing, activeProject)) return fitted(base, drawing)
+  if (allFloors && drawing) {
+    const list = ALL_FLOORS_SUGGESTIONS.filter((s) => suggestionFits(s, drawing))
+    return list.length ? list : [OVERVIEW_SUGGESTION]
+  }
 
   const caps = new Set<Subject>(drawing?.capabilities ?? [])
   const hasApartments = Boolean(drawing && (caps.has('apartment') || drawing.units.length > 0))
@@ -104,9 +181,15 @@ export function suggestionsFor(drawing?: Drawing, activeProject?: ProjectBundle 
     : { lang: 'EN', text: 'How many doors are there across all floors?', short: 'Doors across floors' }
 
   const dedupedRest = base.filter(
-    (s) => s.text !== MATCH_FLOORS_SUGGESTION.text && s.text !== STAIRS_SUGGESTION.text && s.text !== crossCount.text,
+    (s) =>
+      s.text !== MATCH_FLOORS_SUGGESTION.text &&
+      s.text !== STAIRS_SUGGESTION.text &&
+      s.text !== crossCount.text &&
+      suggestionFits(s, drawing),
   )
-  return [MATCH_FLOORS_SUGGESTION, STAIRS_SUGGESTION, crossCount, ...dedupedRest.slice(0, 3)]
+  const lead = [MATCH_FLOORS_SUGGESTION, STAIRS_SUGGESTION, crossCount].filter((s) => suggestionFits(s, drawing))
+  const list = [...lead, ...dedupedRest.slice(0, 6 - lead.length)]
+  return list.length ? list : [OVERVIEW_SUGGESTION]
 }
 
 function singleDrawingSuggestions(drawing?: Drawing): Suggestion[] {

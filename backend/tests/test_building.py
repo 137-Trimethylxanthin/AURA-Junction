@@ -149,6 +149,16 @@ def test_one_failing_sheet_is_reported_not_fatal():
     assert "Could not answer: 1. OG" in next(n for n in out["trace"] if n["id"] == "answer")["body"]
 
 
+def test_a_zero_from_a_model_file_keeps_its_reason_across_the_building():
+    p = _plan()
+    why = "0 rooms: this storey of the model file contains no room (space) elements."
+    out = building.combine(p, "q", [(s, _resp(0, explanation=why)) for s in p.sheets], 9)
+    assert out["answer"]["value"] == 0
+    assert out["explanation"] == "0 rooms: the model file contains no room (space) elements on these 3 floors."
+    mixed = building.combine(p, "q", [(p.sheets[0], _resp(0, explanation=why)), (p.sheets[1], _resp(2))], 9)
+    assert "explanation" not in mixed
+
+
 def test_abstains_only_when_no_sheet_can_answer_and_names_the_sheets():
     p = _plan()
     out = building.combine(p, "q", [(s, _resp(0, kind="abstain")) for s in p.sheets[:2]]

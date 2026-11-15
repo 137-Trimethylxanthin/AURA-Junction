@@ -345,8 +345,10 @@ def test_images_are_generated_once_into_the_data_dir(tmp_path):
     lib = library(tmp_path)
     d = lib.get(make_id("school_plan"))
     assert d.file("original.png") == page.resolve()
-    thumb = d.file("thumb.png")
-    assert thumb.parent == d.dir and thumb.read_bytes()[:2] == b"\xff\xd8" and thumb.stat().st_size < page.stat().st_size * 5
+    thumb = d.file("thumb.png")           # a scan with a rebuilt plan: the thumbnail is the rebuilt plan
+    assert thumb.parent == d.dir and thumb.suffix == ".png" and thumb.read_bytes() == b"\x89PNG fake"
+    lib.source.plan_png = lambda *a: pytest.fail("thumbnail generated twice")
+    assert d.file("thumb.png") == thumb
     svg = d.file("plan.svg")
     assert svg.parent == d.dir and svg.suffix == ".svg" and str(page.resolve()) in svg.read_text()
     lib.source.plan_svg = lambda *a: pytest.fail("generated twice")
@@ -376,7 +378,7 @@ def test_app_lists_opens_and_serves_store_drawings_for_everyone(tmp_path):
         assert doc.status_code == 200 and Drawing.model_validate(doc.json()).id == did
         assert "expires_at" not in doc.json()
         assert c.get(f"/drawings/{did}/status").json() == {"contract_version": "1.2", "id": did, "status": "ready"}
-        for name, ctype in (("original.png", "image/png"), ("thumb.png", "image/jpeg"), ("plan.svg", "image/svg+xml")):
+        for name, ctype in (("original.png", "image/png"), ("thumb.png", "image/png"), ("plan.svg", "image/svg+xml")):
             r = c.get(f"/drawings/{did}/{name}")
             assert r.status_code == 200 and r.headers["content-type"].startswith(ctype)
             assert r.headers["cache-control"] == "public, max-age=3600"
@@ -742,3 +744,65 @@ def test_plan_svg_gets_the_size_of_its_view_box():
     assert sized_svg(out) == out                                    # already sized: untouched
     assert sized_svg('<svg viewBox="0 0 0 5"></svg>') == '<svg viewBox="0 0 0 5"></svg>'
     assert sized_svg("<svg></svg>") == "<svg></svg>" and sized_svg("no svg") == "no svg"
+
+
+def test_listing_states_origin_and_counts_for_the_library_filter():
+    from aura import store_library as sl
+    from aura.contract import DrawingSummary
+    rows = [{"key": "20180816 - 705 Cherokee Path", "project": "opening_design/cherokee", "usable": True, "has_image": True,
+             "files": [{"file_id": "f1", "format": "pdf", "path": "a/b.pdf"}], "counts": {"room": 6, "door": 2}},
+            {"key": "letter", "project": "opening_design/x", "usable": True, "has_image": True,
+             "files": [{"file_id": "f2", "format": "pdf", "path": "a/c.pdf"}], "counts": {}}]
+    entries = sl.build_entries(rows, set(), [])
+    by = {e.key: e.summary for e in entries}
+    assert by["20180816 - 705 Cherokee Path"]["origin"] == "us_sheets" and by["20180816 - 705 Cherokee Path"]["n_rooms"] == 6
+    assert by["letter"]["n_rooms"] == 0 and by["letter"]["n_doors"] == 0
+    for s in by.values():
+        DrawingSummary.model_validate(s)
+
+
+def test_a_pdf_of_several_pages_lists_the_page_shown_and_its_counts():
+    """The listing row of such a drawing carries the page's counts (JStoreSource.rows asks the store for them)
+    and which page it is; header and card say so."""
+    r = row("set_of_sheets", "opening_design/CTR", ("pdf",), counts={"room": 22, "door": 15, "window": 52})
+    r["sheet"] = (7, 16)
+    (e,) = build_entries([r], set(), DEFAULT_EXCLUDE)
+    assert e.summary["subtitle"] == "OpeningDesign · CTR · PDF · page 7 of 16 · 22 rooms · 15 doors · 52 windows"
+    assert (e.summary["n_rooms"], e.summary["n_doors"]) == (22, 15)
+    (one,) = build_entries([row("one_page", "opening_design/CTR", ("pdf",), counts={"room": 2})], set(), DEFAULT_EXCLUDE)
+    assert "page" not in one.summary["subtitle"]
+
+
+
+def test_thumbnail_is_the_scan_where_no_plan_was_rebuilt_or_drawing_it_fails(tmp_path):
+    page = page_render(tmp_path)
+    lib = library(tmp_path)
+    d = lib.get(make_id("school_plan"))
+
+    def boom(*a):
+        raise RuntimeError("no model")
+
+    lib.source.plan_png = boom
+    thumb = d.file("thumb.png")                     # drawing the plan failed: the scan, as a JPEG
+    assert thumb.read_bytes()[:2] == b"\xff\xd8" and thumb.stat().st_size < page.stat().st_size * 5
+    lib.source.plan_png = lambda *a: pytest.fail("a drawing that shows its page has no plan thumbnail")
+    d.drawing["images"] = {k: v for k, v in d.drawing["images"].items() if "/plan.svg" not in str(v)}
+    d.drawing["thumbnail"] = None
+    assert d.file("thumb.png") == thumb and d.file("plan.svg") is None
+
+
+def test_the_other_pages_of_a_pdf_are_entries_of_their_own_after_the_page_shown():
+    r = row("set_of_sheets", "opening_design/CTR", ("pdf",), counts={"room": 22, "door": 15})
+    r["sheet"] = (7, 16)
+    r["pages"] = [{"slug": "p2", "sheet": (2, 16), "counts": {"room": 3, "door": 9, "toilet": 1}},
+                  {"slug": "p9", "sheet": (9, 16), "counts": {"dimension": 12}}]
+    main, p2, p9 = build_entries([r], set(), DEFAULT_EXCLUDE)
+    assert main.slug is None and "--" not in main.id
+    assert (p2.id, p2.slug, p2.key) == (main.id + "--p2", "p2", main.key)
+    assert p2.summary["title"].endswith("· page 2") and (p2.summary["n_rooms"], p2.summary["n_doors"]) == (3, 9)
+    assert p2.summary["subtitle"] == "OpeningDesign · CTR · PDF · page 2 of 16 · 3 rooms · 9 doors · 1 fixture"
+    assert p9.summary["subtitle"].endswith("page 9 of 16 · 12 dimensions") and p9.summary["thumbnail"].startswith(f"/drawings/{p9.id}/")
+    assert "project_id" not in p2.summary                    # sheets of a set are not floors: nothing is summed over them
+    one = row("one_page", "opening_design/CTR", ("pdf",), counts={"room": 2})
+    one["pages"] = [{"slug": "p2", "sheet": (2, 2), "counts": {"room": 1}}]     # without a sheet nothing is listed
+    assert len(build_entries([one], set(), DEFAULT_EXCLUDE)) == 1

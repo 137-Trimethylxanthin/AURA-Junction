@@ -1,5 +1,6 @@
 import type { Lang } from '@/api/contract'
 import { chromeDe, chromeEn, chromeFi, chromeFr } from './chrome'
+import { it, uiIt } from './it'
 
 /**
  * Answer-card and abstain copy (follows the question's language), and below it the interface chrome (follows the
@@ -14,6 +15,7 @@ const en = {
   counted_where: 'Counted {where}.',
   net_floor_area: 'Net floor area',
   area_where: 'Net floor area {where}.',
+  area_estimate_note: "Estimate: the drawing states no scale; areas are measured under a scale estimated from the sizes of drawn objects (doors, fixtures, rooms).",
   rooms_included: 'Rooms included: {n}.',
   outdoor_left_out: 'Outdoor spaces left out.',
   whatif_used: 'Uses your what-if size for room {room}.',
@@ -40,6 +42,11 @@ const en = {
   where_material: 'The specification or the IFC model would have it.',
   // Chips
   chip_exact: 'Exact · CAD geometry',
+  chip_printed: 'Read from the sheet · as printed',
+  chip_printed_title: 'The value is printed on the sheet and quoted as printed. A model read it from the image; nothing was measured.',
+  chip_scan_estimate: 'Estimate · measured on the scan',
+  method_printed: 'read from the sheet (as printed)',
+  method_scan_estimate: 'estimate, measured on the scan',
   chip_vision_sample: 'Vision check · no result',
   chip_dataset: 'Dataset',
   chip_ours: 'ours',
@@ -64,6 +71,7 @@ const en = {
   lang_fr: 'French',
   lang_fi: 'Finnish',
   lang_de: 'German',
+  lang_it: 'Italian',
   lang_detected: '{lang} detected',
   // Added by chat
   chip_vision_live: 'Vision check · {agreed}/{total} agree',
@@ -176,6 +184,7 @@ const fr: Dict = {
   counted_where: 'Décompte {where}.',
   net_floor_area: 'Surface nette',
   area_where: 'Surface nette {where}.',
+  area_estimate_note: "Estimation : le plan n’indique pas d’échelle ; les surfaces sont mesurées avec une échelle estimée d’après les portes et les équipements.",
   rooms_included: 'Pièces incluses : {n}.',
   outdoor_left_out: 'Espaces extérieurs non comptés.',
   whatif_used: 'Avec vos dimensions hypothétiques pour la pièce {room}.',
@@ -199,6 +208,11 @@ const fr: Dict = {
   where_height: 'Une coupe ou la maquette IFC l’indiquerait.',
   where_material: 'Le descriptif ou la maquette IFC l’indiquerait.',
   chip_exact: 'Exact · géométrie CAO',
+  chip_printed: 'Lu sur le plan · tel qu’imprimé',
+  chip_printed_title: 'La valeur est imprimée sur le plan et citée telle quelle. Un modèle l’a lue sur l’image ; rien n’a été mesuré.',
+  chip_scan_estimate: 'Estimation · mesurée sur le scan',
+  method_printed: 'lu sur le plan (tel qu’imprimé)',
+  method_scan_estimate: 'estimation, mesurée sur le scan',
   chip_vision_sample: 'Contrôle visuel · aucun résultat',
   chip_dataset: 'Jeu de données',
   chip_ours: 'nous',
@@ -221,6 +235,7 @@ const fr: Dict = {
   lang_fr: 'français',
   lang_fi: 'finnois',
   lang_de: 'allemand',
+  lang_it: 'italien',
   lang_detected: '{lang} détecté',
   chip_vision_live: 'Contrôle visuel · {agreed}/{total} en accord',
   method_ocr: 'OCR',
@@ -327,6 +342,7 @@ const fi: Dict = {
   counted_where: 'Laskettu {where}.',
   net_floor_area: 'Nettopinta-ala',
   area_where: 'Nettopinta-ala {where}.',
+  area_estimate_note: "Arvio: piirustuksessa ei ole mittakaavaa; pinta-alat on mitattu ovien ja kalusteiden koosta arvioidulla mittakaavalla.",
   rooms_included: 'Huoneita mukana: {n}.',
   outdoor_left_out: 'Ulkotilat jätetty pois.',
   whatif_used: 'Huoneelle {room} käytetty kokeilemaasi kokoa.',
@@ -350,6 +366,11 @@ const fi: Dict = {
   where_height: 'Tieto löytyy leikkauspiirustuksesta tai IFC-mallista.',
   where_material: 'Tieto löytyy rakennustapaselostuksesta tai IFC-mallista.',
   chip_exact: 'Tarkka · CAD-geometria',
+  chip_printed: 'Luettu piirustuksesta · kuten painettu',
+  chip_printed_title: 'Arvo on painettu piirustukseen ja esitetään sellaisenaan. Malli luki sen kuvasta; mitään ei mitattu.',
+  chip_scan_estimate: 'Arvio · mitattu skannauksesta',
+  method_printed: 'luettu piirustuksesta (kuten painettu)',
+  method_scan_estimate: 'arvio, mitattu skannauksesta',
   chip_vision_sample: 'Kuvatarkistus · ei tulosta',
   chip_dataset: 'Aineisto',
   chip_ours: 'meidän',
@@ -372,6 +393,7 @@ const fi: Dict = {
   lang_fr: 'ranska',
   lang_fi: 'suomi',
   lang_de: 'saksa',
+  lang_it: 'italia',
   lang_detected: 'Kieli: {lang}',
   chip_vision_live: 'Kuvatarkistus · {agreed}/{total} täsmää',
   method_ocr: 'OCR',
@@ -478,6 +500,7 @@ const de: Dict = {
   counted_where: 'Gezählt {where}.',
   net_floor_area: 'Nettofläche',
   area_where: 'Nettofläche {where}.',
+  area_estimate_note: "Schätzung: Der Plan nennt keinen Maßstab; die Flächen sind mit einem aus Tür- und Objektgrößen geschätzten Maßstab gemessen.",
   rooms_included: 'Einbezogene Räume: {n}.',
   outdoor_left_out: 'Außenflächen nicht eingerechnet.',
   whatif_used: 'Mit Ihren Was-wäre-wenn-Maßen für Raum {room}.',
@@ -501,6 +524,11 @@ const de: Dict = {
   where_height: 'Das steht in einem Schnitt oder im IFC-Modell.',
   where_material: 'Das steht in der Baubeschreibung oder im IFC-Modell.',
   chip_exact: 'Exakt · CAD-Geometrie',
+  chip_printed: 'Vom Plan gelesen · wie gedruckt',
+  chip_printed_title: 'Der Wert steht auf dem Plan und wird wie gedruckt zitiert. Ein Modell hat ihn aus dem Bild gelesen; gemessen wurde nichts.',
+  chip_scan_estimate: 'Schätzung · am Scan gemessen',
+  method_printed: 'vom Plan gelesen (wie gedruckt)',
+  method_scan_estimate: 'Schätzung, am Scan gemessen',
   chip_vision_sample: 'Bildprüfung · kein Ergebnis',
   chip_dataset: 'Datensatz',
   chip_ours: 'unser Wert',
@@ -523,6 +551,7 @@ const de: Dict = {
   lang_fr: 'Französisch',
   lang_fi: 'Finnisch',
   lang_de: 'Deutsch',
+  lang_it: 'Italienisch',
   lang_detected: '{lang} erkannt',
   chip_vision_live: 'Bildprüfung · {agreed}/{total} bestätigt',
   method_ocr: 'OCR',
@@ -623,7 +652,7 @@ const de: Dict = {
   clear_group_focus: 'Alle Gruppen',
 }
 
-export const STRINGS: Record<Lang, Dict> = { en, fr, fi, de }
+export const STRINGS: Record<Lang, Dict> = { en, fr, fi, de, it }
 
 /** Translate `key` into `lang`, filling `{name}` placeholders from `vars`. Unknown placeholders stay as-is. */
 export function t(lang: Lang, key: StringKey, vars?: Record<string, string | number>): string {
@@ -957,6 +986,7 @@ const uiEn = {
   view_toggle: "Plan view",
   view_2d: "2D",
   view_3d: "3D",
+  view_3d_unavailable: "3D needs a wall model. This drawing is shown as its page image, so there is none.",
   v3d_region: "3D model of the plan",
   v3d_loading: "Building the 3D model…",
   v3d_error: "Couldn’t build a 3D model of this drawing",
@@ -1299,6 +1329,7 @@ const uiFr: UiDict = {
   view_toggle: "Vue du plan",
   view_2d: "2D",
   view_3d: "3D",
+  view_3d_unavailable: "La 3D nécessite un modèle de murs. Ce dessin est affiché comme image de page : il n’en a pas.",
   v3d_region: "Maquette 3D du plan",
   v3d_loading: "Construction de la maquette 3D…",
   v3d_error: "Impossible de construire une maquette 3D de ce plan",
@@ -1639,6 +1670,7 @@ const uiFi: UiDict = {
   view_toggle: "Pohjanäkymä",
   view_2d: "2D",
   view_3d: "3D",
+  view_3d_unavailable: "3D vaatii seinämallin. Tämä piirustus näytetään sivukuvana, joten mallia ei ole.",
   v3d_region: "Pohjan 3D-malli",
   v3d_loading: "Rakennetaan 3D-mallia…",
   v3d_error: "Tästä piirustuksesta ei voitu rakentaa 3D-mallia",
@@ -1979,6 +2011,7 @@ const uiDe: UiDict = {
   view_toggle: "Planansicht",
   view_2d: "2D",
   view_3d: "3D",
+  view_3d_unavailable: "3D braucht ein Wandmodell. Diese Zeichnung wird als Seitenbild gezeigt und hat keines.",
   v3d_region: "3D-Modell des Plans",
   v3d_loading: "3D-Modell wird gebaut…",
   v3d_error: "Aus dieser Zeichnung ließ sich kein 3D-Modell bauen",
@@ -2013,7 +2046,7 @@ const uiDe: UiDict = {
   v3d_hint_stack: "Stockwerk anklicken zum Betreten · ziehen zum Drehen",
 }
 
-export const UI: Record<Lang, UiDict> = { en: uiEn, fr: uiFr, fi: uiFi, de: uiDe }
+export const UI: Record<Lang, UiDict> = { en: uiEn, fr: uiFr, fi: uiFi, de: uiDe, it: uiIt }
 
 /** Interface text in `lang` (the header menu's language), with `{name}` placeholders filled. */
 export function ui(lang: Lang, key: UiKey, vars?: Record<string, string | number>): string {

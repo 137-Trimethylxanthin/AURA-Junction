@@ -74,7 +74,7 @@ def merge(db: DB, f: dict, recs: list[dict], registered: bool = False) -> dict:
                     if o["kind"] == r["kind"] and o["entity_id"] not in taken and g.distance(p) < 0.3]
             if near:
                 eid = min(near)[1]
-        if eid is None and r["kind"] in kinds_before:
+        if eid is None and r["kind"] in kinds_before and not r.get("always_new"):
             unlinked[r["kind"]] = unlinked.get(r["kind"], 0) + 1
             target.append(-1)
             continue
@@ -166,8 +166,12 @@ def run(db: DB, drawing_key: str) -> dict:
     #   pdf_rooms.interpret(db, f)     rooms from the vector linework and texts of a PDF page
     #   raster_rooms.interpret(db, f)  rooms from the pixels and OCR of a scan
     #   symbols.interpret(db, f)       doors, windows and fixtures detected on the page image of a PDF or scan
+    #   raster_plan.interpret(db, f)   walls, a nominal scale where the sheet states none, openings on the wall line
     # They decide themselves whether there is something to add (e.g. nothing when the twin already gave it).
-    for name, formats in (("pdf_rooms", ("pdf",)), ("raster_rooms", RASTER), ("symbols", ("pdf",) + RASTER)):
+    #   dimensions.interpret(db, f)    dimension lines, room sizes, areas and levels printed on the sheet
+    #   raster_plan.interpret(db, f)   vector plan of an image-only drawing (nominal scale, walls, openings)
+    for name, formats in (("pdf_rooms", ("pdf",)), ("raster_rooms", RASTER), ("symbols", ("pdf",) + RASTER),
+                          ("dimensions", CAD + ("pdf",) + RASTER), ("raster_plan", RASTER)):
         try:
             mod = importlib.import_module(f"jstore.interpret.{name}")
         except ModuleNotFoundError as e:

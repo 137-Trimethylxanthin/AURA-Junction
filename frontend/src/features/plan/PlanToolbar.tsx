@@ -21,6 +21,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { has3dModel } from '@/features/viewer3d/available'
 import { ZOOM_MAX, ZOOM_MIN, actions, selectZoom, useAppStore, useAppStoreShallow, useSource, type PlanView, type Tool } from '@/store'
 
 const TOOLS: { id: Tool; label: UiKey; hint: UiKey; Icon: typeof MousePointer2Icon }[] = [
@@ -45,7 +46,8 @@ export function PlanToolbar() {
   const answererMode = useAppStore((s) => s.session.answererMode)
   const showWhatIf = canWhatIf && answererMode !== 'agent'
   const zoom = useAppStore(selectZoom)
-  const view = useAppStore((s) => s.ui.view)
+  const has3d = useAppStore((s) => has3dModel(s.session.drawing))
+  const view = useAppStore((s) => (has3dModel(s.session.drawing) ? s.ui.view : '2d'))
   const { tu } = useUi()
 
   useEffect(() => {
@@ -55,7 +57,7 @@ export function PlanToolbar() {
   if (view === '3d')
     return (
       <div className="@container flex w-full min-w-0 flex-wrap items-center gap-2" role="toolbar" aria-label={tu('plan_tools')}>
-        <ViewToggle view={view} />
+        <ViewToggle view={view} has3d={has3d} />
         <div className="ml-auto flex items-center gap-2">
           <SourceBadge />
         </div>
@@ -64,7 +66,7 @@ export function PlanToolbar() {
 
   return (
     <div className="@container flex w-full min-w-0 flex-wrap items-center gap-2" role="toolbar" aria-label={tu('plan_tools')}>
-      <ViewToggle view={view} />
+      <ViewToggle view={view} has3d={has3d} />
       <ToggleGroup
         type="single"
         variant="outline"
@@ -209,7 +211,7 @@ export function PlanToolbar() {
 }
 
 /** Flat drawing or 3D model of it. */
-function ViewToggle({ view }: { view: PlanView }) {
+function ViewToggle({ view, has3d }: { view: PlanView; has3d: boolean }) {
   const { tu } = useUi()
   return (
     <ToggleGroup
@@ -219,6 +221,8 @@ function ViewToggle({ view }: { view: PlanView }) {
       value={view}
       onValueChange={(v) => v && actions().setView(v as PlanView)}
       aria-label={tu('view_toggle')}
+      // a disabled button takes no pointer events: the reason is on the group, where the hover lands
+      title={has3d ? undefined : tu('view_3d_unavailable')}
     >
       <ToggleGroupItem value="2d" aria-label={tu('view_2d')} className="gap-1.5">
         <MapIcon data-icon="inline-start" />
@@ -227,6 +231,7 @@ function ViewToggle({ view }: { view: PlanView }) {
       <ToggleGroupItem
         value="3d"
         aria-label={tu('view_3d')}
+        disabled={!has3d}
         className="gap-1.5 data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground hover:data-[state=on]:bg-primary/90 hover:data-[state=on]:text-primary-foreground"
       >
         <BoxIcon data-icon="inline-start" />

@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 CONTRACT_VERSION = "1.2"
 
-Lang = Literal["en", "fr", "fi", "de"]
-LANGS: tuple[str, ...] = ("en", "fr", "fi", "de")
+Lang = Literal["en", "fr", "fi", "de", "it"]
+LANGS: tuple[str, ...] = ("en", "fr", "fi", "de", "it")
 GroupColor = Literal["c1", "c2", "c3", "c4", "c5", "c6"]
 GROUP_COLORS: tuple[GroupColor, ...] = ("c1", "c2", "c3", "c4", "c5", "c6")
 Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "room", "apartment",
@@ -191,6 +191,7 @@ class AnswerArea(_M):
     kind: Literal["area"] = "area"
     value: float
     unit: Literal["m2"] = "m2"
+    approximate: bool | None = None  # measured under an estimated scale (a scan that states none): show "≈"
 
 
 class AnswerAbstain(_M):
@@ -220,6 +221,8 @@ class AnswerNote(_M):
     value: str
     number: float | None = None
     unit: str | None = None
+    #: the number is measured under an estimated scale (a scan that states none): shown as "≈ 12 m² (estimate)"
+    approximate: bool | None = None
 
 
 Answer = Annotated[
@@ -235,6 +238,8 @@ class EvidenceRoom(_M):
     edited: bool | None = None
     group_id: str | None = None
     drawing_id: str | None = None
+    name: str | None = None  # additive: the room's name and number as its own floor shows them,
+    num: str | None = None   # set for rooms of another floor of a building (the viewer has only the open floor)
 
 
 class EvidenceRow(_M):
@@ -359,6 +364,38 @@ class BreakdownItem(_M):
     unit: str | None = None
 
 
+class Measure(_M):
+    """1.2 additive: one length an answer states (a composite answer states several), as a value."""
+
+    label: str                      # "width", "depth", "BEDROOM width"
+    value: FiniteFloat
+    unit: str = "m"
+    source: Literal["printed", "measured", "estimate"] = "printed"
+    printed: str | None = None      # the text on the sheet, e.g. 12' - 6"
+    text: str | None = None         # in the unit asked for (only inside `display`)
+
+
+class Display(_M):
+    """1.2 additive: the answer shown in a unit the question asked for ("in square feet").
+
+    `answer` stays metric; `factors` (display units per m / m2 / m3) and `labels` let a client
+    show any metric number of the response in the requested unit family.
+    """
+
+    unit: str
+    label: str
+    style: Literal["decimal", "ft_in"] = "decimal"
+    factors: dict[str, FiniteFloat]
+    labels: dict[str, str]
+    value: FiniteFloat | None = None
+    text: str | None = None         # "3,675 sq ft"
+    metric_text: str | None = None  # "341.42 m²"
+    # the metric prose as answered, so a follow-up ("and in inches?") can show it in another unit
+    metric_explanation: str | None = None
+    metric_note: str | None = None
+    measures: list[Measure] | None = None   # every length of a composite answer in the unit asked for
+
+
 class AskResponse(_M):
     contract_version: str = CONTRACT_VERSION
     # 1.2 additive: set only when the deep agent failed (the answer is then an abstain); the
@@ -387,6 +424,11 @@ class AskResponse(_M):
     # 1.2 additive: per-sheet shares of a whole-building answer; evidence items carry their sheet's
     # `drawing_id`, `scope` is the project scope of the sheets that were asked.
     breakdown: list[BreakdownItem] | None = None
+    # 1.2 additive: where the stated value comes from, when the answer knows: printed on the sheet (quoted as
+    # printed, whoever read it), measured on exact geometry, or an estimate (measured on a scan / estimated scale)
+    basis: Literal["printed", "measured", "estimate"] | None = None
+    measures: list[Measure] | None = None  # 1.2 additive: the lengths a dimension answer states, in metres
+    display: Display | None = None  # 1.2 additive: only when the question asked for a non-default unit
 
 
 class ErrorBody(_M):
@@ -426,7 +468,7 @@ class RoomPoly(_Open):
     points: list[tuple[float, float]]
     label_at: tuple[float, float]
     rect: RoomRect | None = None
-    area_source: Literal["printed", "outline"] | None = None
+    area_source: Literal["printed", "outline", "estimate"] | None = None
 
 
 class Credit(_Open):
@@ -491,6 +533,11 @@ class DrawingSummary(_M):
     project_id: str | None = None
     floor_label: str | None = None
     floor_order: int | FiniteFloat | None = None
+    # 1.2 additive (store drawings): the collection the drawing comes from, for a source filter in the library,
+    # and how many rooms / doors were read, so sheets without a plan can be listed last without a request per card
+    origin: Literal["swiss", "ifc", "cubicasa", "us_sheets", "historic", "other"] | None = None
+    n_rooms: int | None = None
+    n_doors: int | None = None
 
 
 class ProjectFloor(_M):

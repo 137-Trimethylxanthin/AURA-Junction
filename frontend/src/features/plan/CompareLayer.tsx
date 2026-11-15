@@ -5,7 +5,8 @@ import { useAppStore, useAppStoreShallow } from '@/store'
 import { useUi } from '@/i18n/uiLang'
 import { pctPoint, swipeSplit, type StageRef } from './shared'
 
-const clampSplit = (v: number) => Math.min(98, Math.max(2, v))
+/** The divider goes all the way to either edge, so each side can be seen whole. */
+export const clampSplit = (v: number) => Math.min(100, Math.max(0, v))
 
 /** Position of the swipe divider, shared with the context menu ("Compare with the original here"). */
 
@@ -13,6 +14,8 @@ const clampSplit = (v: number) => Math.min(98, Math.max(2, v))
 export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
   const { tu } = useUi()
   const src = useAppStore((s) => s.session.drawing.images.original)
+  // The right-hand label names what the rebuilt plan was made from: a scan is not CAD.
+  const kind = useAppStore((s) => s.session.drawing.kind)
   const { on, mode, opacity } = useAppStoreShallow((s) => s.ui.compare)
   const imgRef = useRef<HTMLImageElement>(null)
   const divRef = useRef<HTMLDivElement>(null)
@@ -61,10 +64,10 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
       apply(swipeSplit.current + step)
     } else if (e.key === 'Home') {
       e.preventDefault()
-      apply(2)
+      apply(0)
     } else if (e.key === 'End') {
       e.preventDefault()
-      apply(98)
+      apply(100)
     }
   }
 
@@ -92,8 +95,8 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
           tabIndex={0}
           aria-label={tu('cmp_divider')}
           aria-orientation="horizontal"
-          aria-valuemin={2}
-          aria-valuemax={98}
+          aria-valuemin={0}
+          aria-valuemax={100}
           aria-valuenow={Math.round(swipeSplit.current)}
           aria-valuetext={tu('cmp_pct', { n: Math.round(swipeSplit.current) })}
           onPointerDown={onDown}
@@ -129,7 +132,7 @@ export function CompareLayer({ stageRef }: { stageRef: StageRef }) {
             {tu('cmp_original')}
           </span>
           <span className="pointer-events-none absolute right-2 bottom-2 z-30 rounded-sm border border-foreground bg-background px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-foreground">
-            {tu('cmp_rebuilt')}
+            {tu(kind === 'raster' ? 'cmp_rebuilt_scan' : kind === 'ifc' ? 'cmp_rebuilt_model' : 'cmp_rebuilt')}
           </span>
         </>
       ) : null}

@@ -13,7 +13,7 @@ import {
 import { uiLang, useUi } from '@/i18n/uiLang'
 
 /** Each language is named in itself, so someone who cannot read the current one still finds theirs. */
-const NAMES: Record<Lang, string> = { en: 'English', fr: 'Français', fi: 'Suomi', de: 'Deutsch' }
+const NAMES: Record<Lang, string> = { en: 'English', fr: 'Français', fi: 'Suomi', de: 'Deutsch', it: 'Italiano' }
 
 /** Interface language (menus and labels only; answers always follow the question's language). */
 export function LanguageMenu() {

@@ -45,6 +45,7 @@ import {
   groupCssVars,
   rows,
   sentence,
+  metricText,
   triedText,
   valueParts,
   type AgentFailure,
@@ -283,7 +284,7 @@ function EvidenceRow({
   const Toggle = row.kind === 'room' ? (row.on ? MinusIcon : PlusIcon) : row.on ? XIcon : RotateCcwIcon
   const toggleLabel =
     row.kind === 'room'
-      ? `${row.on ? 'Leave out' : 'Add'} ${row.title} ${row.badge}`
+      ? tu(row.on ? 'row_leave_out' : 'row_add', { what: `${row.title} ${row.badge}` })
       : `${row.on ? tu('reject_box') : tu('restore_box')} ${row.title}`
   const subParts = row.sub ? row.sub.split(' · ') : []
   const grpVars = groupCssVars(row.groupColor)
@@ -904,8 +905,15 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
             <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="ml-auto self-center" />
           </p>
         ) : null}
+        {parts && derived && metricText(resp, derived, lang) ? (
+          <p className="text-sm font-medium tabular-nums text-muted-foreground" data-answer-metric>
+            {metricText(resp, derived, lang)?.startsWith('≈') ? '' : '= '}{metricText(resp, derived, lang)}
+          </p>
+        ) : null}
         {numericNoteProse ? <ClampedProse text={numericNoteProse} lang={lang} kind="note" /> : null}
-        <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        {sentence(resp, derived, drawing, lang) ? (
+          <p className="text-sm text-muted-foreground">{sentence(resp, derived, drawing, lang)}</p>
+        ) : null}
         {!parts || resp.answer.kind === 'text' || isProseNote ? (
           <ListenButton turnId={turn.id} response={resp} active={active} edited={derived?.changed} className="-ml-2 self-start" />
         ) : null}

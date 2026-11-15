@@ -65,6 +65,7 @@ const LANGUAGE_ITEMS: readonly { code: Lang; name: string }[] = [
   { code: 'fr', name: 'Français' },
   { code: 'fi', name: 'Suomi' },
   { code: 'de', name: 'Deutsch' },
+  { code: 'it', name: 'Italiano' },
 ]
 
 /** Power rows that already have a dedicated palette item (which just shows the pill). */
@@ -158,7 +159,10 @@ export function CommandPaletteDialog({
     )
   }, [activeProject])
 
-  const suggestions = useMemo(() => suggestionsFor(drawing, activeProject), [drawing, activeProject])
+  const suggestions = useMemo(
+    () => suggestionsFor(drawing, activeProject, crossPlanScope),
+    [drawing, activeProject, crossPlanScope],
+  )
 
   const hasExportableEvidence = Boolean(
     activeTurn?.response &&
@@ -628,7 +632,7 @@ export function CommandPaletteDialog({
                         <span className="truncate">{label}</span>
                         {room.area_m2 !== null ? (
                           <span className="num ml-auto text-xs text-muted-foreground">
-                            {areaFmt.format(room.area_m2)} m²
+                            {room.area_source === 'estimate' ? '≈ ' : ''}{areaFmt.format(room.area_m2)} m²
                           </span>
                         ) : null}
                       </CommandItem>

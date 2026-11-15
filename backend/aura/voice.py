@@ -40,8 +40,8 @@ LIVE_MODEL = "gemini-3.8-live"
 VOICES = ("Kore", "Puck", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Zephyr")
 DEFAULT_VOICE = "Kore"
 
-Lang = Literal["en", "fr", "fi", "de"]
-BCP47 = {"en": "en-US", "fr": "fr-FR", "fi": "fi-FI", "de": "de-DE"}
+Lang = Literal["en", "fr", "fi", "de", "it"]
+BCP47 = {"en": "en-US", "fr": "fr-FR", "fi": "fi-FI", "de": "de-DE", "it": "it-IT"}
 
 AUDIO_TYPES = {
     "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/mp3", "audio/wav",
@@ -264,6 +264,42 @@ ABSTAIN = {
                        "de": "Keine Antwort: Die Schätzung war nicht sicher genug."},
 }
 
+#: Italian, kept in one place and merged into the tables above (every table stays total over `Lang`).
+_IT_SUBJECTS = {
+    "window": ("finestra", "finestre"), "door": ("porta", "porte"), "washbasin": ("lavabo", "lavabi"),
+    "wc": ("WC", "WC"), "bathtub": ("vasca da bagno", "vasche da bagno"), "shower": ("doccia", "docce"),
+    "room": ("locale", "locali"), "apartment": ("appartamento", "appartamenti"),
+    "bedroom": ("camera da letto", "camere da letto"), "kitchen": ("cucina", "cucine"),
+    "bathroom": ("bagno", "bagni"), "wc_room": ("locale WC", "locali WC"), "sauna": ("sauna", "saune"),
+    "sink": ("lavello", "lavelli"), "shower_or_bathtub": ("doccia o vasca", "docce o vasche"),
+    "storey": ("piano", "piani"), "balcony": ("balcone", "balconi"),
+}
+_IT_UNITS = {"m": "metri", "m2": "metri quadrati", "m3": "metri cubi"}
+_IT_PHRASES = {
+    "count": "{n} {subject}.", "area": "Superficie netta: {v} {unit}.", "quantity": "{v} {unit}.",
+    "label": "Sul disegno è scritto: {text}.", "fire_rating": "Resistenza al fuoco: {text}.",
+    "rooms_1": "In 1 locale.", "no_area_1": "1 locale non ha una superficie stampata.",
+    "rooms_n": "Su {n} locali.", "check": "Una verifica indipendente ne conferma {a} su {t}.",
+    "confidence": "Certezza {p} per cento.", "no_area": "{n} locali non hanno una superficie stampata.",
+    "where": "Dove cercare: {text}.",
+}
+_IT_METHOD = {
+    "cad_geometry": "Esatto, dalla geometria CAD.", "ocr": "Letto dal testo stampato sul disegno.",
+    "detector": "Rilevato sull’immagine del disegno.", "vision": "Una lettura visiva del disegno.",
+    "agent_estimate": "Una stima visiva dell’agente, non una misura esatta.",
+}
+_IT_ABSTAIN = {
+    "not_on_drawing": "Questo non compare sul disegno.",
+    "not_supported_yet": "AURA non sa ancora rispondere a questo tipo di domanda.",
+    "unclear_question": "La domanda non era abbastanza chiara.",
+    "low_confidence": "Nessuna risposta: la stima non era abbastanza certa.",
+}
+for _table, _it in ((SUBJECTS, _IT_SUBJECTS), (UNITS, _IT_UNITS), (PHRASES, _IT_PHRASES),
+                    (METHOD, _IT_METHOD), (ABSTAIN, _IT_ABSTAIN)):
+    assert set(_table) == set(_it), set(_table) ^ set(_it)
+    for _k, _v in _it.items():
+        _table[_k]["it"] = _v  # type: ignore[index]
+
 
 def _num(v: Any) -> float | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
@@ -476,7 +512,7 @@ async def speak(body: SpeakRequest, request: Request):
 
 LIVE_WS = ("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta."
            "GenerativeService.BidiGenerateContentConstrained")
-LANG_NAME = {"en": "English", "fr": "French", "fi": "Finnish", "de": "German"}
+LANG_NAME = {"en": "English", "fr": "French", "fi": "Finnish", "de": "German", "it": "Italian"}
 
 LIVE_SYSTEM = (
     "You are AURA's voice co-pilot for construction drawings. For ANY question about the "

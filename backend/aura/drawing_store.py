@@ -132,6 +132,7 @@ def normalise(ours: dict, doc: dict, evidence: dict, model: dict, sources: dict[
     """
     ent_of_item = {it["id"]: it.get("entity_id") for it in model.get("items", [])}
     ent_of_room = {r["room_id"]: r.get("entity_id") for r in model.get("rooms", [])}
+    type_of_room = {r["room_id"]: r.get("room_type") for r in model.get("rooms", [])}
     tables_by_subject: dict[str, set[str]] = {}
     out_ev: dict[str, list[dict]] = {}
     dropped: dict[str, int] = {}
@@ -158,6 +159,8 @@ def normalise(ours: dict, doc: dict, evidence: dict, model: dict, sources: dict[
         if ent is not None:
             row["store_ref"] = ent
             room_tables.update(sources.get(ent, []))
+        if type_of_room.get(r["room_id"]):
+            row["room_type"] = type_of_room[r["room_id"]]  # the store's normalised type: "kitchen" for TUPAK, Cucina
         rooms.append(row)
     methods = {s: _method_of(t) for s, t in tables_by_subject.items()}
     for s in out_ev:
@@ -179,6 +182,22 @@ def normalise(ours: dict, doc: dict, evidence: dict, model: dict, sources: dict[
         rooms=rooms, units=doc.get("units", []), evidence=out_ev, texts=texts, capabilities=caps,
         evidence_method=methods,
     )
+    # what the sheet prints (dimension lines, room sizes, overall sizes) and the plan's own extent: a length question
+    # is answered from these, each dimension with its box on the page shown and how it was read
+    dims = []
+    for x in doc.get("dimensions") or []:
+        row = dict(x)
+        ent = row.get("store_ref")
+        row["method"] = _method_of(set(sources.get(ent, []))) if ent is not None else "vision"
+        dims.append(row)
+    out.pop("dimensions", None)
+    out.pop("extent_m", None)
+    out.pop("printed_dimensions", None)
+    if dims:
+        out["dimensions"] = dims
+        out["printed_dimensions"] = len(dims)
+    if doc.get("extent_m"):
+        out["extent_m"] = doc["extent_m"]
     if dropped:
         out["store_dropped"] = dropped
     return out
@@ -492,7 +511,8 @@ class DrawingStore:
             calls = sum(int(p.get("requests") or 0) for p in ((spec or {}).get("spec") or {}).get("pages") or [])
             page = M.page_path(self.jsettings.data_dir, m)
             return {"doc": M.drawing_doc(m), "evidence": M.evidence_doc(m), "model": M.model_doc(m),
-                    "sources": sources, "calls": calls, "page": str(page) if page else None}
+                    "sources": sources, "calls": calls, "page": str(page) if page else None,
+                    "plan_svg": M.plan_svg(db, m) if m.vector_scan else None}
 
     async def materialise(self, drawing_id: str, file_id: str, key: str) -> bool:
         meta = self._meta(drawing_id)
@@ -525,6 +545,8 @@ class DrawingStore:
             ours["images"] = {"original": f"/drawings/{drawing_id}/original.png"}
             ours["thumbnail"] = f"/drawings/{drawing_id}/thumb.png"
             ours["frame"] = dict(ours.get("frame") or {}, px=list(size))
+        ours["images"] = await asyncio.to_thread(_plan_images, drawing_id, out_dir, ours.get("images") or {},
+                                                 built.get("plan_svg"))
         doc = normalise(ours, built["doc"], built["evidence"], built["model"],
                         {int(k): v for k, v in built["sources"].items()})
         doc["store"] = {"file_id": file_id, "drawing_key": key}
@@ -643,6 +665,27 @@ def _spent(file_id: str, key: str) -> dict:
     return {"cost_usd": p["cost_usd"], "metered_calls": p["calls"],
             "tokens": {"input": p["input_tokens"], "output": p["output_tokens"]},
             "by_model": p["by_model"]}
+
+
+def _plan_images(drawing_id: str, out_dir: Path, images: dict, svg: str | None) -> dict:
+    """The upload's images once the store has read it.  An image plan with a vector model of its own shows that
+    drawing (plan.svg, written here) and keeps the scan as the original, exactly aligned: both are the same
+    page in percent.  Without such a model the scan stays the only picture, and nothing is offered to compare."""
+    base = f"/drawings/{drawing_id}"
+    path = out_dir / "plan.svg"
+    if svg:
+        from .store_library import sized_svg
+        tmp = path.with_suffix(".svg.tmp")
+        tmp.write_text(sized_svg(svg), encoding="utf-8")
+        os.replace(tmp, path)
+        return {"rebuilt": f"{base}/plan.svg", "original": f"{base}/original.png", "original_alignment": "exact"}
+    if (str(images.get("rebuilt") or "").endswith("/plan.svg") and (out_dir / "original.png").is_file()
+            and path.is_file() and 'data-plan="vector-scan"' in path.read_text(encoding="utf-8")[:600]):
+        path.unlink(missing_ok=True)                 # the model went away on a later interpretation
+        return {"rebuilt": f"{base}/original.png"}
+    if images.get("original") and images.get("original") == images.get("rebuilt"):
+        return {"rebuilt": images["rebuilt"]}        # one picture: not a pair to compare
+    return images
 
 
 def _page_images(page: Path, out_dir: Path) -> tuple[int, int]:

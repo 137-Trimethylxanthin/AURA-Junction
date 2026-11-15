@@ -18,7 +18,7 @@ import type { Lang, RoomPoly } from '@/api/contract'
 import { myProjects } from '@/api/library'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId } from '@/lib/answer'
-import { fmtArea } from '@/lib/format'
+import { fmtRoomArea } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { actions, useActiveTurn, useAppStore, useAppStoreShallow } from '@/store'
 import { planAspect, roomTitle, subjectLabel } from './shared'
@@ -1033,7 +1033,7 @@ const RoomLayer = memo(function RoomLayer(p: RoomLayerProps) {
         const grp = resolveGroupStyle(er.group_id, p.groups)
 
         const actionHint = p.canToggleRoom ? `Press to ${inc ? 'leave it out' : 'include it'}` : 'Press to select'
-        const label = `${roomTitle(poly)}${poly.outdoor ? ' (outdoor)' : ''}, ${er.area_m2 === null ? 'area not printed' : `${fmtArea(er.area_m2, p.lang)} m²`}, ${
+        const label = `${roomTitle(poly)}${poly.outdoor ? ' (outdoor)' : ''}, ${er.area_m2 === null ? 'area not printed' : fmtRoomArea(er.area_m2, er.edited ? undefined : poly.area_source, p.lang)}, ${
           inc ? 'included' : 'left out'
         }${er.edited ? ', your what-if size' : ''}. ${actionHint}`
 

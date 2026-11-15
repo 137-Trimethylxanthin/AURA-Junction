@@ -1,4 +1,5 @@
 import { useUi } from "@/i18n/uiLang"
+import { localisedPlanSrc } from "@/lib/format"
 import {
   Suspense,
   lazy,
@@ -101,7 +102,7 @@ function useFitWidth(ref: React.RefObject<HTMLDivElement | null>, aspect: number
 }
 
 export function PlanStage() {
-  const { tu } = useUi()
+  const { tu, lang: uiLanguage } = useUi()
   const drawing = useAppStore((s) => s.session.drawing)
   const tool = useAppStore((s) => s.ui.tool)
   const zoom = useAppStore(selectZoom)
@@ -689,7 +690,7 @@ export function PlanStage() {
                 >
                   <img
                     key={imgKey}
-                    src={drawing.images.rebuilt}
+                    src={localisedPlanSrc(drawing.images.rebuilt, uiLanguage)}
                     alt={tu(planAltKey(drawing), { title: drawing.title })}
                     draggable={false}
                     onLoad={() => setImg("ok")}

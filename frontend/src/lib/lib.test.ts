@@ -327,3 +327,12 @@ describe('i18n', () => {
     }
   })
 })
+
+describe('fmtRoomArea', () => {
+  it('marks an area measured under an estimated scale as approximate', async () => {
+    const { fmtRoomArea } = await import('./format')
+    expect(fmtRoomArea(12.34, 'printed', 'en')).toBe('12.34 m²')
+    expect(fmtRoomArea(12.34, undefined, 'en')).toBe('12.34 m²')
+    expect(fmtRoomArea(12.34, 'estimate', 'en')).toBe('≈ 12 m² (estimate)')
+  })
+})

@@ -14,7 +14,7 @@ import {
   ContextMenuLabel,
   ContextMenuSeparator,
 } from '@/components/ui/context-menu'
-import { fmtArea } from '@/lib/format'
+import { fmtRoomArea } from '@/lib/format'
 import { nearestRoom } from '@/lib/geometry'
 import { actions, useAppStore } from '@/store'
 import { useUi } from '@/i18n/uiLang'
@@ -63,7 +63,7 @@ export function PlanContextMenu({
           <>
             <span className="truncate text-sm font-semibold text-foreground">{roomTitle(room)}</span>
             <span className="num shrink-0 text-xs text-muted-foreground">
-              · {room.area_m2 === null ? tu('ctx_no_area') : `${fmtArea(room.area_m2, lang)} m²`}
+              · {room.area_m2 === null ? tu('ctx_no_area') : fmtRoomArea(room.area_m2, room.area_source, lang)}
             </span>
           </>
         ) : (
@@ -98,7 +98,7 @@ export function PlanContextMenu({
         {hasOriginal ? (
           <ContextMenuItem
             onSelect={() => {
-              swipeSplit.current = Math.min(98, Math.max(2, x))
+              swipeSplit.current = Math.min(100, Math.max(0, x))
               actions().setCompare({ on: true, mode: 'swipe' })
             }}
           >

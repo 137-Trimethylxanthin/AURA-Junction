@@ -1,11 +1,12 @@
+import { usableDisplay } from '@/api/contract'
 import type { AgentFailure, AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
-import { LOCALE, fmtArea, fmtCount, noun } from '@/lib/format'
+import { LOCALE, displayParts, estimateTag, fmtArea, fmtConverted, fmtCount, fmtRoomArea, noun } from '@/lib/format'
 import { t, type StringKey, type UiKey } from '@/i18n/strings'
 
 /** Pure view-model helpers for the answer card. Every number comes from the response or Derived. */
 
-export const LANG_NAME_EN: Record<Lang, string> = { en: 'English', fr: 'French', fi: 'Finnish', de: 'German' }
+export const LANG_NAME_EN: Record<Lang, string> = { en: 'English', fr: 'French', fi: 'Finnish', de: 'German', it: 'Italian' }
 
 export type GroupColorKey = 'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c6'
 
@@ -79,13 +80,43 @@ export function scopeChipText(scope: Scope | ProjectScopeLike, lang: Lang): stri
   return cap(whereText(scope, lang))
 }
 
+/**
+ * The metric value behind an answer shown in another unit ("341.42 m²"), or null when the answer is
+ * shown in metric anyway. Follows the user's toggles like the headline value.
+ */
+export function metricText(resp: AskResponse, d: Derived, lang: Lang): string | null {
+  const display = usableDisplay(resp.display)
+  if (!display) return null
+  // measured under an estimated scale: the metric value is as approximate as the converted one beside it
+  if (resp.answer.kind === 'area' && d.value !== null && display.factors.m2)
+    return resp.answer.approximate ? `≈ ${fmtCount(Math.round(d.value), lang)} m²` : `${fmtArea(d.value, lang)} m²`
+  if (resp.answer.kind === 'quantity' && d.value !== null && display.factors[resp.answer.unit])
+    return `${fmtArea(d.value, lang)} ${{ m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]}`
+  if (resp.answer.kind === 'note' && display.value !== undefined && display.metric_text) {
+    if (resp.answer.approximate && resp.answer.unit === 'm2' && resp.answer.number !== undefined)
+      return `≈ ${fmtCount(Math.round(resp.answer.number), lang)} m²`
+    return display.metric_text
+  }
+  return null
+}
+
 /** Formatted value with the unit/noun, e.g. ["12", "windows"] or ["139,34", "m²"]. */
 export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, string] | null {
   if (resp.answer.kind === 'text') return [resp.answer.value, t(lang, resp.answer.subject === 'fire_rating' ? 'text_fire_rating' : 'text_label')]
+  const display = usableDisplay(resp.display)
   if (resp.answer.kind === 'note') {
     if (resp.answer.number !== undefined) {
-      const unit = resp.answer.unit ?? ''
-      const isAreaUnit = unit === 'm²' || unit === 'm2'
+      // A note's own unit may be anything ("mm"): the server's converted text is the value to show.
+      if (display?.text && display.value !== undefined) {
+        if (display.style === 'ft_in') return [display.text, '']
+        return [`${resp.answer.approximate ? '≈ ' : ''}${fmtConverted(display.value, lang)}`, display.label]
+      }
+      const rawUnit = resp.answer.unit ?? ''
+      const unit = { m2: 'm²', m3: 'm³' }[rawUnit] ?? rawUnit
+      const isAreaUnit = unit === 'm²'
+      // measured under an estimated scale: the headline says so like the evidence rows, without false decimals
+      if (resp.answer.approximate && isAreaUnit)
+        return [`≈ ${fmtCount(Math.round(resp.answer.number), lang)}`, `m² ${estimateTag(lang)}`]
       const numStr = !isAreaUnit && Number.isInteger(resp.answer.number)
         ? fmtCount(resp.answer.number, lang)
         : fmtArea(resp.answer.number, lang)
@@ -95,9 +126,15 @@ export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, 
   }
   if (d.value === null) return null
   if (resp.answer.kind === 'count') return [fmtCount(d.value, lang), noun(resp.answer.subject, d.value, lang)]
-  if (resp.answer.kind === 'area') return [fmtArea(d.value, lang), 'm²']
+  if (resp.answer.kind === 'area') {
+    const shown = displayParts(d.value, 'm2', display, lang)
+    if (shown) return resp.answer.approximate ? [`≈ ${shown[0]}`, shown[1]] : shown
+    return resp.answer.approximate
+      ? [`≈ ${fmtCount(Math.round(d.value), lang)}`, `m² ${estimateTag(lang)}`]
+      : [fmtArea(d.value, lang), 'm²']
+  }
   if (resp.answer.kind === 'quantity')
-    return [fmtArea(d.value, lang), { m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]]
+    return displayParts(d.value, resp.answer.unit, display, lang) ?? [fmtArea(d.value, lang), { m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]]
   return null
 }
 
@@ -109,14 +146,19 @@ const fmtFor = (resp: AskResponse, n: number, lang: Lang) =>
 export function sentence(resp: AskResponse, d: Derived, drawing: Drawing, lang: Lang): string {
   const where = whereText(resp.scope as Scope | ProjectScopeLike, lang)
   if (resp.answer.kind === 'count') return t(lang, 'counted_where', { where })
+  // A length read from a printed dimension or measured on the outline says so itself (its explanation); only an
+  // IFC quantity is "as given by the model file".
+  if (resp.answer.kind === 'quantity' && resp.explanation && drawing.kind !== 'ifc') return ''
   if (resp.answer.kind === 'quantity') return t(lang, 'measured_where', { where })
   if (resp.answer.kind === 'text') return t(lang, 'text_found')
   // A note is only an agent estimate when its method says so; exact notes (e.g. "largest room") come from CAD.
+  if (resp.answer.kind === 'note' && resp.answer.approximate) return t(lang, 'area_estimate_note')
   if (resp.answer.kind === 'note')
     return t(lang, resp.method === 'agent_estimate' ? 'agent_note_found' : resp.method === 'cad_geometry' ? 'note_exact' : 'note_read')
   if (resp.answer.kind !== 'area') return ''
   const byId = new Map(drawing.rooms.map((r) => [r.room_id, r]))
   const parts = [t(lang, 'area_where', { where })]
+  if (resp.answer.approximate) parts.push(t(lang, 'area_estimate_note'))
   if (resp.evidence.rooms.length > 0) {
     parts.push(t(lang, 'rooms_included', { n: fmtCount(d.includedRooms.length, lang) }))
   } else if (resp.method === 'agent_estimate') {
@@ -153,7 +195,18 @@ const METHOD_KEY: Record<Exclude<Method, 'cad_geometry'>, StringKey> = {
 
 export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
   const out: Chip[] = []
-  if (resp.method === 'cad_geometry') out.push({ key: 'method', text: t(lang, 'chip_exact'), tone: 'success' })
+  // Where the value comes from wins over who read it: a printed value is quoted as printed (never "model
+  // estimate"), a measure on a scan is an estimate (never "exact"). Exact CAD geometry keeps its own chip.
+  if (resp.basis === 'printed' && resp.answer.kind !== 'abstain')
+    out.push({
+      key: 'method',
+      text: t(lang, 'chip_printed'),
+      tone: 'success',
+      ...(resp.method === 'vision' || resp.method === 'ocr' ? { title: t(lang, 'chip_printed_title') } : {}),
+    })
+  else if (resp.basis === 'estimate' && resp.answer.kind !== 'abstain' && resp.method !== 'agent_estimate')
+    out.push({ key: 'method', text: t(lang, 'chip_scan_estimate'), tone: 'info' })
+  else if (resp.method === 'cad_geometry') out.push({ key: 'method', text: t(lang, 'chip_exact'), tone: 'success' })
   // No model involved: exact-style chip, unless the answer carries an estimate (then it keeps the estimate styling).
   else if ((resp.method === 'pdf_vector' || resp.method === 'store_sql') && !resp.estimate)
     out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'success' })
@@ -267,6 +320,21 @@ function roomLabel(room: RoomPoly | undefined, id: string | undefined): string {
   return `${room.name} ${room.num}`
 }
 
+/** A machine id (an IFC GlobalId of 22 characters, a `<sheet>:<id>` remap) is never a badge: 6 characters of it are. */
+const MACHINE_ID = /^(?:[0-9A-Za-z_$]{22}|.*:.*)$/
+const shortId = (id: string) => (id.split(':').pop() ?? id).slice(0, 6)
+
+function roomBadge(num: string | undefined, id: string): string {
+  if (num) return num
+  return MACHINE_ID.test(id) ? shortId(id) : id
+}
+
+function roomFallbackName(num: string | undefined, id: string, lang: Lang): string {
+  const word = cap(noun('room', 1, lang))
+  if (num) return `${word} ${num}`
+  return MACHINE_ID.test(id) ? `${word} ${shortId(id)}` : id
+}
+
 export function rows(
   resp: AskResponse,
   toggles: Toggles,
@@ -305,7 +373,16 @@ export function rows(
   const rooms = resp.evidence.rooms.map((r): Row => {
     const on = isRoomIncluded(r, toggles)
     const poly = byId.get(r.room_id)
-    const area = r.area_m2 === null ? t(lang, 'area_not_printed') : `${fmtArea(r.area_m2, lang)} m²`
+    const conv = r.area_m2 === null ? null : displayParts(r.area_m2, 'm2', usableDisplay(resp.display), lang)
+    // an area measured under an estimated scale reads "≈ 12 m² (estimate)", as the headline does
+    const estimated = !r.edited && poly?.area_source === 'estimate'
+    const metric = r.area_m2 === null ? '' : fmtRoomArea(r.area_m2, estimated ? 'estimate' : undefined, lang)
+    const area =
+      r.area_m2 === null
+        ? t(lang, 'area_not_printed')
+        : conv
+          ? `${estimated ? '≈ ' : ''}${conv.join(' ')} (${metric})`
+          : metric
     const rExtra = r as typeof r & { group_id?: string; drawing_id?: string }
     const grp = rExtra.group_id ? groupById.get(rExtra.group_id) : undefined
     const drawingId = rExtra.drawing_id
@@ -313,8 +390,8 @@ export function rows(
     return {
       id: roomEvidenceId(r.room_id),
       kind: 'room',
-      badge: poly?.num ?? r.room_id,
-      title: `${poly?.name ?? r.room_id}${poly?.outdoor ? ` (${t(lang, 'outdoor')})` : ''}`,
+      badge: roomBadge(poly?.num || r.num, r.room_id),
+      title: `${poly?.name || r.name || roomFallbackName(poly?.num || r.num, r.room_id, lang)}${poly?.outdoor ? ` (${t(lang, 'outdoor')})` : ''}`,
       sub: `${on && r.area_m2 !== null ? '+ ' : ''}${area}${r.edited ? ` · ${t(lang, 'your_whatif_size')}` : ''}${grp ? ` · ${grp.label}` : ''}`,
       ...(grp ? { groupId: grp.id, groupColor: grp.color, groupLabel: grp.label } : {}),
       ...(drawingId ? { drawingId } : {}),
@@ -401,7 +478,7 @@ export function footerParts(resp: AskResponse, lang: Lang): string[] {
       ? t(lang, 'cost_upper_bound', { cost: fmtUsd(resp.cost_usd) })
       : fmtUsd(resp.cost_usd)
   return [
-    `${t(lang, 'footer_answer')}: ${t(lang, METHOD_FOOTER[resp.method])}`,
+    `${t(lang, 'footer_answer')}: ${t(lang, resp.basis === 'printed' ? 'method_printed' : resp.basis === 'estimate' && resp.method !== 'agent_estimate' ? 'method_scan_estimate' : METHOD_FOOTER[resp.method])}`,
     callsText(resp.calls, lang),
     costText,
     ...checkParts(resp, lang),
@@ -613,7 +690,9 @@ export function agentFailure(resp: AskResponse): AgentFailure | null {
 /** What the exact router, tools and SQL tried, from the trace's `look` node (English, from the server); null when absent. */
 export function triedText(resp: AskResponse): string | null {
   const look = resp.trace.find((n) => n.id === 'look')
-  const text = look?.body.replace(/^I cannot answer this from the drawing.s data:?\s*/i, '').trim()
+  // an all-floors abstention has no single look step: the reason travels as the response's explanation
+  let text = (look?.body.replace(/^I cannot answer this from the drawing.s data:?\s*/i, '').trim()) || resp.explanation?.trim()
   if (!text) return null
+  text = text.replace(/^Tried:\s*/i, '')            // the card writes "Tried:" itself
   return text.length > 240 ? `${text.slice(0, 237)}…` : text
 }

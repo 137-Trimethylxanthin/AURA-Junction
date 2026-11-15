@@ -298,3 +298,30 @@ def test_forget_waits_for_a_registration_in_progress(tmp_path, monkeypatch):
             await task
             return deleted
         assert c.portal.call(scenario) == [["e" * 16]]
+
+
+def test_image_upload_with_a_vector_model_shows_it_beside_the_scan(tmp_path):
+    from aura.drawing_store import _plan_images
+    (tmp_path / "original.png").write_bytes(b"x")
+    same = {"rebuilt": "/drawings/up-1/original.png", "original": "/drawings/up-1/original.png",
+            "original_alignment": "exact"}
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" data-plan="vector-scan"><path d="M0,0h9v9Z" fill="#2f343c"/></svg>'
+    out = _plan_images("up-1", tmp_path, dict(same), svg)
+    assert out == {"rebuilt": "/drawings/up-1/plan.svg", "original": "/drawings/up-1/original.png",
+                   "original_alignment": "exact"}
+    assert (tmp_path / "plan.svg").read_text().startswith('<svg width="1000" height="500"')  # sized: usable as <img>
+    # the model went away on a re-interpretation: back to the scan alone, and no pair to compare
+    assert _plan_images("up-1", tmp_path, out, None) == {"rebuilt": "/drawings/up-1/original.png"}
+    assert not (tmp_path / "plan.svg").exists()
+    # an image without a model never offers the scan against itself
+    assert _plan_images("up-1", tmp_path, dict(same), None) == {"rebuilt": "/drawings/up-1/original.png"}
+    pdf = {"rebuilt": "/drawings/up-1/plan.svg", "original": "/drawings/up-1/original.png"}
+    (tmp_path / "plan.svg").write_text("<svg><!-- our own render of a PDF --></svg>")
+    assert _plan_images("up-1", tmp_path, dict(pdf), None) == pdf and (tmp_path / "plan.svg").is_file()
+
+
+def test_estimated_room_area_is_part_of_the_contract():
+    from aura.contract import RoomPoly
+    r = RoomPoly(room_id="1", num="1", name="Kitchen", area_m2=12.3, outdoor=False, points=[[0, 0], [1, 0], [1, 1]],
+                 label_at=[0.5, 0.5], area_source="estimate")
+    assert r.area_source == "estimate"

@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { bundledDrawing } from '@/data/drawing'
 import type { Box } from '@/api/contract'
 import { isRebuiltPlanSvg, parsePlanSvg } from './svgPlan'
-import { buildPlanModel } from './planModel'
+import { buildPlanModel, initialWallHeight } from './planModel'
 import { inkMask, keepWallLike, openMask, wallRects } from './imageModel'
 
 const svgText = readFileSync('public/drawings/swiss-46639/plan.svg', 'utf8')
@@ -57,6 +57,18 @@ describe('plan model', () => {
     m.dispose()
   })
 
+  it('starts a plan with an estimated scale with walls in proportion to its footprint', () => {
+    const estimated = { ...bundledDrawing, rooms: bundledDrawing.rooms.map((r) => ({ ...r, area_source: 'estimate' as const })) }
+    expect(initialWallHeight(bundledDrawing, { w: 8, d: 7 })).toBe(2.6) // a stated scale: the typical storey
+    expect(initialWallHeight(estimated, { w: 8, d: 7 })).toBe(1.4)
+    expect(initialWallHeight(estimated, { w: 60, d: 40 })).toBe(2.6)
+    expect(initialWallHeight(estimated, { w: 3, d: 2 })).toBe(1.2)
+  })
+  it('frames the walls as well as the footprint', () => {
+    const m = buildPlanModel(bundledDrawing, plan)
+    expect(m.size.radius).toBeCloseTo(Math.hypot(m.size.w, m.size.d) / 2 + 2.6)
+    m.dispose()
+  })
   it('cuts walls down with the wall height and keeps railings at railing height', () => {
     const m = buildPlanModel(bundledDrawing, plan)
     const heights = () => {
@@ -157,5 +169,53 @@ describe('image pixels', () => {
     expect(paper.darkPaper).toBe(false)
     expect(paper.ink[30 * w + 29]).toBeGreaterThan(0.9)
     expect(paper.ink[30 * w + 5]).toBe(0)
+  })
+})
+
+describe('base board', () => {
+  it('follows an L-shaped footprint instead of its bounding rectangle', async () => {
+    const { footprintStrips } = await import('./footprint')
+    const L = [
+      { x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 6 }, { x: 6, y: 6 }, { x: 6, y: 20 }, { x: 0, y: 20 },
+    ]
+    const strips = footprintStrips([L], 0.8)
+    const covers = (x: number, z: number) => strips.some((s) => x >= s.x0 && x <= s.x1 && z >= s.z0 && z <= s.z1)
+    expect(covers(3, 3) && covers(18, 3) && covers(3, 18)).toBe(true)
+    expect(covers(-0.5, -0.5) && covers(20.6, 3)).toBe(true) // the lip
+    expect(covers(14, 14) || covers(8, 8)).toBe(false) // the empty corner of the L
+    const area = strips.reduce((a, s) => a + (s.x1 - s.x0) * (s.z1 - s.z0), 0)
+    expect(area).toBeGreaterThan(204)
+    expect(area).toBeLessThan(21.6 * 21.6 * 0.75)
+    expect(Math.min(...strips.map((s) => s.x0))).toBeCloseTo(-0.8, 5)
+    expect(Math.max(...strips.map((s) => s.x1))).toBeCloseTo(20.8, 5)
+    // a courtyard is part of the board; nothing to stand on gives no board
+    const ring = footprintStrips([[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 1 }, { x: 0, y: 1 }], [{ x: 0, y: 9 }, { x: 10, y: 9 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+      [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 10 }, { x: 0, y: 10 }], [{ x: 9, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 9, y: 10 }]], 0.5)
+    expect(ring.some((s) => 5 >= s.x0 && 5 <= s.x1 && 5 >= s.z0 && 5 <= s.z1)).toBe(true)
+    expect(footprintStrips([], 0.8)).toEqual([])
+  })
+
+  it('the plan model stands on a board named base that covers its rooms', () => {
+    const m = buildPlanModel(bundledDrawing, parsePlanSvg(svgText))
+    const base = m.group.getObjectByName('base') as THREE.Mesh
+    expect(base).toBeTruthy()
+    base.geometry.computeBoundingBox()
+    const bb = new THREE.Box3().setFromObject(m.rooms[0].mesh.parent!)
+    expect(base.geometry.boundingBox!.max.y).toBeLessThan(0)
+    expect(bb.isEmpty()).toBe(false)
+    m.dispose()
+  })
+})
+
+describe('has3dModel', () => {
+  it('is offered for a vector plan (scan with a wall model, CAD bundle, IFC storey), not for a page image', async () => {
+    const { has3dModel } = await import('./available')
+    const img = (rebuilt: string) => ({ rebuilt })
+    // a PDF sheet shown as its page render, a scan without rooms or walls
+    expect(has3dModel({ kind: 'raster', images: img('/drawings/st-x/original.png?v=1') })).toBe(false)
+    // a scan with a wall model: the plan drawn from it
+    expect(has3dModel({ kind: 'raster', images: img('/drawings/st-x/plan.svg?v=1') })).toBe(true)
+    expect(has3dModel({ kind: 'cad_dxf', images: img('/drawings/swiss-46639/plan.svg') })).toBe(true)
+    expect(has3dModel({ kind: 'ifc', images: img('/drawings/st-b--eg/plan.svg') })).toBe(true)
   })
 })

@@ -61,13 +61,14 @@ if TYPE_CHECKING:
 log = logging.getLogger("aura.store_library")
 
 PREFIX = "st-"
-VERSION = 1            # bump when the generated document or images change shape: every cache is rebuilt
+VERSION = 3            # bump when the generated document or images change shape: every cache is rebuilt
 LIST_TTL_S = 30.0      # how often the listing's store signature is re-read
 DOC_TTL_S = 30.0       # how often an open drawing's signature is re-read
 FILE_IDS_TTL_S = 60.0
 DB_TIMEOUT_S = 30.0    # socket timeout of every store connection opened here
 MAX_DOCS = 512         # documents kept in memory (each is a few KB to a few hundred KB)
 MAX_FLOORS = 50        # ProjectBundle.floors max_length
+MAX_PAGES = 30         # pages of one PDF listed as drawings of their own
 
 EXACT_TABLES = {"cad_entity", "ifc_element"}
 VECTOR_TABLES = {"pdf_path", "pdf_text"}
@@ -78,6 +79,9 @@ SOURCE_NAMES = {"cubicasa5k": "CubiCasa5K", "swiss_dwellings": "Swiss Dwellings"
                 "ifc_models": "IFC models", "ifc_bench": "IFC bench", "stress": "Stress test"}
 SOURCE_ORDER = ["stress", "swiss_dwellings", "opening_design", "ifc_models", "ifc_bench", "cubicasa5k",
                 "wikimedia", "finna", "habs", "europeana"]
+#: the collection a source belongs to (the library's source filter)
+ORIGIN = {"swiss_dwellings": "swiss", "cubicasa5k": "cubicasa", "opening_design": "us_sheets", "ifc_models": "ifc",
+          "ifc_bench": "ifc", "wikimedia": "historic", "finna": "historic", "habs": "historic", "europeana": "historic"}
 SWISS_KEY = re.compile(r"^site(\d+)_bldg(\d+)_floor(\d+)$")
 
 
@@ -244,6 +248,7 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
             "credit": credit_of(project, lic), "source": "library",
             "created_at": (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ingested)) if ingested else None),
             "source_ext": _ext_of(formats),
+            "origin": "ifc" if _kind_of(formats) == "ifc" else ORIGIN.get(source, "other"),
         }
         src_rank = SOURCE_ORDER.index(source) if source in SOURCE_ORDER else len(SOURCE_ORDER)
         file_ids = tuple(f["file_id"] for f in r["files"])
@@ -251,15 +256,34 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
             did = make_id(key)
             what = [_n(counts.get("room", 0), "room"), _n(counts.get("door", 0), "door"),
                     _n(counts.get("window", 0), "window"), _n(fixtures, "fixture")]
+            sheet = r.get("sheet")   # one page of a PDF of several: the counts are that page's
+            page = f"page {sheet[0]} of {sheet[1]}" if sheet else None
             summ = base | {
-                "id": did,
+                "id": did, "n_rooms": int(counts.get("room", 0)), "n_doors": int(counts.get("door", 0)),
                 "thumbnail": (f"/drawings/{did}/thumb.png{version}" if r.get("has_image")
                               else f"/drawings/{did}/plan.svg{version}"),
-                "subtitle": " · ".join(x for x in (source_name, fmt, r.get("scale"),
+                "subtitle": " · ".join(x for x in (source_name, fmt, page, r.get("scale"),
                                                    *(what if interpreted else ["not interpreted"])) if x)[:300],
             }
             out.append(Entry(did, key, None, None, project, file_ids, summ,
                              rank=(not interpreted, src_rank, title.lower(), 0)))
+            # the other pages with content of a PDF of several: each a drawing of its own, listed after the
+            # page the drawing opens on (they are sheets of one set, not floors: nothing is summed over them)
+            for pg in (r.get("pages") or [])[:MAX_PAGES] if sheet else []:
+                pid, pc = make_id(key, pg["slug"]), pg.get("counts") or {}
+                n, of = pg["sheet"]
+                pfix = sum(pc.get(k, 0) for k in FIXTURE_KINDS)
+                pwhat = [_n(pc.get("room", 0), "room"), _n(pc.get("door", 0), "door"),
+                         _n(pc.get("window", 0), "window"), _n(pfix, "fixture")]
+                if not any(pwhat):
+                    pwhat = [_n(pc.get("dimension", 0), "dimension")]
+                psumm = base | {
+                    "id": pid, "title": f"{title} · page {n}"[:160], "n_rooms": int(pc.get("room", 0)),
+                    "n_doors": int(pc.get("door", 0)), "thumbnail": f"/drawings/{pid}/thumb.png{version}",
+                    "subtitle": " · ".join(x for x in (source_name, fmt, f"page {n} of {of}", r.get("scale"), *pwhat) if x)[:300],
+                }
+                out.append(Entry(pid, key, pg["slug"], None, project, file_ids, psumm,
+                                 rank=(not interpreted, src_rank, title.lower(), int(n))))
             continue
         by_height = sorted(storeys, key=lambda s: (s.get("elevation") is None, s.get("elevation") or 0.0,
                                                    s.get("name") or ""))
@@ -272,6 +296,7 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
             occupied = st.get("n_rooms", 0) + st.get("n_items", 0) > 0
             summ = base | {
                 "id": did, "title": (f"{title} · {name}" if name else title)[:160],
+                "n_rooms": int(st.get("n_rooms", 0)),
                 "thumbnail": f"/drawings/{did}/thumb.png{version}",
                 "subtitle": " · ".join(x for x in (
                     name or None, level, _n(st.get("n_rooms", 0), "room"), _n(st.get("n_items", 0), "object"),
@@ -296,6 +321,8 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
         good.append(e)
     return good
 
+
+DOC_VERSION = 8          # raised when the document of an unchanged drawing is built differently (cached ones are rebuilt)
 
 # ---- the document (pure: what the source built -> our drawing.json) -------------------------------
 
@@ -341,12 +368,16 @@ def to_drawing(entry: Entry, built: dict, signature: str) -> dict:
     doc["thumbnail"] = ours(sdoc.get("thumbnail")) or doc["images"].get("rebuilt")
     doc["status"] = "ready"
     doc["source"] = "library"
+    if sdoc.get("sheet_page") and sdoc.get("sheet_pages"):   # one page of a PDF of several
+        doc["sheet"] = {"page": int(sdoc["sheet_page"]), "pages": int(sdoc["sheet_pages"])}
+    if sdoc.get("printed_dimensions"):                 # dimensions printed on the sheet (q.dimensions): lengths are askable
+        doc["printed_dimensions"] = int(sdoc["printed_dimensions"])
     # Layer 2 (q.rooms, q.doors ...) has no storey scope: on one storey of a multi-storey model a query
     # would count the whole model, so there the document's own index stays the owner.
     owner = "store" if entry.slug is None or entry.siblings <= 1 else "ours"
     doc["store"] = {"drawing_key": entry.key, "file_ids": list(entry.file_ids), "owner": owner,
-                    "signature": signature, "page": built.get("page"), "synthetic": bool(built.get("synthetic")),
-                    **({"storey": entry.storey} if entry.slug is not None else {})}
+                    "signature": signature, "doc": DOC_VERSION, "page": built.get("page"), "synthetic": bool(built.get("synthetic")),
+                    **({"storey": entry.storey} if entry.slug is not None and entry.storey is not None else {})}
     return apply_entry(doc, entry)
 
 
@@ -624,7 +655,8 @@ class StoreLibrary:
         doc = None
         try:
             cached = json.loads(path.read_text(encoding="utf-8"))
-            if (cached.get("store") or {}).get("signature") == want and cached.get("id") == e.id:
+            st = cached.get("store") or {}
+            if st.get("signature") == want and st.get("doc") == DOC_VERSION and cached.get("id") == e.id:
                 doc = apply_entry(cached, e)
         except (OSError, ValueError, AttributeError):
             doc = None
@@ -677,19 +709,36 @@ class StoreLibrary:
                     return _cached(d.dir / f"original-{tag}.png", lambda: self.source.plan_png(e.key, e.slug, 2000))
                 return None
             if name == "thumb.png":
+                if page is not None and _has_vector_plan(d.drawing):
+                    # A scan the store rebuilt as a vector plan: the library shows the rebuilt plan.
+                    # Drawn once from the store model, then served from disk; the scan if that fails.
+                    try:
+                        made = _cached(d.dir / f"thumb-plan-{tag}.png",
+                                       lambda: self.source.plan_png(e.key, e.slug, 640))
+                    except Exception:  # noqa: BLE001
+                        log.exception("store library: no plan thumbnail, showing the scan")
+                        made = None
+                    if made is not None:
+                        return made
                 if page is not None:
                     return _cached(d.dir / f"thumb-{tag}.jpg", lambda: _thumb_jpeg(page))
                 if synthetic:
                     return _cached(d.dir / f"thumb-{tag}.png", lambda: self.source.plan_png(e.key, e.slug, 640))
                 return None
             if name == "plan.svg":
-                urls = [*(d.drawing.get("images") or {}).values(), d.drawing.get("thumbnail")]
-                if not any(isinstance(u, str) and "/plan.svg" in u for u in urls):
+                if not _has_vector_plan(d.drawing):
                     return None  # this drawing shows its page; no rebuilt plan to make
-                return _cached(d.dir / f"plan-{tag}.svg", lambda: _bytes(self.source.plan_svg(e.key, e.slug, page)))
+                return _cached(d.dir / f"plan-v5-{tag}.svg", lambda: _bytes(self.source.plan_svg(e.key, e.slug, page)))
         except Exception:  # a missing image is a 404, never a 500
             log.exception("store library: %s could not be made", name)
         return None
+
+
+def _has_vector_plan(drawing: dict) -> bool:
+    """True when the drawing is shown as a plan rebuilt from the store model (its document points at
+    plan.svg), False when it shows its page (a PDF sheet, an image nothing was rebuilt from)."""
+    urls = [*(drawing.get("images") or {}).values(), drawing.get("thumbnail")]
+    return any(isinstance(u, str) and "/plan.svg" in u for u in urls)
 
 
 def _on_loop() -> bool:
@@ -824,10 +873,33 @@ class JStoreSource:
                 where f.drawing_key not in (select u.drawing_key from jstore.source_file u where u.project_id like 'upload/%')
                 group by f.drawing_key order by f.drawing_key""")
             counts: dict[str, dict[str, int]] = {}
-            for c in db.run("""select drawing_key, kind, count(*) as n from jstore.entity
-                               where status = 'active' group by 1, 2"""):
+            # rooms are counted as answers count them: an outdoor space (balcony, terrace) is not a room
+            for c in db.run("""select drawing_key,
+                                      case when kind = 'room' and not coalesce((attrs->>'indoor')::boolean, true)
+                                           then 'outdoor' else kind end as kind, count(*) as n
+                               from jstore.entity where status = 'active' group by 1, 2"""):
                 counts.setdefault(c["drawing_key"], {})[c["kind"]] = int(c["n"])
             storeys = am.storey_index(db) if any("ifc" in r["formats"] for r in rows) else {}
+            # a PDF of several pages is shown as one of them: its counts are those of that page (the same
+            # definition the document is built with), and the listing says which page it is
+            sheets: dict[str, tuple[int, int]] = {}
+            pages: dict[str, list[dict]] = {}
+            several = {r["file_id"] for r in db.run(
+                """select p.file_id from jstore.page p join jstore.source_file f using (file_id)
+                   where f.format = 'pdf' group by 1 having count(*) > 1""")}
+            for r in rows:
+                if several.intersection(r["file_ids"]) and r["key"] not in storeys:
+                    try:
+                        scoped = am.page_counts(db, r["key"])
+                    except Exception:  # noqa: BLE001 - the listing never fails over one drawing
+                        log.warning("page counts not read for a store drawing")
+                        scoped = None
+                    if scoped is not None:
+                        sheets[r["key"]], counts[r["key"]] = scoped
+                        try:
+                            pages[r["key"]] = am.other_pages(db, r["key"])
+                        except Exception:  # noqa: BLE001
+                            log.warning("pages not read for a store drawing")
         out = []
         for r in rows:
             out.append({
@@ -836,7 +908,7 @@ class JStoreSource:
                 "has_image": bool(r["has_image"]), "has_cad": bool(r["has_cad"]),
                 "files": [{"file_id": i, "path": p, "format": f}
                           for i, p, f in zip(r["file_ids"], r["paths"], r["formats"], strict=True)],
-                "counts": counts.get(r["key"], {}),
+                "counts": counts.get(r["key"], {}), "sheet": sheets.get(r["key"]), "pages": pages.get(r["key"], []),
                 "storeys": [{"slug": s.slug, "name": s.name, "elevation": s.elevation, "n_rooms": s.n_rooms,
                              "n_items": s.n_items, "n_shapes": s.n_shapes} for s in storeys.get(r["key"], [])],
             })

@@ -6,8 +6,8 @@
 /** 1.2 is additive over 1.0/1.1: every new field is optional. The client accepts any major-1 body. */
 export const CONTRACT_VERSION = '1.2'
 
-export type Lang = 'en' | 'fr' | 'fi' | 'de'
-export const LANGS: readonly Lang[] = ['en', 'fr', 'fi', 'de']
+export type Lang = 'en' | 'fr' | 'fi' | 'de' | 'it'
+export const LANGS: readonly Lang[] = ['en', 'fr', 'fi', 'de', 'it']
 
 /** 1.2: 6 WCAG AA categorical evidence series tokens (`--group-1..6` + `--group-1..6-surface` in STACK.md / index.css). */
 export type GroupColor = 'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c6'
@@ -121,7 +121,7 @@ export interface RoomPoly {
   points: [Pct, Pct][]
   label_at: [Pct, Pct]
   /** 1.1: 'outline' when no area is printed and it comes from the room outline. Absent means printed. */
-  area_source?: 'printed' | 'outline'
+  area_source?: 'printed' | 'outline' | 'estimate'
   /** Present only for rooms that support what-if resizing. */
   rect?: PctRect & { w_m: number; h_m: number }
 }
@@ -162,9 +162,19 @@ export function safeUrl(u: string | undefined): string | null {
   return /^https?:\/\//i.test(s) ? s : null
 }
 
-export function licenceLabel(c: Pick<Credit, 'license' | 'license_name'>): string {
-  if (c.license_name) return c.license_name
-  return /^LicenseRef-/i.test(c.license) ? 'Licence terms' : c.license
+/** The fixed licence phrases the backend sends in English, in the interface languages. */
+const LICENCE_PHRASES: Record<string, Partial<Record<Lang, string>>> = {
+  'Licence of the source dataset': {
+    de: 'Lizenz des Quelldatensatzes', fr: 'Licence du jeu de données source', fi: 'Lähdeaineiston lisenssi',
+    it: 'Licenza del dataset di origine',
+  },
+  'Uploaded by you': { de: 'Von Ihnen hochgeladen', fr: 'Importé par vous', fi: 'Sinun lataamasi', it: 'Caricato da te' },
+  'Licence terms': { de: 'Lizenzbedingungen', fr: 'Conditions de licence', fi: 'Lisenssiehdot', it: 'Condizioni di licenza' },
+}
+
+export function licenceLabel(c: Pick<Credit, 'license' | 'license_name'>, lang: Lang = 'en'): string {
+  const label = c.license_name ? c.license_name : /^LicenseRef-/i.test(c.license) ? 'Licence terms' : c.license
+  return LICENCE_PHRASES[label]?.[lang] ?? label
 }
 
 export interface Drawing {
@@ -234,6 +244,11 @@ export interface DrawingSummary {
   floor_label?: string
   /** 1.2: vertical floor sort order (e.g. -1 basement, 0 ground, 1..N upper, 99 attic). */
   floor_order?: number
+  /** 1.2 additive (store drawings): the collection the drawing comes from. */
+  origin?: 'swiss' | 'ifc' | 'cubicasa' | 'us_sheets' | 'historic' | 'other'
+  /** 1.2 additive (store drawings): rooms / doors read from the drawing (0 = a sheet without a plan). */
+  n_rooms?: number
+  n_doors?: number
 }
 
 /** 1.2: one ordered floor entry inside a multi-plan house/building `ProjectBundle`. */
@@ -478,11 +493,13 @@ export interface AnswerNote {
   value: string
   number?: number
   unit?: string
+  /** The number is measured under an estimated scale (a scan that states none): shown as "≈ 12 m² (estimate)". */
+  approximate?: boolean
 }
 
 export type Answer =
   | { kind: 'count'; value: number; subject: Subject }
-  | { kind: 'area'; value: number; unit: 'm2' }
+  | { kind: 'area'; value: number; unit: 'm2'; approximate?: boolean }
   | { kind: 'abstain'; reason: AbstainReason; where_to_find?: string }
   /** 1.1: a measured quantity given as is (IFC wall length, net side area, net volume); never recomputed. */
   | { kind: 'quantity'; value: number; unit: 'm' | 'm2' | 'm3' }
@@ -509,6 +526,9 @@ export interface EvidenceRoom {
   group_id?: string
   /** 1.2: floor drawing id when evidence spans a multi-plan house/project bundle. */
   drawing_id?: string
+  /** Additive: name and number of a room of another floor (the open drawing holds only its own rooms). */
+  name?: string
+  num?: string
 }
 
 /** 1.2: categorical color-coded evidence group (e.g. Apartment A, Stair S1 -> 1. OG). */
@@ -639,6 +659,51 @@ export interface AskResponse {
   agent_failure?: AgentFailure
   /** 1.2: per-sheet shares of a whole-building answer (`scope` is then the project scope of the sheets asked). */
   breakdown?: BreakdownItem[]
+  /**
+   * 1.2 additive: where the stated value comes from, when the answer knows. `printed`: on the sheet, quoted as
+   * printed (whoever read it); `measured`: on exact geometry; `estimate`: measured on a scan or under an estimated scale.
+   */
+  basis?: 'printed' | 'measured' | 'estimate'
+  /** 1.2 additive: every length a dimension answer states, in metres. */
+  measures?: Measure[]
+  /** 1.2: set only when the question asked for a non-default unit ("in square feet"); `answer` stays metric. */
+  display?: Display
+}
+
+export interface Measure {
+  label: string
+  value: number
+  unit?: string
+  source?: 'printed' | 'measured' | 'estimate'
+  /** The text on the sheet, e.g. 12' - 6". */
+  printed?: string
+  /** In the unit asked for (inside `display` only). */
+  text?: string
+}
+
+/** The answer in the unit the question asked for; `factors` are display units per m / m2 / m3. */
+export interface Display {
+  unit: string
+  label: string
+  style?: 'decimal' | 'ft_in'
+  factors: Partial<Record<'m' | 'm2' | 'm3', number>>
+  labels: Partial<Record<'m' | 'm2' | 'm3', string>>
+  value?: number
+  /** "3,675 sq ft" */
+  text?: string
+  /** "341.42 m²" */
+  metric_text?: string
+  metric_explanation?: string
+  metric_note?: string
+  measures?: Measure[]
+}
+
+/** Guard: a malformed `display` is ignored (the metric answer is shown), never a failed response. */
+export function usableDisplay(v: unknown): Display | undefined {
+  if (!isObj(v) || !isStr(v.unit) || !isStr(v.label) || !isObj(v.factors) || !isObj(v.labels)) return undefined
+  if (!Object.values(v.factors).every((f) => isNum(f) && f > 0)) return undefined
+  if (!Object.values(v.labels).every(isStr)) return undefined
+  return v as unknown as Display
 }
 
 /** One sheet's share of a whole-building answer ("ground floor 14"); evidence items carry their sheet in `drawing_id`. */
@@ -1042,7 +1107,7 @@ function isRoomPoly(v: unknown): v is RoomPoly {
     Array.isArray(v.points) &&
     v.points.every(isPair) &&
     isPair(v.label_at) &&
-    (v.area_source === undefined || isOneOf(v.area_source, ['printed', 'outline'] as const)) &&
+    (v.area_source === undefined || isOneOf(v.area_source, ['printed', 'outline', 'estimate'] as const)) &&
     (v.rect === undefined || (isRect(v.rect) && isNum(v.rect.w_m) && isNum(v.rect.h_m)))
   )
 }
@@ -1162,7 +1227,9 @@ const evRoomOk = (r: unknown) =>
   (r.area_m2 === null || isNum(r.area_m2)) &&
   (r.edited === undefined || typeof r.edited === 'boolean') &&
   optStr(r.group_id) &&
-  optStr(r.drawing_id)
+  optStr(r.drawing_id) &&
+  optStr(r.name) &&
+  optStr(r.num)
 const evRowOk = (r: unknown) => isObj(r) && isStr(r.id) && optStr(r.name) && optNum(r.value)
 
 /**

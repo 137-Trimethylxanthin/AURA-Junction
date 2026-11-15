@@ -1,5 +1,5 @@
 import { createBrowserRouter, redirect, type RouteObject } from "react-router"
-import { BUNDLED_DRAWING_ID } from "@/data/ids"
+import { sampleDrawingId } from "@/api/sample"
 import { RootLayout, RootFallback } from "./RootLayout"
 import { RouteError } from "./RouteError"
 import NotFound from "./NotFound"
@@ -33,7 +33,7 @@ export const routes: RouteObject[] = [
       { path: "d/:drawingId", lazy: page(() => import("./Workspace")) },
       // Old and short links keep working.
       { path: "d", loader: () => redirect("/app") },
-      { path: "demo", loader: () => redirect(`/d/${BUNDLED_DRAWING_ID}`) },
+      { path: "demo", loader: async () => redirect(`/d/${encodeURIComponent(await sampleDrawingId())}`) },
       { path: "*", Component: NotFound },
     ],
   },

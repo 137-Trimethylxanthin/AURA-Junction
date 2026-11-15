@@ -13,7 +13,10 @@ export function SuggestionList({ row = false }: { row?: boolean }) {
   const crossPlanScope = useAppStore(selectCrossPlanScope)
   const { tu } = useUi()
 
-  const list = useMemo(() => suggestionsFor(drawing, activeProject), [drawing, activeProject])
+  const list = useMemo(
+    () => suggestionsFor(drawing, activeProject, crossPlanScope),
+    [drawing, activeProject, crossPlanScope],
+  )
 
   return (
     <ul

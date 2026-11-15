@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from aura import answer as A
-from aura import tools
+from aura import dimension_answers, overview_answers, tools, units
 from aura.agent.loop import MAX_ITERATIONS, AgentResult, describe_call, run_agent
-from aura.budget import Budget, BudgetError
+from aura.budget import Budget, BudgetError, watch_refusals
 from aura.cache import AnswerCache, CheckCache, answer_key
 from aura.config import Settings, models_enabled
 from aura.contract import (
@@ -544,6 +544,13 @@ async def _execute_exact_intent(
 
     if intent == "quantity":
         tr = await asyncio.to_thread(tools.measure, d, subject or "", scope)
+        if tr.kind == "none" and tr.supported and tr.meta.get("abstain") == "not_answerable":
+            # the model file has the elements but not this quantity on them: final, nothing to estimate from
+            built = A.abstain(question, lang, tr.args["scope"], "not_answerable",
+                              f"What is the {A.QUANTITY_EN.get(subject or '', 'quantity')}", tr.summary,
+                              intent_tag=tag, results=[tr])
+            built.body["explanation"] = tr.summary
+            return built, True
         if not tr.supported or tr.kind == "none":
             return A.abstain(question, lang, tr.args["scope"], "not_supported_yet",
                              "(an IFC quantity)", tr.summary, intent_tag=tag, results=[tr]), False
@@ -658,6 +665,8 @@ async def _decide(svc: Services, req: AskRequest, d: tools.LoadedDrawing, caller
             elif u.intent == "area":
                 intent = "area"
             elif u.intent == "length":
+                if d.ctx.printed_dimensions:                 # the store read dimensions printed on the sheet
+                    return await _agent(svc, d, question, lang, caller, stats, history, tag)
                 return A.abstain_topic(question, lang, "length", intent_tag=tag)
             elif u.intent == "text":
                 return A.abstain(
@@ -885,6 +894,7 @@ async def _finalize_and_emit(
     *,
     allow_cache: bool,
 ) -> AsyncIterator[tuple[str, dict]]:
+    A.honest_method(built.body, d, built.subject)  # a scan's geometry is never presented as CAD
     check = await _check(svc, d, built, caller, stats)
     body = built.body
     if check is not None and "ranking" not in check:  # sent, but no usable result
@@ -932,7 +942,10 @@ async def _finalize_and_emit(
     resp = AskResponse.model_validate(body)  # contract gate: fails loudly on a bad body
     out = with_unknown_areas(resp.model_dump(exclude_none=True))
     _persist(svc, d.id, req.question, out, stats)
-    if allow_cache and not stats.get("no_cache"):
+    # An abstention reached after a budget / rate-limit / presenter / models-off refusal is
+    # temporary: it is never stored for replay, whichever step swallowed the refusal.
+    refused = bool(stats.get("refusals")) and (out.get("answer") or {}).get("kind") == "abstain"
+    if allow_cache and not stats.get("no_cache") and not refused:
         cached_body = out
         if check is not None and "ranking" in check and stats["check_calls"]:
             node = _check_node(check, True, stats, built.subject or "")
@@ -1012,7 +1025,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             yield ev
         return
 
-    stats = {"route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
+    stats = {"refusals": watch_refusals(),
+             "route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
              "meter": meters["answer"], "check_meter": meters["check"]}
 
     # ---- Sidecar-enabled `hybrid` / `agent` modes ----
@@ -1035,7 +1049,32 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 yield ev
             return
 
-        # Short exact context inheritance (e.g. "how many doors?" -> "and in apartment B?")
+        # 1b. A plain length question ("overall width", "how wide is the kitchen", "longest printed dimension")
+        # answered from the printed dimensions, else the measured outline: 0 model calls, always a length.
+        if not req.overrides and (scope_dump is None or scope_dump.get("kind") == "floor"):
+            dim_built = dimension_answers.try_answer(question, lang, d)
+            if dim_built is not None:
+                yield "understood", {"detected_lang": dim_built.body["detected_lang"],
+                                     "canonical_en": dim_built.body["canonical_en"], "route": "template"}
+                for ev in _tool_events(dim_built):
+                    yield ev
+                async for ev in _finalize_and_emit(svc, d, req, dim_built, caller, stats, meters, t0, key, allow_cache=True):
+                    yield ev
+                return
+
+        # 1c. "What does this drawing show?": the drawing's own record (title, source, format, sheet kind, page,
+        # counts of what was read), 0 model calls.
+        if not req.overrides and (scope_dump is None or scope_dump.get("kind") == "floor"):
+            over_built = overview_answers.try_answer(question, lang, d)
+            if over_built is not None:
+                yield "understood", {"detected_lang": over_built.body["detected_lang"],
+                                     "canonical_en": over_built.body["canonical_en"], "route": "template"}
+                for ev in _tool_events(over_built):
+                    yield ev
+                async for ev in _finalize_and_emit(svc, d, req, over_built, caller, stats, meters, t0, key, allow_cache=True):
+                    yield ev
+                return
+
         r = route(question, d.ctx)
         if context and not has_followup_semantics:
             short = len(question.split()) <= 5
@@ -1058,13 +1097,18 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         is_project = eff_scope.get("kind") == "project"
         dkind = d.drawing.get("kind")
         # A PDF/image the drawing store indexed answers exact templates from its index like CAD.
-        indexed = dkind in ("cad_dxf", "ifc") or bool(d.drawing.get("evidence_method"))
+        # ... and so does every sheet the store serves: one without rooms or doors answers a count with a zero and its reason.
+        indexed = (dkind in ("cad_dxf", "ifc") or bool(d.drawing.get("evidence_method"))
+                   or getattr(d, "store_library", False) is True)
         is_pdf = d.drawing.get("source_ext") == ".pdf"
         is_deictic_region = eff_scope.get("kind") == "region" and bool(DEICTIC_SIMILARITY.search(question))
 
         # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
         # A count across a building's floors is exact too (each floor counted, then summed): no model needed.
-        exact_project = is_project and r.intent == "count"
+        # ... and so is the net floor area across them (each floor summed by the one-floor rule, then added).
+        # ... and the largest / smallest room over them (each floor ranked, the extreme winner named with its floor).
+        exact_project = is_project and (r.intent in ("count", "room_rank") or (
+            r.intent == "area" and (r.scope or {}).get("kind") in (None, "floor", "model")))
         if mode == "hybrid" and (not is_project or exact_project) and not has_followup_semantics:
             if (indexed and r.intent in (
                     "count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count")) or (
@@ -1373,10 +1417,54 @@ def _persist(svc: Services, drawing_id: str, question: str, body: dict, stats: d
     )
 
 
+def with_units(base_run):
+    """Wrap a `run`-shaped generator so a question may ask for a unit ("in square feet").
+
+    The one place units are handled: the wrapped run (any route: exact, template, tool steps,
+    cache replay, building totals) answers the metric twin of the question, then the finished
+    response gets its `display` block. The cache therefore only ever holds metric answers.
+    "and in inches?" re-shows the previous turn's answer without running anything.
+    """
+    async def run_units(svc: Services, req: AskRequest, caller: Caller, *args, **kw):
+        up = units.plan(req.question)
+        # Earlier turns are passed on in metric too (args: context, history, ...).
+        if len(args) > 1:
+            history = units.metric_turns(args[1])
+            args = (args[0], history, *args[2:])
+        else:
+            history = units.metric_turns(kw.get("history"))
+            if "history" in kw:
+                kw["history"] = history
+        if up.unit is None and not up.changed:
+            async for item in base_run(svc, req, caller, *args, **kw):
+                yield item
+            return
+        prev = last_turn_response(history)
+        if up.pure and prev is not None and units.has_measure(prev):
+            t0 = time.perf_counter()
+            body = units.apply(prev, up.unit) | {
+                "route": "template", "calls": 0, "cost_usd": 0.0, "answer_id": "a-" + uuid.uuid4().hex}
+            for k in ("conversation_id", "turn_id"):
+                body.pop(k, None)
+            body["latency_ms"] = int((time.perf_counter() - t0) * 1000)
+            _persist(svc, req.drawing_id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
+            yield "understood", {"detected_lang": body["detected_lang"],
+                                 "canonical_en": body["canonical_en"], "route": "template"}
+            yield "answer", {"response": body}
+            return
+        metric_req = req.model_copy(update={"question": up.question}) if up.changed else req
+        async for event, data in base_run(svc, metric_req, caller, *args, **kw):
+            if event == "answer" and up.unit is not None:
+                data = {"response": units.apply(data["response"], up.unit)}
+            yield event, data
+
+    return run_units
+
+
 async def ask(svc: Services, req: AskRequest, caller: Caller,
               meters: dict[str, Meter] | None = None, run_fn=None) -> dict:
     # `run_fn`: a drop-in for `run` (whole-building answers, aura/building.py); default `run`.
-    async for event, data in (run_fn or run)(svc, req, caller, meters=meters,
+    async for event, data in with_units(run_fn or run)(svc, req, caller, meters=meters,
                                              deadline_s=float(svc.settings.turn_deadline_s)):
         if event == "answer":
             return data["response"]
@@ -1413,7 +1501,7 @@ async def chat_events(svc: Services, body: ChatRequest, caller: Caller,
 
     async def produce() -> None:
         try:
-            async for item in (run_fn or run)(svc, req, caller, context, history, meters,
+            async for item in with_units(run_fn or run)(svc, req, caller, context, history, meters,
                                               deadline_s=deadline_s,
                                               agent_deadline_s=svc.settings.agent_deadline_s):
                 await queue.put(item)

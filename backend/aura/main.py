@@ -36,6 +36,7 @@ from aura import ingest_cost, tools, uploads
 from aura.agent_client import AgentClient
 from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, Ledger, RequestRecord
 from aura.cache import AnswerCache, CheckCache
+from aura.plan_notes import translated_plan
 from aura.config import Settings, get_settings, kill_file, models_enabled
 from aura.contract import (
     CONTRACT_VERSION,
@@ -299,6 +300,21 @@ def _bundle_visible(s: Services, request: Request, p: ProjectBundle, rows_by_id:
     return True
 
 
+def _adhoc_group_allowed(s: Services, request: Request, drawing_ids: list[str]) -> bool:
+    """True when `drawing_ids` may be answered together without a stored project: every one is a
+    known drawing, and every upload among them is proven with its own delete token
+    (`x-delete-token`). Library drawings are public, so grouping them exposes nothing."""
+    given = _tokens(request, "x-delete-token")
+    for did in drawing_ids:
+        if did.startswith("up-"):
+            row = s.store.drawing_row(did) if s.store is not None else None
+            if row is None or not any(uploads.token_ok(t, row["delete_token_hash"]) for t in given):
+                return False
+        elif s.registry.get(did) is None:
+            return False
+    return True
+
+
 def _project_of(s: Services, project_id: str) -> ProjectBundle | None:
     return next((p for p in _synthesize_projects(s) if p.id == project_id), None)
 
@@ -316,12 +332,16 @@ def _scope_refused(s: Services, request: Request, drawing_id: str, scope: Any) -
         rows_by_id = {r["id"]: r for r in (s.store.project_rows() if s.store else [])}
         if not _bundle_visible(s, request, proj, rows_by_id):
             proj = None  # same answer as an unknown id: do not confirm it exists
-    if proj is None:
-        return _err("not_found", f"Unknown project '{scope.project_id}'.", 404)
     unique_ids = list(dict.fromkeys(scope.drawing_ids))
-    scope.drawing_ids = unique_ids
-    members = {f.drawing_id for f in proj.floors}
     involved = list(dict.fromkeys([drawing_id, *unique_ids]))
+    if proj is None:
+        # A group the server does not hold (made in the browser and never saved, saved under a token
+        # this request does not carry, or lost): the sheets it names are answered as a group when the
+        # caller could ask each of them anyway and nothing private is joined.
+        if len(involved) < 2 or not _adhoc_group_allowed(s, request, involved):
+            return _err("not_found", f"Unknown project '{scope.project_id}'.", 404)
+    scope.drawing_ids = unique_ids
+    members = {f.drawing_id for f in proj.floors} if proj is not None else set(involved)
     outside = [d for d in involved if d not in members]
     if outside:
         return _err("bad_request", f"Not floors of project '{proj.id}': {', '.join(outside[:5])}.", 400)
@@ -767,6 +787,18 @@ def create_app(
         elif isinstance(drawing_id, str) and drawing_id.startswith("st-"):
             await asyncio.to_thread(lib.warm, drawing_id)
 
+    async def warm_scope(request: Request, body: Any) -> None:
+        """The drawing asked about and every sheet a project scope names."""
+        await warm(request, body.drawing_id)
+        if getattr(body.scope, "kind", None) == "project":
+            from aura import building
+
+            # more sheets than one question may span are refused right after, so they are not built
+            cap = building.MAX_SHEETS if building.MAX_SHEETS > 0 else 50
+            for did in list(dict.fromkeys(body.scope.drawing_ids))[:cap]:
+                if did != body.drawing_id:
+                    await warm(request, did)
+
     def upload_row(request: Request, drawing_id: str) -> dict | None:
         st = svc(request).store
         return st.drawing_row(drawing_id) if st and drawing_id.startswith("up-") else None
@@ -994,9 +1026,14 @@ def create_app(
             return _err("not_found", "No such file.", 404)
         cache = NO_STORE if is_upload or d.source == "upload" else LIBRARY_CACHE
         # L1: a plan.svg opened directly from the API origin can never run script.
-        return FileResponse(p, headers={"cache-control": cache, "x-content-type-options": "nosniff",
-                                        "content-security-policy": "default-src 'none'; "
-                                        "style-src 'unsafe-inline'; img-src data:; sandbox"})
+        headers = {"cache-control": cache, "x-content-type-options": "nosniff",
+                   "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"}
+        if name == "plan.svg" and request.query_params.get("lang"):
+            # the footnote of an estimated scale is drawn inside the image: serve it in the interface's language
+            body = await asyncio.to_thread(translated_plan, Path(p), request.query_params.get("lang"))
+            if body is not None:
+                return Response(body, media_type="image/svg+xml", headers=headers)
+        return FileResponse(p, headers=headers)
 
     def not_ready(request: Request, drawing_id: str) -> JSONResponse | None:
         row = upload_row(request, drawing_id)
@@ -1012,7 +1049,7 @@ def create_app(
     async def post_ask(body: AskRequest, request: Request):
         if (r := not_ready(request, body.drawing_id)) is not None:
             return r
-        await warm(request, body.drawing_id)
+        await warm_scope(request, body)
         if (r := _scope_refused(svc(request), request, body.drawing_id, body.scope)) is not None:
             return r
         meters = {"answer": Meter(), "check": Meter()}
@@ -1028,7 +1065,7 @@ def create_app(
     async def post_chat(body: ChatRequest, request: Request):
         if (r := not_ready(request, body.drawing_id)) is not None:
             return r
-        await warm(request, body.drawing_id)
+        await warm_scope(request, body)
         s = svc(request)
         if s.registry.get(body.drawing_id) is None:
             return _err("unknown_drawing", f"Unknown drawing '{body.drawing_id}'", 404)
@@ -1038,7 +1075,12 @@ def create_app(
             conv = s.store.conversation(body.conversation_id) if s.store else None
             if conv is not None:
                 await warm(request, conv["drawing_id"])
-            if conv is not None and not _same_project(s, conv["drawing_id"], body.drawing_id):
+            # An accepted project scope is a group this caller may ask across (stored, or verified
+            # sheet by sheet), so the conversation may move between its sheets.
+            in_scope = (getattr(body.scope, "kind", None) == "project" and conv is not None
+                        and conv["drawing_id"] in {body.drawing_id, *body.scope.drawing_ids})
+            if conv is not None and not in_scope and not _same_project(
+                    s, conv["drawing_id"], body.drawing_id):
                 return _err("bad_request", "That conversation belongs to another drawing.", 400)
         gen = chat_events(s, body, caller_of(request), settings.turn_deadline_s,
                           _building_run(s, request, body.drawing_id, body.message, body))

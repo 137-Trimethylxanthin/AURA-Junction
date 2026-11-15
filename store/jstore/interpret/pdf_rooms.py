@@ -20,6 +20,8 @@ Per page
                 choices are tried and the one that best reproduces the printed areas of the page is taken.  The result is
                 used only when at least half of the page's printed areas are reproduced within 10 %; a page
                 without printed areas gets no free-space outlines.
+            (c) for tags still without one, the image path on the page render (image_outlines): the outline a
+                scan's room gets, in page points; dropped when it contradicts the tag's printed area.
   scale     the frame of the page, else the page's trusted scale, else the scale (of those printed on the page, or
             free) that makes outline areas equal the printed areas.
   claims    net_area_m2 'printed' (square feet converted, the original kept in attrs) and 'measured_outline'.
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import collections
 import math
+import os
 import re
 import time
 
@@ -138,6 +141,9 @@ def text_items(words: list[dict]) -> list[dict]:
         o["kind"], o["val"] = text_kind(o["text"])
         o["cx"], o["cy"], o["h"] = (o["x0"] + o["x1"]) / 2, (o["y0"] + o["y1"]) / 2, max(o["y1"] - o["y0"], 1e-3)
     return out
+
+
+GENERIC_LABELS = {"room", "rooms", "area", "space", "name", "room name"}
 
 
 def room_tags(items: list[dict]) -> list[dict]:
@@ -435,6 +441,100 @@ def scale_from_printed(pairs: list[tuple], listed: list[float]) -> tuple[float |
     return None, "none"
 
 
+# ------------------------------------------------------------------ (c) outlines read on the page render
+IMAGE_MAX_ROOMS = 40              # tags outlined on the render, per page
+IMAGE_M2 = (1.0, 120.0)           # the outline of a tag without a printed area outside this is not taken as a room
+IMAGE_CONF = dict(agrees_with_printed=0.8, plain=0.6, flagged=0.45)
+
+
+def image_budget() -> float:
+    """Seconds the outlines on the page renders may take per file; 0 switches them off (JSTORE_PDF_ROOM_OUTLINE=0,
+    or no Gemini key).  Never close to the pipeline's alarm for the drawing."""
+    if os.environ.get("JSTORE_PDF_ROOM_OUTLINE", "1").strip().lower() in ("0", "off") or not os.environ.get("GEMINI_API_KEY"):
+        return 0.0
+    from .raster_rooms import _outline_budget
+    return max(0.0, _outline_budget())
+
+
+def image_todo(tags: list[dict], k: float | None) -> list[int]:
+    """Tags without an outline that the render is asked about: every tag with a printed area; a name with a number
+    or a known room name only on a page with a scale (their outline can then be checked for a plausible size)."""
+    return [i for i, t in enumerate(tags) if t["poly"] is None and
+            (t["strong"] or (k and t["label"] and (t["known"] or t["num"] is not None)))][:IMAGE_MAX_ROOMS]
+
+
+def image_outlines(page: dict, tags: list[dict], info: dict, k: float | None, listed: list[float], budget_s: float,
+                   outline=None) -> float | None:
+    """The image path on a vector page: the page render is an image, so every tag without an outline is outlined on
+    it as a scan's rooms are (room_outline: polygon from Gemini on a cut-out around the label, snapped to the drawn
+    lines).  Polygons come back in page points.  Without a scale the printed areas choose one of the scales printed
+    on the page (or agree on one); the outline of a tag whose printed area it contradicts is dropped.
+    -> the scale (metres per point) after this step.  `outline` replaces room_outline.outline_rooms in tests."""
+    todo = image_todo(tags, k)
+    s = (page.get("to_image") or [0])[0]
+    if not todo or not s or not page.get("image") or budget_s < 10:
+        return k
+    from PIL import Image
+    from ..pipeline import store_dir
+    from . import room_outline as RO
+    path = store_dir() / page["image"]
+    if outline is None and not path.exists():
+        return k
+    # the scale that sizes the cut-outs: the page's, else the largest plan scale printed on it, else a sheet of 40 m
+    plan_scales = [x for x in listed if 20 <= x / PT_M <= SITE_PLAN]
+    k_view = k or (min(plan_scales) if plan_scales else 40.0 / max(page["width"], page["height"]))
+    asks = [dict(label=tags[i]["label"], number=tags[i]["number"], label_box=[v * s for v in tags[i]["bbox"]], hint=None)
+            for i in todo]
+    log: dict = {}
+    if outline is None:
+        Image.MAX_IMAGE_PIXELS = None
+        res = RO.outline_rooms(Image.open(path), asks, k_view / s, budget_s, log)
+    else:
+        res = outline(asks, k_view / s)
+    got = {}
+    for i, o in zip(todo, res):
+        pg = RO.shape(o["polygon"]) if o.get("polygon") is not None else None
+        if pg is None or pg.area / (s * s) > 0.5 * page["width"] * page["height"]:
+            tags[i]["rejected"] = "no outline on the page render: " + str(o.get("reason") or "polygon covers the sheet")
+            continue
+        got[i] = (Polygon([(x / s, y / s) for x, y in pg.exterior.coords]), o)
+    kp, how = scale_from_printed([(tags[i]["area"]["val"][0], got[i][0].area) for i in got if tags[i]["area"]],
+                                 listed if k is None else [])
+    if kp and k is None:
+        k, info["scale"] = kp, how.replace("outline areas", "outline areas on the render")
+    elif kp and abs(kp / k - 1) > 0.06:   # a print that is not at its stated scale: the printed areas agree on another
+        info["scale"] = f"printed areas over outline areas on the render; they contradict the {info.get('scale')} (a reduced print?)"
+        info["scale_replaced"] = round(k, 6)
+        k = kp
+    kept = agree = 0
+    for i, (pg, o) in got.items():
+        t = tags[i]
+        flagged = bool(o.get("others_inside") or o.get("touches_crop_border") or o.get("overlap", 0) > 0.05
+                       or not o.get("label_inside", True) or o.get("support", 1) < 0.5)
+        conf = IMAGE_CONF["flagged" if flagged else "plain"]
+        if k:
+            a = pg.area * k * k
+            if t["area"]:
+                ratio = a / t["area"]["val"][0]
+                if not 0.6 <= ratio <= 1.6:
+                    t["rejected"] = "outline on the page render of another size than printed"
+                    continue
+                if abs(ratio - 1) < 0.1:
+                    conf, agree = IMAGE_CONF["agrees_with_printed"], agree + 1
+                else:
+                    conf = IMAGE_CONF["flagged"]
+            elif not IMAGE_M2[0] <= a <= IMAGE_M2[1] or (not t["strong"] and flagged):
+                t["rejected"] = "outline on the page render is not confirmed as this room"
+                continue
+        t.update(poly=pg, area_pt=pg.area, how="image_outline", family=False, conf=conf)
+        t.pop("rejected", None)
+        kept += 1
+    info["image_outline"] = dict(asked=len(todo), polygons=len(got), kept=kept, within_10pct_of_printed=agree,
+                                 calls=log.get("calls"), cached=log.get("cached"), seconds=log.get("seconds"),
+                                 budget_ended=log.get("budget_ended"), errors=log.get("errors"))
+    return k
+
+
 # ------------------------------------------------------------------ one page
 def read_page(db: DB, fid: str, page: dict, tags: list[dict]) -> dict:
     no = page["page_no"]
@@ -537,7 +637,8 @@ def interpret(db: DB, f: dict) -> dict:
     if db.one("select exists (select from jstore.entity where drawing_key = :d and kind = 'room') as x",
               d=f["drawing_key"])["x"]:
         return nothing("the drawing already has rooms")
-    pages = db.run("select page_no, width, height, unit, meta from jstore.page where file_id = :f order by page_no", f=fid)
+    pages = db.run("""select page_no, width, height, unit, meta, image, to_image from jstore.page
+                      where file_id = :f order by page_no""", f=fid)
     words = db.run("""select id, page_no, text, x0, y0, x1, y1, font, size, line_no, rot from jstore.pdf_text
                       where file_id = :f order by page_no, seq""", f=fid)
     if not words:
@@ -546,6 +647,7 @@ def interpret(db: DB, f: dict) -> dict:
     for w in words:
         by_page[w["page_no"]].append(w)
     recs, infos, skipped = [], [], []
+    img_budget, t_img = image_budget(), time.time()
     for page in pages[:MAX_PAGES]:
         no = page["page_no"]
         tags = room_tags(text_items(by_page.get(no, [])))
@@ -558,6 +660,11 @@ def interpret(db: DB, f: dict) -> dict:
         info = read_page(db, fid, page, tags)
         infos.append(info)
         k = info["k"]
+        if not info.get("site_plan") and img_budget - (time.time() - t_img) >= 10:
+            t1 = time.time()
+            k = info["k"] = image_outlines(page, tags, info, k, page_scale(db, fid, page)[2],
+                                           img_budget - (time.time() - t_img))
+            t0 += time.time() - t1                       # the text and vector budget does not pay for the model
         frame = db.one("select m from jstore.frame where file_id = :f and page_no = :p", f=fid, p=no)
         if frame and k and abs(math.sqrt(abs(frame["m"][0] * frame["m"][4] - frame["m"][1] * frame["m"][3])) / k - 1) < 0.02:
             m, placed = list(frame["m"]), "frame"
@@ -568,12 +675,24 @@ def interpret(db: DB, f: dict) -> dict:
         if info.get("site_plan"):
             info["rooms"] = 0
             continue
+        if placed != "frame" and m and any(t.get("how") == "image_outline" for t in tags):
+            # record how page points map to metres, so the outlines read on the render can be placed on the page again
+            # (a frame that only restated a scale text the printed areas contradict is replaced)
+            db.run("""insert into jstore.frame (file_id, page_no, m, method) values (:f, :p, cast(:m as double precision[]),
+                      'scale_text') on conflict (file_id, page_no) do update set m = excluded.m
+                      where jstore.frame.method = 'scale_text'""",
+                   f=fid, p=no, m="{" + ",".join(repr(float(v)) for v in m) + "}")
+            info["frame_written"] = True
         company = sum(t["poly"] is not None and (t["strong"] or t["num"] is not None) for t in tags)
         kept = 0
         for t in tags:
             # weak tags need an outline drawn with the room pen; a lone name also needs company on the page
             if not t["strong"] and (t["poly"] is None or (t.get("how") == "closed_path" and not t.get("family"))
                                     or (t["num"] is None and not company)):
+                continue
+            # a bare column heading ("Room" above an area in a schedule): no number, no outline, no outlined room near
+            if t["poly"] is None and t["num"] is None and not company \
+                    and (t["label"] or "").strip().lower() in GENERIC_LABELS:
                 continue
             src, claims = [], []
             attrs = dict(indoor=is_indoor(t["label"]), reader="pdf_rooms", page_no=no)
@@ -599,6 +718,8 @@ def interpret(db: DB, f: dict) -> dict:
                 attrs["outline"] = t["how"]
                 if k:
                     claims.append(("net_area_m2", round(area_pt * k * k, 3), None, "m2", "measured_outline", 0, conf))
+                    if t["how"] == "image_outline":
+                        claims.append(("perimeter_m", round(pg.length * k, 2), None, "m", "measured_outline", 0, conf))
             elif t.get("rejected"):
                 attrs["outline_rejected"] = t["rejected"]
             if t["num"]:
@@ -640,7 +761,9 @@ def interpret(db: DB, f: dict) -> dict:
                 seconds=round(time.time() - t0, 1),
                 rule="room tag = stacked text lines (name, identifier, printed area in m2 or square feet); outline = "
                      "the smallest closed path around the tag that holds no other tag, else the free space around "
-                     "the tag between linework, cut at openings of door width; the same number (or name and printed "
+                     "the tag between linework, cut at openings of door width, else a polygon read on the page render "
+                     "(image_outline: Gemini on a cut-out around the tag, snapped to drawn lines, checked against "
+                     "the printed area); the same number (or name and printed "
                      "area) on a later page is a duplicate")
     if not recs:
         why = ("no page has a room tag (a room name with a number or printed area, or a number like 2.01)"

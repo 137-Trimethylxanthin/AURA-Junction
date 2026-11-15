@@ -125,4 +125,18 @@ def test_store_md_matches_the_database(seeded: dict) -> None:
         assert prompt.documented(text) <= set(live), f"documented but missing: {prompt.documented(text) - set(live)}"
         assert text == prompt.render(db), "STORE.md is stale: run python -m jstore.service.prompt"
     assert {"rooms", "doors", "facts", "sources", "cad_entities", "texts", "elements"} <= prompt.documented(text)
-    assert len(text.encode()) < 7000
+    assert len(text.encode()) < 8200
+
+
+def test_an_image_plan_whose_rooms_cover_a_corner_of_the_detections_is_a_fragment():
+    from jstore.service.aura_model import is_fragment
+    room = lambda x, y, w, h: {"points": [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]}  # noqa: E731
+    box = lambda x, y: {"box": {"x": x, "y": y, "w": 2, "h": 2}}  # noqa: E731
+    spread = [box(10, 10), box(80, 12), box(15, 85), box(85, 80), box(50, 50)]
+    assert is_fragment([room(40, 40, 15, 15)], spread)                       # three rooms in the middle of a flat
+    assert not is_fragment([room(8, 8, 40, 80), room(50, 8, 40, 80)], spread)  # the rooms span the detections
+    assert not is_fragment([room(40, 40, 15, 15)], spread[:3])               # too few detections to judge
+    assert not is_fragment([], spread)
+    # two rooms far apart with nothing read between them: not a plan either
+    assert is_fragment([room(5, 5, 10, 10), room(70, 70, 12, 12)], [])
+    assert not is_fragment([room(5, 5, 40, 40), room(46, 5, 40, 40)], [])    # two rooms side by side fill their span

@@ -24,7 +24,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { t } from '@/i18n/strings'
 import { useUi } from '@/i18n/uiLang'
 import { isBoxRejected, isRoomIncluded } from '@/lib/answer'
-import { fmtArea } from '@/lib/format'
+import { fmtRoomArea } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { myProjects } from '@/api/library'
 import { readActiveProject, resolveProjectForDrawing } from '@/features/plan/badges'
@@ -32,7 +32,7 @@ import { actions, selectIsPending, useActiveTurn, useAppStore } from '@/store'
 import { buildBuilding, type BuildingModel, type FloorEvidence, type FloorInput, type StackMode } from './buildingModel'
 import { Engine, type CameraPreset } from './engine'
 import { buildImageModel, type ImageMode, type ImageModel } from './imageModel'
-import { DEFAULT_WALL_H, buildPlanModel, type PlanModel } from './planModel'
+import { DEFAULT_WALL_H, buildPlanModel, initialWallHeight, type PlanModel } from './planModel'
 import { isRebuiltPlanSvg, parsePlanSvg } from './svgPlan'
 import './viewer3d.css'
 
@@ -248,7 +248,9 @@ export default function Viewer3D() {
           m.setRelief(relief / 100)
           m.setMode(mode)
         }
-        engine.show(model as PlanModel | ImageModel, wallH, true)
+        const startH = isImage ? wallH : initialWallHeight(drawing, model.size)
+        if (!isImage) setWallH(startH)
+        engine.show(model as PlanModel | ImageModel, startH, true)
         setPreset('persp')
         setStatus({ state: 'ready', model: isImage ? 'image' : 'plan' })
       } catch (e) {
@@ -724,7 +726,7 @@ export default function Viewer3D() {
               <XIcon />
             </Button>
           </div>
-          {room.area_m2 != null ? <p className="num mt-2 text-2xl font-semibold tracking-tight">{fmtArea(room.area_m2, lang)} m²</p> : null}
+          {room.area_m2 != null ? <p className="num mt-2 text-2xl font-semibold tracking-tight">{fmtRoomArea(room.area_m2, room.area_source, lang)}</p> : null}
           <Button
             className="mt-3 w-full"
             size="sm"

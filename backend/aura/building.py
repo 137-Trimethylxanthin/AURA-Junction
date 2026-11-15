@@ -30,9 +30,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aura.budget import BudgetError
-from aura.contract import CONTRACT_VERSION, AskRequest, ProjectBundle
+from aura.contract import CONTRACT_VERSION, AskRequest, ProjectBundle, ScopeFloor
 from aura.gemini.client import Meter
 from aura.pipeline import PipelineError, ensure_ready, with_unknown_areas
+from aura.router import WHOLE_MODEL
 
 log = logging.getLogger("aura.building")
 
@@ -81,7 +82,7 @@ _E = r"(?![\w])"
 THIS_FLOOR = re.compile(
     _W + r"(?:this|the\s+current|current|diese[rsmn]?|dieses|aktuelle[rnms]?|cette|cet|ce|le\s+présent|tämä|tässä|tällä|nykyi\w+)"
     r"\s+(?:floor|sheet|plan|level|storey|story|drawing|geschoss|etage|stockwerk|grundriss|blatt|"
-    r"[ée]tage|niveau|feuille|kerros\w*|piirustu\w*|taso\w*)" + _E,
+    r"[ée]tage|niveau|feuille|kerro[sk]\w*|pohjapiirro\w*|piirustu\w*|taso\w*)" + _E,
     re.IGNORECASE,
 )
 
@@ -290,6 +291,24 @@ def _num(v: float) -> float | int:
     return int(v) if float(v).is_integer() else _round(v)
 
 
+_RANK_Q = re.compile(r"^Which is the (largest|smallest) ")
+
+
+def _rank_winner(oks: list[tuple[Any, dict]]) -> tuple[Any, dict] | None:
+    """Every floor answered 'which room is the largest / smallest' (a note with the winner's area):
+    the floor whose winner is the extreme of the building. None when the answers are anything else."""
+    words = set()
+    for _, r in oks:
+        a, m = r.get("answer") or {}, _RANK_Q.match(str(r.get("canonical_en") or ""))
+        if not m or a.get("kind") != "note" or a.get("unit") != "m2" or not isinstance(a.get("number"), (int, float)):
+            return None
+        words.add(m.group(1))
+    if len(words) != 1:
+        return None
+    pick = max if words == {"largest"} else min
+    return pick(oks, key=lambda t: t[1]["answer"]["number"])
+
+
 def _text_of(a: dict) -> str:
     k = a.get("kind")
     if k == "count":
@@ -442,6 +461,10 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
     elif kinds == {"quantity"} and len(units) == 1:
         answer = {"kind": "quantity", "value": _round(sum(r["answer"]["value"] for _, _, r in oks)),
                   "unit": units.pop()}
+    elif (best := _rank_winner([(sh, r) for _, sh, r in oks])) is not None:
+        # "the largest room" over a building: the one winner of all floors, not a sentence per floor
+        sh, r = best
+        answer = {**r["answer"], "value": f"{sh.label}: {r['answer']['value']}"}
     else:
         answer = {"kind": "note",
                   "value": "\n".join(f"{sh.label}: {_text_of(r['answer'])}" for _, sh, r in sorted(oks, key=lambda t: t[0]))}
@@ -492,6 +515,17 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
         "route": "agent" if "agent" in routes else (template.get("route") or "template"),
         "breakdown": breakdown,
     }
+    if not oks:
+        # every sheet abstained: the reason of the sheet asked from (else the first that gave one) is the reason shown
+        whys = [(sh.id, r["explanation"]) for _, sh, r in others if isinstance(r, dict) and r.get("explanation")]
+        if whys:
+            body["explanation"] = next((w for i, w in whys if i == plan.active), whys[0][1])
+    elif answer["kind"] == "count" and answer["value"] == 0 and not failed:
+        # a model file with none of these elements on any floor: the real zero keeps its reason
+        whys = [r.get("explanation") or "" for _, _, r in oks]
+        if whys and all("of the model file contains no" in w for w in whys):
+            body["explanation"] = whys[0].replace("this storey of the model file", "the model file").rstrip(".") + (
+                f" on these {len(oks)} floors." if len(oks) > 1 else ".")
     return with_unknown_areas(body)
 
 
@@ -716,6 +750,23 @@ def _purge_late_sheet(svc: Any, drawing_id: str) -> None:
         writer.submit("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))
 
 
+def _name_rooms(svc: Any, sheet_id: str, resp: dict) -> None:
+    """Evidence rooms of a floor carry their name and number: the viewer holds only the open floor's rooms and
+    would otherwise show the rooms of the other floors by their id (an IFC GlobalId)."""
+    try:
+        d = svc.registry.get(sheet_id)
+        known = {r.get("room_id"): r for r in (d.drawing.get("rooms") or [])} if d is not None else {}
+    except Exception:  # names are a nicety: never a reason to lose the answer
+        return
+    for r in (resp.get("evidence") or {}).get("rooms") or []:
+        room = known.get(r.get("room_id"))
+        if room:
+            if room.get("name") and not r.get("name"):
+                r["name"] = str(room["name"])[:120]
+            if room.get("num") and not r.get("num"):
+                r["num"] = str(room["num"])[:40]
+
+
 def _tag_sheet_evidence(resp: dict, sheet_id: str) -> None:
     """Ensure every evidence item from a non-active sheet carries its `drawing_id`."""
     ev = resp.get("evidence")
@@ -840,6 +891,14 @@ def wrap_project_scope_run(
 
 def _sub_request(req: AskRequest, sheet: Sheet, plan: Plan) -> AskRequest:
     scope = req.scope if req.scope is not None and req.scope.kind != "project" else None
+    if len(plan.sheets) > 1 and (
+        (scope is None and WHOLE_MODEL.search(req.question))
+        or (scope is not None and scope.kind == "model")
+    ):
+        # "in the whole building" is what the plan already does by asking every sheet: each sheet
+        # answers for its own storey, or an IFC storey would answer for the whole model and the
+        # combined total would count the model once per sheet.
+        scope = ScopeFloor()
     own = sheet.id == req.drawing_id
     return AskRequest(drawing_id=sheet.id, question=req.question, scope=scope,
                       overrides=req.overrides if own else None, lang_hint=req.lang_hint)
@@ -889,6 +948,7 @@ async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = Non
                     resp = copy.deepcopy(data["response"])
                     if only.id != req.drawing_id:
                         _tag_sheet_evidence(resp, only.id)
+                        _name_rooms(svc, only.id, resp)
                     trace = list(resp.get("trace") or [])
                     resp["trace"] = [*trace[:1], scope_node | {"parent": (trace[0]["id"] if trace else "q")}, *trace[1:]]
                     if svc is not None and getattr(svc, "writer", None) is not None and _answers_has_sheet_ids(svc):
@@ -923,7 +983,9 @@ async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = Non
                 async for ev, data in base_run(capped_svc, sub, caller, context, history,
                                                sheet_meters, deadline_s, agent_deadline_s):
                     if ev == "answer":
-                        return dict(data["response"])
+                        got = copy.deepcopy(data["response"])
+                        _name_rooms(svc, sheet.id, got)
+                        return got
             raise RuntimeError("the pipeline ended without an answer")
 
         raw = await asyncio.gather(*(one(s) for s in plan.sheets), return_exceptions=True)
