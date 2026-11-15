@@ -302,9 +302,11 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
         n_bare = sum(1 for r in tr.rooms if r.included and r.room_id in bare and not getattr(r, "drawing_id", None))
         if subject == "room" and n_bare and scope.get("kind", "floor") == "floor":
             # spaces the sheet prints no label for are rooms too: the count says how many of each
-            unlabelled_note = (f"{value} {noun(subject, value)} ({value - n_bare} labelled, {n_bare} without a label). "
-                               "Each room is lit on the plan for you to check.")
-            answer_body = unlabelled_note
+            answer_body = (f"{value} {noun(subject, value)} ({value - n_bare} labelled, {n_bare} without a label). "
+                           "Each room is lit on the plan for you to check.")
+            # the sentence people read, in the language they asked in (the trace stays English)
+            said = UNLABELLED_NOTE.get(contract_lang(lang)) if value > 1 else None
+            unlabelled_note = said.format(n=value, a=value - n_bare, b=n_bare) if said else answer_body
         if subject == "apartment":
             canonical = ("How many apartments are on this floor plan" if scope.get("kind") == "floor"
                          else f"How many apartments are {where_en(scope)}")
@@ -457,6 +459,13 @@ def quantity(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: 
         body["gold"] = gold
     return Built(body, [tr], ids if is_agent else [], tr.subject)
 
+
+#: "10 rooms (8 labelled, 2 without a label)" in the other interface languages
+UNLABELLED_NOTE = {
+    "de": "{n} Räume ({a} beschriftet, {b} ohne Beschriftung). Jeder Raum ist im Plan markiert, zum Nachprüfen.",
+    "fr": "{n} pièces ({a} avec libellé, {b} sans libellé). Chaque pièce est mise en évidence sur le plan pour vérification.",
+    "fi": "{n} huonetta ({a} nimettyä, {b} ilman nimeä). Jokainen huone on korostettu pohjapiirroksessa tarkistusta varten.",
+}
 
 #: an id the store gives a room or thing that carries no number on the sheet ("e143313"): never shown to people
 INTERNAL_ID = re.compile(r"e\d{3,}")
