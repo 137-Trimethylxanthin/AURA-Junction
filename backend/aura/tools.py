@@ -698,6 +698,14 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
     if (bad := _model_scope_unsupported(d, "count_objects", args)) is not None:
         return bad
     t0 = time.perf_counter()
+    if (not d.engine.supports(subject) and d.drawing.get("kind") == "ifc" and subject in ("door", "window")
+            and scope.get("kind") in ("floor", "model")):
+        # A model file lists its elements: when it has none of this class, the count is 0, not unknown.
+        where = "this storey of the model file" if scope.get("kind") == "floor" else "the model file"
+        return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                          kind="count", subject=subject, value=0.0, numbers=[0.0], ms=_ms(t0),
+                          summary=f"0 {noun(subject, 2)}: {where} contains no {subject} elements.",
+                          meta={"none_in_model": True})
     if not d.engine.supports(subject):
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects",
                           args=args, kind="none", subject=subject, supported=False,
@@ -721,6 +729,7 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
     parts: list[str] = []
     missing: list[str] = []
     counted = 0
+    none_in_model = True
     for fid in ids:
         fd = d if fid == d.id else (d.registry.get(fid) if d.registry is not None else None)
         if fd is None:
@@ -731,6 +740,7 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
             missing.append(fd.drawing.get("floor_label") or fd.drawing.get("title") or fid)
             continue
         counted += 1
+        none_in_model &= bool(tr.meta.get("none_in_model"))
         n = int(tr.value)
         total += n
         tag = fid.split("--", 1)[-1] if "--" in fid else fid
@@ -744,10 +754,14 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
     summary = f"{total} {noun(subject, total)} across {counted} floors ({'; '.join(parts)})."
     if missing:
         summary += f" Not counted: {', '.join(missing)}."
+    if none_in_model and total == 0:
+        summary = (f"0 {noun(subject, 2)}: the model file contains no {subject} elements on "
+                   f"{'these ' + str(counted) + ' floors' if counted > 1 else 'this floor'}.")
     return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
                       kind="count", subject=subject, value=float(total), numbers=[float(total)],
                       boxes=boxes, rooms=rooms, summary=summary, ms=_ms(t0),
-                      meta={"floors_counted": counted, "floors_missing": missing})
+                      meta={"floors_counted": counted, "floors_missing": missing}
+                           | ({"none_in_model": True} if none_in_model and total == 0 else {}))
 
 
 def _box_on_sibling_floors(d: LoadedDrawing, subject: str, raw: dict) -> dict:
@@ -816,11 +830,60 @@ def room_areas(d: LoadedDrawing, scope: dict | None = None,
     args: dict[str, Any] = {"scope": scope}
     if overrides:
         args["overrides"] = overrides
+    if scope.get("kind") == "project":
+        return _areas_across_floors(d, scope, overrides, tool, args)
     if (bad := _model_scope_unsupported(d, tool, args)) is not None:
         return bad
     t0 = time.perf_counter()
     raw = d.engine.answer("area", scope, overrides)
     return _to_result(d, tool, args, raw, _ms(t0), "area", None)
+
+
+def _areas_across_floors(d: LoadedDrawing, scope: dict, overrides: list[dict] | None, tool: str,
+                         args: dict) -> ToolResult:
+    """The net floor area over the floors of a building or group ("All N floors"): each floor drawing in the scope
+    is summed on its own (the same rule as on one floor), the sums are added, and every room is tagged with its
+    floor. A floor that cannot be loaded or has no room areas is named in the summary and left out of the sum."""
+    t0 = time.perf_counter()
+    ids = list(dict.fromkeys(i for i in scope.get("drawing_ids") or [] if isinstance(i, str))) or [d.id]
+    total, summed = 0.0, 0
+    rooms: list[EvidenceRoom] = []
+    parts: list[str] = []
+    missing: list[str] = []
+    methods: list[str] = []
+    approx = False
+    rank = {"cad_geometry": 0, "pdf_vector": 1, "ocr": 2, "vision": 3}
+    for fid in ids:
+        fd = d if fid == d.id else (d.registry.get(fid) if d.registry is not None else None)
+        if fd is None:
+            missing.append(fid)
+            continue
+        name = fd.drawing.get("floor_label") or fd.drawing.get("title") or fid
+        tr = (room_areas(fd, {"kind": "floor"}, overrides if fid == d.id else None)
+              if fd.engine.supports("area") else None)
+        if tr is None or not tr.supported or tr.kind == "none" or tr.value is None:
+            missing.append(name)
+            continue
+        summed += 1
+        total += float(tr.value)
+        methods.append(tr.method)
+        estimates = {r.get("room_id") for r in fd.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
+        approx |= any(r.included and r.room_id in estimates for r in tr.rooms)
+        rooms += [r.model_copy(update={"drawing_id": fid}) for r in tr.rooms]
+        parts.append(f"{name}: {float(tr.value):.2f} m²")
+    if summed == 0:
+        return ToolResult(result_id=_rid(d.id, tool, args), tool=tool, args=args, kind="none", supported=False,
+                          meta={"abstain": "not_supported_yet"},
+                          summary="No floor in this scope has rooms with areas.", ms=_ms(t0))
+    total = round(total, 2)
+    summary = f"{total:.2f} m² across {summed} floor{'s' if summed != 1 else ''} ({'; '.join(parts)})."
+    if missing:
+        summary += f" Not included: {', '.join(missing)}."
+    return ToolResult(result_id=_rid(d.id, tool, args), tool=tool, args=args, kind="area", value=total,
+                      numbers=[total], rooms=rooms, summary=summary, ms=_ms(t0),
+                      method=max(methods, key=lambda m: rank.get(m, 3)),
+                      meta={"floors_counted": summed, "floors_missing": missing, "floor_sums": parts}
+                           | ({"approximate": True} if approx else {}))
 
 
 def _label_hits(name: str, printed: list[str]) -> bool:

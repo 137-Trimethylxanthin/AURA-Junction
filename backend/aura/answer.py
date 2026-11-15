@@ -269,6 +269,8 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                        "found, check the boxes." if vision else
                        f"{value} {noun(subject, value)}. Each one is drawn on the plan for you to "
                        "check.")
+        if value == 0 and tr.meta.get("none_in_model"):
+            answer_body = tr.summary  # a model file without elements of this class: a real zero, said as such
         canonical = f"How many {plural} are drawn {where_en(scope)}"
     else:
         all_ids = [room_eid(r.room_id) for r in tr.rooms]
@@ -306,6 +308,8 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
     }
     if gold:
         body["gold"] = gold
+    if value == 0 and tr.meta.get("none_in_model"):
+        body["explanation"] = tr.summary
     return Built(body, [tr], check_ids, subject)
 
 
@@ -325,7 +329,9 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     k = scope.get("kind", "floor")
     # areas measured under an estimated scale (a scan that states none) make the answer approximate
     estimates = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
-    approx = any(r.room_id in estimates and not getattr(r, "edited", False) for r in included)
+    approx = (any(r.room_id in estimates and not getattr(r, "edited", False) for r in included)
+              or bool(tr.meta.get("approximate")))
+    floors = tr.meta.get("floor_sums") or []   # an all-floors sum: one line per floor
     canonical = ("What is the net floor area of all numbered indoor rooms" if k == "floor" else
                  f"What is the total area of rooms labelled {scope['label']}" if k == "label" else
                  f"What is the net floor area inside {scope.get('label')}" if k == "region" else
@@ -354,6 +360,8 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     trace.append(check_placeholder(inc_ids))
     trace.append({"id": "answer", "parent": "q", "title": "Answer", "tag": "sum",
                   "body": (f"{value:.2f} m², shown on the plan." if len(included) == 1 else
+                           f"Sum of {len(included)} net room areas on {len(floors)} floors = {value:.2f} m² "
+                           f"({'; '.join(floors)})." if len(floors) > 1 else
                            f"Sum of {len(included)} net room areas = {value:.2f} m², shown room by room."),
                   "kind": "exact", "evidence_ids": inc_ids})
     gold = None if overrides or k == "region" else gold_for(d, lang, "area", None, scope, value)
