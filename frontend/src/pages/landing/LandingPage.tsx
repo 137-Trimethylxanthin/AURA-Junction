@@ -481,8 +481,8 @@ function ScanHighlight({ facts }: { facts: Fact[] }) {
               ))}
             </ul>
             <p className="text-sm text-pretty opacity-75">
-              {fmtInt(first.n)} {first.n_unit}: {first.scope}. Measured{" "}
-              {fmtDate(first.measured)}. {first.caveat}
+              {first.scope}. Measured {fmtDate(first.measured)}.{" "}
+              {first.caveat}
             </p>
           </div>
         </div>
