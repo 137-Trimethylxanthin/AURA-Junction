@@ -51,3 +51,13 @@ def test_only_spaces_of_the_free_space_analysis_are_judged():
              space(3, box(30, 30, 34, 33), "Garden")]
     assert sg.false_spaces(rooms, ring(0, 0, 4, 3)) == {}
     assert sg.false_spaces([space(2, box(20, 20, 24, 23))], []) == {}      # no walls: nothing can be said
+
+
+def test_a_balcony_that_walls_enclose_is_a_room_inside():
+    # the whole flat read as one space "enclosed by thin lines": typed a balcony, yet walls run all around it
+    flat = space(2, box(0, 0, 6, 4)) | dict(indoor=False)
+    real = space(3, box(0, 4.3, 3, 5.3)) | dict(indoor=False)          # façade below, railings elsewhere
+    rooms = [space(1, box(6.2, 0, 8, 1), "WC"), flat, real]
+    walls = ring(0, 0, 6, 4) + ring(6.2, 0, 8, 1)
+    drop, inside = sg.review(rooms, walls, box(-5, -5, 15, 10))
+    assert list(inside) == [2] and 3 in drop and 2 not in drop

@@ -750,8 +750,9 @@ def interpret(db: DB, f: dict) -> dict:
             pruned = space_guard.prune(db, f["drawing_key"])
         except Exception:  # noqa: BLE001 - the guard never fails an interpretation
             pruned = {}
+    gone = sum(1 for why in pruned.values() if not why.endswith("not a balcony"))
     return dict(walls=out["new"], method=plan_["method"], coverage=plan_["coverage"], rooms_placed=placed,
-                unlabelled_spaces=len(rooms) - labelled - len(pruned), spaces_not_rooms=len(pruned),
+                unlabelled_spaces=len(rooms) - labelled - gone, spaces_not_rooms=gone,
                 nominal_scale=round(mpp, 6) if nominal else None, scale_from=nominal["source"] if nominal else None,
                 seconds=round(time.time() - t0, 1))
 

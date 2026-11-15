@@ -25,6 +25,7 @@ WALL_MIN = 0.6
 WALL_SURE = 0.75
 NAMED_MIN = 0.5
 EDGE_MAX = 0.15
+INSIDE_WALL = 0.9       # a space typed as a balcony ("enclosed by thin lines") whose outline is this much wall is indoors
 
 
 def measures(space, walls, named, page=None) -> dict:
@@ -59,6 +60,26 @@ def why_not_a_room(m: dict) -> str | None:
     return None
 
 
+def review(rooms: list[dict], walls: list, page=None) -> tuple[dict, dict]:
+    """({entity_id: reason} of the spaces that are not rooms, {entity_id: reason} of the spaces typed as outdoor
+    (a balcony) that walls enclose: rooms inside the building).  `rooms` as for false_spaces, with `indoor`."""
+    solid = [w for w in walls if w is not None and not w.is_empty]
+    if not solid:
+        return {}, {}
+    wall = shapely.union_all(solid)
+    drop = false_spaces(rooms, walls, page)
+    inside = {}
+    for r in rooms:
+        if r["entity_id"] in drop or (r.get("label") or "").strip() or r.get("geom") is None \
+                or r.get("by") != "jstore.interpret.raster_plan" or r.get("indoor", True):
+            continue
+        g = r["geom"] if r["geom"].is_valid else r["geom"].buffer(0)
+        share = measures(g, wall, None)["wall"]
+        if share >= INSIDE_WALL:
+            inside[r["entity_id"]] = f"{share:.0%} of its outline is wall: a room inside, not a balcony"
+    return drop, inside
+
+
 def false_spaces(rooms: list[dict], walls: list, page=None) -> dict:
     """{entity_id: reason} of the spaces without a label that are not rooms.  `rooms`: dicts with entity_id, label,
     geom (shapely or None) and by (who made the entity); only spaces made by the free-space analysis are judged, and
@@ -81,13 +102,14 @@ def false_spaces(rooms: list[dict], walls: list, page=None) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ on the store
-def of_drawing(db, key: str) -> dict:
-    """{entity_id: reason} of the active spaces without a label of one drawing that are not rooms (nothing is changed)."""
+def of_drawing(db, key: str) -> tuple[dict, dict]:
+    """review() of one drawing's active rooms, read from the store (nothing is changed)."""
     from shapely import wkb
-    rows = db.run("""select entity_id, label, attrs->>'by' as by, encode(st_asbinary(geom), 'hex') as g from jstore.entity
+    rows = db.run("""select entity_id, label, attrs->>'by' as by, coalesce((attrs->>'indoor')::boolean, true) as indoor,
+                            encode(st_asbinary(geom), 'hex') as g from jstore.entity
                      where drawing_key = :k and kind = 'room' and status = 'active'""", k=key)
     if not any(r["by"] == "jstore.interpret.raster_plan" and not (r["label"] or "").strip() for r in rows):
-        return {}
+        return {}, {}
     walls = [wkb.loads(w["g"], hex=True) for w in db.run(
         """select encode(st_asbinary(geom), 'hex') as g from jstore.entity
            where drawing_key = :k and kind = 'wall' and status = 'active' and geom is not null""", k=key)]
@@ -99,26 +121,36 @@ def of_drawing(db, key: str) -> dict:
         m, w, h = pages[0]["m"], pages[0]["w"], pages[0]["h"]
         page = shapely.Polygon([(m[0] * x + m[1] * y + m[2], m[3] * x + m[4] * y + m[5])
                                 for x, y in ((0, 0), (w, 0), (w, h), (0, h))])
-    rooms = [dict(entity_id=r["entity_id"], label=r["label"], by=r["by"],
+    rooms = [dict(entity_id=r["entity_id"], label=r["label"], by=r["by"], indoor=r["indoor"],
                   geom=wkb.loads(r["g"], hex=True) if r["g"] else None) for r in rows]
-    return false_spaces(rooms, walls, page)
+    return review(rooms, walls, page)
 
 
 def prune(db, key: str, dry_run: bool = False) -> dict:
     """Takes the false spaces of a drawing out of the store's views (status 'superseded', the reason in
-    attrs.not_a_room), so counts, lists, plan and 3D agree.  Undone by restore()."""
-    bad = of_drawing(db, key)
+    attrs.not_a_room) and makes the wall-enclosed "balconies" indoor rooms (attrs.retyped_from keeps the old type),
+    so counts, lists, plan and 3D agree.  -> {entity_id: reason} of both.  Undone by restore()."""
+    drop, inside = of_drawing(db, key)
     if not dry_run:
-        for eid, why in bad.items():
+        for eid, why in drop.items():
             db.run("""update jstore.entity set status = 'superseded',
                              attrs = attrs || jsonb_build_object('not_a_room', cast(:w as text))
                       where entity_id = :e and status = 'active'""", e=eid, w=why)
-    return bad
+        for eid, why in inside.items():
+            db.run("""update jstore.entity set label_norm = 'room',
+                             attrs = attrs || jsonb_build_object('indoor', true, 'retyped_from', label_norm,
+                                                                 'retyped_why', cast(:w as text))
+                      where entity_id = :e and not (attrs ? 'retyped_from')""", e=eid, w=why)
+    return drop | inside
 
 
 def restore(db, key: str | None = None) -> int:
-    """The spaces prune() took out, back in the views."""
+    """What prune() changed, back as it was."""
     rows = db.run("""update jstore.entity set status = 'active', attrs = attrs - 'not_a_room'
                      where status = 'superseded' and attrs ? 'not_a_room'
                        and (cast(:k as text) is null or drawing_key = :k) returning entity_id""", k=key)
-    return len(rows)
+    back = db.run("""update jstore.entity set label_norm = attrs->>'retyped_from',
+                            attrs = (attrs - 'retyped_from' - 'retyped_why') || jsonb_build_object('indoor', false)
+                     where attrs ? 'retyped_from'
+                       and (cast(:k as text) is null or drawing_key = :k) returning entity_id""", k=key)
+    return len(rows) + len(back)

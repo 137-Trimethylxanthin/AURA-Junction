@@ -554,10 +554,11 @@ def load(db: DB, key: str) -> dict | None:
         # enclosed spaces without a label that are not rooms (a strip beside a dimension line, the gap to a page
         # border): left out here, so the document, the plan and the 3D view agree whether or not the store was pruned
         try:
-            false = space_guard.of_drawing(db, key)
+            false, inside = space_guard.of_drawing(db, key)
         except Exception:  # noqa: BLE001 - the guard never costs a drawing
-            false = {}
-        d["rooms"] = [r for r in d["rooms"] if r["entity_id"] not in false]
+            false, inside = {}, {}
+        d["rooms"] = [dict(r) | (dict(room_type="room", is_indoor=True) if r["entity_id"] in inside else {})
+                      for r in d["rooms"] if r["entity_id"] not in false]
     d["items"] = db.run("""select entity_id, storey, kind, ifc_class, tag, label, room, apartment, width_m, height_m, n_sources,
                                   is_duplicate, duplicate_of, geom from q.items order by kind, entity_id""")
     # printed dimensions: not drawn or counted with the items, but an answer may cite them (boxes of its evidence)
