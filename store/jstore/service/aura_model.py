@@ -195,6 +195,21 @@ class Base:
         return mul((100.0 / self.w, 0, 0, 0, 100.0 / self.h, 0), self.to_image)
 
 
+def is_fragment(rooms: list[dict], items: list[dict], share: float = 0.4, min_items: int = 4) -> bool:
+    """The rooms read on an image plan cover only a corner of what was detected on it: the doors, windows and
+    fixtures spread over an area much larger than the rooms do (few labels were read).  A plan drawn from such
+    a model would show a fragment of the building, so the scan itself stays the picture."""
+    rx = [x for r in rooms for x, _ in (r.get("points") or [])]
+    ry = [y for r in rooms for _, y in (r.get("points") or [])]
+    boxes = [i["box"] for i in items if isinstance(i.get("box"), dict)]
+    if not rx or len(boxes) < min_items:
+        return False
+    ax = rx + [b["x"] for b in boxes] + [b["x"] + b["w"] for b in boxes]
+    ay = ry + [b["y"] for b in boxes] + [b["y"] + b["h"] for b in boxes]
+    whole = (max(ax) - min(ax)) * (max(ay) - min(ay))
+    return whole > 0 and (max(rx) - min(rx)) * (max(ry) - min(ry)) < share * whole
+
+
 @dataclass
 class Model:
     key: str
@@ -226,7 +241,8 @@ class Model:
         """An image plan with a vector model of its own (walls or room polygons): plan.svg is drawn from it."""
         b = self.base
         return (b is not None and self.linework is None and b.format in ("png", "jpg") and b.image is not None
-                and (bool(self.walls) or any(len(r["points"]) >= 3 for r in self.rooms)))
+                and (bool(self.walls) or any(len(r["points"]) >= 3 for r in self.rooms))
+                and not is_fragment(self.rooms, self.items))
 
     def on_page(self, file_id: str, page_no: int, box: list[float] | None) -> dict | None:
         """A box in the coordinates of one of the drawing's files as a rectangle in percent of the page shown:
