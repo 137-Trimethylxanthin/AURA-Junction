@@ -103,7 +103,11 @@ cd frontend && npm run e2e:live   # against a running scripts/dev.sh; set AURA_E
 
 ## What's left / known limits
 
-- Window undercount by the store's symbol detector on CubiCasa scans (see above).
+- Window undercount by the store's symbol detector on CubiCasa scans (see above). An experiment is on branch
+  `simon/experiment-window-sections` (not merged): the cause is that the dataset counts each section of a window
+  run (split by a cross frame) as a window, while the prompt said "one window per run". Counting sections took
+  exact matches from 13 to 18 of 35 plans, but mean error barely moved (1.66 → 1.60), a held-out set got worse,
+  and heavily segmented walls now overshoot (14 → 29). It includes `store/scripts/eval_windows.py` to measure it.
 - An uploaded multi-storey IFC is loaded as one storey-less drawing (`parse_worker.parse_ifc`, `storey=None`),
   so per-storey questions ("doors on '1.korrus'") abstain; the library's per-storey IFC drawings are fine.
 
