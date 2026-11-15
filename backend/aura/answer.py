@@ -505,8 +505,15 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
     win, ru = m["winner"], m.get("runner_up")
     word = "largest" if m["order"] == "max" else "smallest"
     what = m.get("concept") or "room"
-    value = (f"{win['name'] or 'Room'} ({win['id']}) is the {word} {what}: {win['area_m2']:.2f} m²"
-             + (f"; next is {ru['name'] or 'room'} ({ru['id']}) at {ru['area_m2']:.2f} m²" if ru else "")
+    # areas measured under an estimated scale (a scan that states none) are approximate: no decimals they do not have
+    estimates = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
+    approx = win["id"] in estimates
+
+    def _a(room: dict) -> str:
+        return f"≈ {round(room['area_m2'])} m² (estimate)" if room["id"] in estimates else f"{room['area_m2']:.2f} m²"
+
+    value = (f"{win['name'] or 'Room'} ({win['id']}) is the {word} {what}: {_a(win)}"
+             + (f"; next is {ru['name'] or 'room'} ({ru['id']}) at {_a(ru)}" if ru else "")
              + (" (tied)" if m.get("tie") else "") + ".")
     all_ids = [room_eid(r.room_id) for r in tr.rooms]
     win_ids = [room_eid(win["id"])]
@@ -539,7 +546,8 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
                    evidence_ids=win_ids),
     ]
     body = _base(question, lang, scope) | {
-        "answer": {"kind": "note", "value": value, "number": round(float(win["area_m2"]), 2), "unit": "m2"},
+        "answer": {"kind": "note", "value": value, "number": round(float(win["area_m2"]), 2), "unit": "m2"}
+                  | ({"approximate": True} if approx else {}),
         "evidence": {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]},
         "canonical_en": f"Which is the {word} {what} {where_en(scope)}",
         "method": "cad_geometry",

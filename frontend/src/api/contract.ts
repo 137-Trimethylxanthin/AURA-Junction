@@ -478,6 +478,8 @@ export interface AnswerNote {
   value: string
   number?: number
   unit?: string
+  /** The number is measured under an estimated scale (a scan that states none): shown as "≈ 12 m² (estimate)". */
+  approximate?: boolean
 }
 
 export type Answer =

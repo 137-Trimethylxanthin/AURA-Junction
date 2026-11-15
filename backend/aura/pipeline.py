@@ -536,6 +536,13 @@ async def _execute_exact_intent(
 
     if intent == "quantity":
         tr = await asyncio.to_thread(tools.measure, d, subject or "", scope)
+        if tr.kind == "none" and tr.supported and tr.meta.get("abstain") == "not_answerable":
+            # the model file has the elements but not this quantity on them: final, nothing to estimate from
+            built = A.abstain(question, lang, tr.args["scope"], "not_answerable",
+                              f"What is the {A.QUANTITY_EN.get(subject or '', 'quantity')}", tr.summary,
+                              intent_tag=tag, results=[tr])
+            built.body["explanation"] = tr.summary
+            return built, True
         if not tr.supported or tr.kind == "none":
             return A.abstain(question, lang, tr.args["scope"], "not_supported_yet",
                              "(an IFC quantity)", tr.summary, intent_tag=tag, results=[tr]), False

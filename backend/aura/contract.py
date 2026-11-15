@@ -221,6 +221,8 @@ class AnswerNote(_M):
     value: str
     number: float | None = None
     unit: str | None = None
+    #: the number is measured under an estimated scale (a scan that states none): shown as "≈ 12 m² (estimate)"
+    approximate: bool | None = None
 
 
 Answer = Annotated[

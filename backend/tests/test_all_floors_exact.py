@@ -77,3 +77,31 @@ def test_a_plan_that_does_not_extract_windows_still_abstains():
     scan = _floor("s", [], kind="raster", evidence={"door": []})
     tr = tools.count_objects(scan, "window", {"kind": "floor"})
     assert tr.kind == "none" and not tr.supported
+
+
+def test_ifc_total_without_the_quantity_abstains_instead_of_zero():
+    from aura.solvers import ifc
+
+    def model(qtos):
+        walls = [{"guid": f"g{i}", "name": f"W{i}", "storey": "L1", "qto": q} for i, q in enumerate(qtos)]
+        return ifc.IfcModel(id="m", source="m.ifc", schema="IFC2X3", project="P", storey="L1",
+                            storeys=[{"name": "L1", "elevation": 0.0}], unit_scale=1.0,
+                            elements={"wall_length": walls}, rooms=[])
+
+    none = ifc.answer(model([None, None, None]), "wall_length", {"kind": "floor"})
+    assert none["answer"] == {"kind": "abstain", "reason": "not_answerable"} and none["value"] is None
+    assert "no Length quantity for its 3 IfcWall elements" in none["summary"]
+    some = ifc.answer(model([2.5, None, 4.0]), "wall_length", {"kind": "floor"})
+    assert some["answer"] == {"kind": "quantity", "value": 6.5, "unit": "m"}
+
+
+def test_largest_room_under_an_estimated_scale_is_approximate_in_the_answer():
+    rooms = [_room("a", "OH", 11.95) | {"area_source": "estimate"}, _room("b", "MH", 9.53) | {"area_source": "estimate"}]
+    d = _floor("scan", rooms, kind="raster", evidence_method={"room": "vision"})
+    tr = tools.rank_rooms(d, "max", {"kind": "floor"})
+    ans = A.room_rank("What is the area of the largest room?", "en", d, tr, {"kind": "floor"}, []).body["answer"]
+    assert ans["approximate"] is True and ans["number"] == 11.95
+    assert "≈ 12 m² (estimate)" in ans["value"] and "11.95" not in ans["value"]
+    exact = _floor("cad", [_room("a", "Zimmer", 11.95)])
+    ans = A.room_rank("largest room?", "en", exact, tools.rank_rooms(exact, "max", {"kind": "floor"}), {"kind": "floor"}, []).body["answer"]
+    assert "approximate" not in ans and "11.95 m²" in ans["value"]
