@@ -602,3 +602,15 @@ Frontend suite: 372 passed.
 - PDF rooms without an outline are now 8, not 9. Six of them sit on pages without a scale, so an outline cannot be
   turned into metres there; why the other two (on a scaled page) have none was not investigated.
 - Store suite: 225 passed, 1 skipped.
+
+### The eight PDF rooms without an outline in metres: checked one by one
+
+All eight carry a printed area, so area questions about them answer ("Read from the sheet"); only width and
+perimeter questions abstain. None is a reader fault that a general rule would fix without guessing:
+
+- Six sit on two pages without a readable scale (the diagrammatic site plan; page 6 of `20191011 - 1810 S Park`).
+  Their outlines are stored in page points. The printed areas of the outlined rooms on such a page do not agree on
+  one scale (e.g. the 85 SF telephone room got a far larger box), so no scale is derived from them.
+- `AREA UNDER PRECAST` (once in each of the two 1810 S Park sets) is an area note, not a room tag; the outline found
+  at the label is of another size than the 3,3xx SF printed, and is dropped by the size check.
+- `STORAGE` (8,394 SF) is the whole storage hall; no outline was returned for it on the page render.
