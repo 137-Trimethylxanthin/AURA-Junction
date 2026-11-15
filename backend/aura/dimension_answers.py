@@ -202,13 +202,21 @@ def _result(d: LoadedDrawing, args: dict, kind: str, value: float | None, text: 
                       summary=text, method=method)
 
 
+def _measure(label: str, value_m: float, x: dict | None = None, *, source: str = "printed") -> dict:
+    """One length the answer states, as a value (the units hook converts values, not prose)."""
+    out: dict[str, Any] = {"label": label, "value": round(float(value_m), 4), "unit": "m", "source": source}
+    if x is not None and x.get("text"):
+        out["printed"] = str(x["text"])
+    return out
+
+
 def _body(question: str, lang: str, d: LoadedDrawing, scope: dict, tr: ToolResult, canonical: str, *, value: float | None,
-          text: str, printed: bool, estimate: bool) -> A.Built:
+          text: str, printed: bool, estimate: bool, measures: list[dict] | None = None) -> A.Built:
     ids = [b.id for b in tr.boxes] or [A.room_eid(r.room_id) for r in tr.rooms]
     answer: dict[str, Any] = ({"kind": "quantity", "value": round(float(value), 3), "unit": "m"} if value is not None
                               else {"kind": "note", "value": text})
     kind = "exact" if printed or not estimate else "model"
-    tag = "printed on the sheet" if printed else "estimate · measured" if estimate else "measured on the plan"
+    tag = "read from the sheet · as printed" if printed else "estimate · measured" if estimate else "measured on the plan"
     body = A._base(question, lang, scope) | {
         "answer": answer,
         "evidence": {"boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
@@ -216,6 +224,7 @@ def _body(question: str, lang: str, d: LoadedDrawing, scope: dict, tr: ToolResul
         "canonical_en": canonical,
         "method": tr.method,
         **({"explanation": text} if value is not None else {}),  # a note is its own explanation
+        **({"measures": measures} if measures else {}),
         "trace": [
             A.question_node(question, lang),
             A.intent_node(f"length · {A.scope_text(scope)}", "router · length"),
@@ -246,6 +255,8 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
     est = bool(ext.get("estimate"))
     label = "an estimate: the sheet states no scale" if est else "measured on the plan, not printed"
     parts, used, values, printed_any, lower_bound = [], [], [], False, False
+    measures: list[dict] = []
+    mname = {"width": "width", "length": "depth"}
     for k in wanted:
         s = sides[k]
         # a single dimension much shorter than the plan itself is not the plan's size: the measured extent answers
@@ -262,8 +273,10 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
             parts.append(_side_text(names[k], s))
             used += s["dims"]
             values.append(s["value"])
+            measures.append(_measure(mname[k], s["value"], s["dims"][0] if len(s["dims"]) == 1 else None))
             printed_any = True
         elif measured[k]:
+            measures.append(_measure(mname[k], measured[k], source="estimate" if est else "measured"))
             parts.append(f"{names[k]}: {'≈ ' if est else ''}{_m(measured[k])}, the extent of the {ext.get('source', 'rooms')} "
                          f"({label})")
             values.append(measured[k])
@@ -297,7 +310,87 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
                  method)
     what = {"width": "overall width", "length": "overall depth", "size": "overall size"}[axis]
     return _body(question, lang, d, scope, tr, f"What is the {what} of the plan", value=value, text=text,
-                 printed=printed_any or lower_bound, estimate=est and not printed_any)
+                 printed=printed_any or lower_bound, estimate=est and not printed_any, measures=measures)
+
+
+RULE = "Width is the side across the page, depth the side up the page"
+
+
+def _across_up(r: dict, d: LoadedDrawing) -> tuple[float, float] | None:
+    """(across the page, up the page) in metres of a room whose outline lies square to the page, else None: the
+    sides of a turned room have no page direction, so there the shorter side stays the width (and is said so)."""
+    s = r.get("size") or {}
+    mx, my = d.drawing.get("m_per_pct_x") or 0, d.drawing.get("m_per_pct_y") or 0
+    pts = [p for p in r.get("points") or [] if len(p) >= 2]
+    if s.get("source") == "printed" or len(pts) < 3 or not (mx > 0 and my > 0):
+        return None
+    w = (max(p[0] for p in pts) - min(p[0] for p in pts)) * mx
+    h = (max(p[1] for p in pts) - min(p[1] for p in pts)) * my
+    lo, hi = sorted((w, h))
+    if lo <= 0 or abs(hi - s["length_m"]) > 0.06 * hi or abs(lo - s["width_m"]) > 0.06 * lo + 0.05:
+        return None
+    return w, h
+
+
+def _median(vals: list[float]) -> float | None:
+    vals = sorted(vals)
+    return vals[len(vals) // 2] if vals else None
+
+
+def near_dimensions(d: LoadedDrawing, r: dict) -> dict | None:
+    """The dimension lines printed beside a room that has a label but no outline: {"width": dim, "depth": dim,
+    "agrees": bool}.
+
+    The page may have no scale, so the neighbourhood is sized by the dimension lines themselves (page percent per
+    metre) and by the room's printed area (its sides are around the root of it). A horizontal line counts for the
+    width when it passes the label's x and lies within the room's reach above or below it; likewise a vertical one
+    for the depth. With a printed area, a pair whose product agrees with it wins; a single line must be a plausible
+    side of that area (aspect up to 4:1), which keeps wall thicknesses and door offsets out."""
+    at, pts = r.get("label_at"), r.get("points") or []
+    if isinstance(r.get("size"), dict) or not at or not pts:      # no points: the label is not on the page shown
+        return None
+    lx, ly = float(at[0]), float(at[1])
+    lines = []
+    for x in d.drawing.get("dimensions") or []:
+        ln, v = x.get("line"), x.get("value_m")
+        if (x.get("kind") != "linear" or x.get("orientation") not in ("horizontal", "vertical") or not ln
+                or len(ln) < 2 or not isinstance(v, (int, float)) or v <= 0):
+            continue
+        lines.append(x)
+    per_m = {o: _median([math.dist(x["line"][0], x["line"][-1]) / x["value_m"] for x in lines if x["orientation"] == o])
+             for o in ("horizontal", "vertical")}
+    sx, sy = per_m["horizontal"] or per_m["vertical"], per_m["vertical"] or per_m["horizontal"]
+    if not sx or not sy:
+        return None
+    area = r.get("area_m2") if isinstance(r.get("area_m2"), (int, float)) and r["area_m2"] > 0 else None
+    side = math.sqrt(area) if area else None
+    reach = 0.75 * side + 1.0 if side else 4.0                      # metres from the label to a line of this room
+    lo, hi = (side / 2, side * 2) if side else (0.9, 30.0)
+    cands: dict[str, list[tuple[float, dict]]] = {"horizontal": [], "vertical": []}
+    for x in lines:
+        (x0, y0), (x1, y1) = x["line"][0][:2], x["line"][-1][:2]
+        if not lo <= x["value_m"] <= hi:
+            continue
+        if x["orientation"] == "horizontal":
+            a, b = sorted((x0, x1))
+            off = abs((y0 + y1) / 2 - ly) / sy
+            inside = a - 0.5 * sx <= lx <= b + 0.5 * sx
+        else:
+            a, b = sorted((y0, y1))
+            off = abs((x0 + x1) / 2 - lx) / sx
+            inside = a - 0.5 * sy <= ly <= b + 0.5 * sy
+        if inside and off <= reach:
+            cands[x["orientation"]].append((off, x))
+    hs, vs = sorted(cands["horizontal"], key=lambda c: c[0]), sorted(cands["vertical"], key=lambda c: c[0])
+    if area:
+        pairs = [(abs(h["value_m"] * v["value_m"] - area) / area, h, v) for _o, h in hs for _p, v in vs]
+        pairs = [p for p in pairs if p[0] <= 0.15]
+        if pairs:
+            _err, h, v = min(pairs, key=lambda p: p[0])
+            return {"width": h, "depth": v, "agrees": True}
+    if not hs and not vs:
+        return None
+    return {"width": hs[0][1] if hs else None, "depth": vs[0][1] if vs else None, "agrees": False}
 
 
 def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, types: set[str] | None = None,
@@ -312,13 +405,18 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
                      r["room_id"] == scope.get("room_id") if scope["kind"] == "room" else r.get("name") == scope.get("label"))]
     if (types or rank) and len(rooms) == 1:
         scope = {"kind": "room", "room_id": rooms[0]["room_id"]}
-    sized = [r for r in rooms if isinstance(r.get("size"), dict)]
     if not rooms:
         return None
+    near = {r["room_id"]: n for r in rooms if not isinstance(r.get("size"), dict) and (n := near_dimensions(d, r))}
+    sized = [r for r in rooms if isinstance(r.get("size"), dict) or r["room_id"] in near]
     if not sized:
         # a length question never falls through to a count of the rooms it names
+        on_page = any(r.get("points") for r in rooms)
         why = ("The sheet prints no size in this room, and the room has no outline on this page to measure "
-               "(only its label was read).")
+               "(only its label was read)" +
+               ("; no dimension line printed beside the label is a plausible side of the room." if on_page else
+                "; its label is on another page of the file than the one shown, so the dimension lines beside it "
+                "cannot be matched to it."))
         built = A.abstain(question, lang, scope, "not_answerable", f"What is the size of the room {A.where_en(scope)}",
                           why, intent_tag="router · length")
         built.body["explanation"] = why
@@ -327,9 +425,47 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
     for x in d.drawing.get("dimensions") or []:
         if x.get("kind") == "room_size" and x.get("room_id") and "x" in x:
             by_room.setdefault(x["room_id"], []).append(x)
-    lines, boxes, ev_rooms, used = [], [], [], []
-    value, printed_all, est_any = None, True, False
+    lines, boxes, ev_rooms, used, measures = [], [], [], [], []
+    value, printed_all, est_any, turned = None, True, False, False
+    many = len(sized) > 1
     for r in sized:
+        name = f"{r.get('name') or 'Room'}{' ' + r['num'] if r.get('num') and (many or rank) else ''}"
+        if rank and isinstance(r.get("area_m2"), (int, float)):
+            name = f"The {'largest' if rank == 'max' else 'smallest'} room by area, {name} ({r['area_m2']:.2f} m²)"
+        pre = f"{name} " if many else ""
+        ev_rooms.append(EvidenceRoom(room_id=r["room_id"], included=True, area_m2=r.get("area_m2")))
+        if r["room_id"] in near:
+            # no outline, no printed size: the dimension lines printed beside the room's label, quoted as printed
+            n = near[r["room_id"]]
+            w, dp = n["width"], n["depth"]
+            mine = [x for x in (w, dp) if x is not None]
+            bits = []
+            if w is not None and axis in ("width", "size"):
+                bits.append(f"{_printed(w.get('text'), w['value_m'], w.get('unit'))} wide (across the page)")
+                measures.append(_measure(f"{pre}width", w["value_m"], w))
+                value = w["value_m"] if axis == "width" else value
+            if dp is not None and axis in ("length", "size"):
+                bits.append(f"{_printed(dp.get('text'), dp['value_m'], dp.get('unit'))} deep (up the page)")
+                measures.append(_measure(f"{pre}depth", dp["value_m"], dp))
+                value = dp["value_m"] if axis == "length" else value
+            if axis == "size" and (w is None or dp is None):
+                bits.append(f"no dimension line for its {'width' if w is None else 'depth'} is printed beside the label")
+            if not bits:      # asked for one direction, only the other has a line: say what is there
+                other = w if w is not None else dp
+                word = "width (across the page)" if w is not None else "depth (up the page)"
+                bits.append(f"no dimension line for its {'depth' if w is not None else 'width'} is printed beside the "
+                            f"label; its {word} is {_printed(other.get('text'), other['value_m'], other.get('unit'))}")
+                measures.append(_measure(f"{pre}{'width' if w is not None else 'depth'}", other["value_m"], other))
+            how = "read from the dimension lines printed beside the room's label"
+            if n["agrees"]:
+                how += (f"; their product, {w['value_m'] * dp['value_m']:.2f} m², agrees with the room's printed area "
+                        f"({r['area_m2']:.2f} m²)")
+            else:
+                how += "; the room has no outline on this page, so a line may cover only part of the room"
+            lines.append(f"{name}: {(' × ' if w is not None and dp is not None else '; ').join(bits)} ({how})")
+            used += mine
+            boxes += [b for b in (_box(x) for x in mine) if b is not None]
+            continue
         s = r["size"]
         length, width, src = float(s["length_m"]), float(s["width_m"]), s.get("source")
         printed = src == "printed"
@@ -341,22 +477,42 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         approx = "≈ " if src == "estimate" else ""
         if printed and s.get("text") and ("'" in s["text"] or '"' in s["text"]):
             how = f"{s['text']} as printed"
-        name = f"{r.get('name') or 'Room'}{' ' + r['num'] if r.get('num') and (len(sized) > 1 or rank) else ''}"
-        if rank and isinstance(r.get("area_m2"), (int, float)):
-            name = f"The {'largest' if rank == 'max' else 'smallest'} room by area, {name} ({r['area_m2']:.2f} m²)"
-        if axis == "width":
-            lines.append(f"{name}: {approx}{_m(width)} wide (the shorter side; {how})")
-            value = width
-        elif axis == "length":
-            lines.append(f"{name}: {approx}{_m(length)} long (the longer side; {how})")
-            value = length
-        else:
-            lines.append(f"{name}: {approx}{_m(length)} × {_m(width)} ({how})")
+        msrc = "printed" if printed else "estimate" if src == "estimate" else "measured"
+        au = _across_up(r, d)
+        if au:      # the outline lies square to the page: width across, depth up
+            w_m, d_m = au
+            if axis == "width":
+                lines.append(f"{name}: {approx}{_m(w_m)} wide (across the page; {how})")
+                value = w_m
+            elif axis == "length":
+                lines.append(f"{name}: {approx}{_m(d_m)} deep (up the page; {how})")
+                value = d_m
+            else:
+                lines.append(f"{name}: {approx}{_m(w_m)} wide (across the page) × {_m(d_m)} deep (up the page) ({how})")
+            if axis in ("width", "size"):
+                measures.append(_measure(f"{pre}width", w_m, source=msrc))
+            if axis in ("length", "size"):
+                measures.append(_measure(f"{pre}depth", d_m, source=msrc))
+        else:       # a printed "a × b" or a turned room: no page direction, the shorter side is the width
+            turned = True
+            if axis == "width":
+                lines.append(f"{name}: {approx}{_m(width)} wide (the shorter side; {how})")
+                value = width
+            elif axis == "length":
+                lines.append(f"{name}: {approx}{_m(length)} long (the longer side; {how})")
+                value = length
+            else:
+                lines.append(f"{name}: {approx}{_m(length)} × {_m(width)} ({how})")
+            if axis in ("width", "size"):
+                measures.append(_measure(f"{pre}width", width, source=msrc))
+            if axis in ("length", "size"):
+                measures.append(_measure(f"{pre}length", length, source=msrc))
         mine = by_room.get(r["room_id"]) or []
         used += mine
         boxes += [b for b in (_box(x) for x in mine) if b is not None]
-        ev_rooms.append(EvidenceRoom(room_id=r["room_id"], included=True, area_m2=r.get("area_m2")))
-    text = "; ".join(lines) + "."
+    text = "; ".join(lines) + ". " + RULE
+    text += ("; where a room's size is printed without a direction or the room is turned on the page, its shorter "
+             "side is given as the width." if turned else ".")
     if len(sized) != 1:
         value = None
     em = (d.drawing.get("evidence_method") or {}).get("room")
@@ -365,7 +521,7 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
                  text, boxes, ev_rooms, method)
     what = {"width": "width", "length": "length", "size": "size"}[axis]
     return _body(question, lang, d, scope, tr, f"What is the {what} of the room {A.where_en(scope)}", value=value, text=text,
-                 printed=printed_all, estimate=est_any)
+                 printed=printed_all, estimate=est_any, measures=measures)
 
 
 def _extreme(question: str, lang: str, d: LoadedDrawing, which: str) -> A.Built | None:

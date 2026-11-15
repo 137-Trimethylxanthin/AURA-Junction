@@ -410,6 +410,12 @@ def apply(resp: dict, unit: Unit | None, lang: str | None = None) -> dict:
             display |= {"unit": dst.key, "label": dst.label, "value": round(dv, 6),
                         "text": fmt_value(dv, dst, lang), "metric_text": fmt_value(v, src, lang),
                         "style": "ft_in" if dst.key == "ftin" else "decimal"}
+    ms = resp.get("measures")
+    if isinstance(ms, list) and (lu := coerce(unit, 1)) is not None and lu.key != "m":
+        # every length a composite answer states, converted from its value (not from the prose)
+        display["measures"] = [m | {"value": round(convert(float(m["value"]), "m", lu), 6), "unit": lu.key,
+                                    "text": fmt_value(convert(float(m["value"]), "m", lu), lu, lang)}
+                               for m in ms if isinstance(m, dict) and isinstance(m.get("value"), (int, float))]
     if isinstance(out.get("explanation"), str):
         display["metric_explanation"] = out["explanation"]
         out["explanation"] = convert_prose(out["explanation"], unit, lang)
