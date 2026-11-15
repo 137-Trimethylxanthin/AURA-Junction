@@ -190,7 +190,11 @@ SQL_SYSTEM = (
     "sanitary terminals ...) are rows of q.elements by ifc_class (with storey and stored_*/measured_* "
     "quantities). Count a kind of element by its IFC class alone, instances only (is_type = false): "
     "sanitary fixtures = IfcSanitaryTerminal, walls = IfcWall, stairs = IfcStair; add no name or "
-    "predefined_type filter unless the question names a subtype. Properties are in q.ifc_properties.\n\n"
+    "predefined_type filter unless the question names a subtype. Properties are in q.ifc_properties. "
+    "q.rooms.room_type already maps local names and abbreviations to a kind (kitchen, bathroom, toilet, sauna, "
+    "bedroom ...): filter by room_type, and add label patterns only for words you are sure of; never match "
+    "short abbreviations by substring (Finnish KH is a bathroom, KHH a laundry, K/KK/AVOK a kitchen, S a "
+    "sauna, MH a bedroom, OH a living room, WC a toilet).\n\n"
 )
 SQL_OWNER_NOTE = ("On this drawing q.rooms, q.apartments, q.doors, q.windows, q.fixtures and q.items are "
                   "not used: rooms and items come from the fixed tools.\n\n")
