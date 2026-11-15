@@ -211,3 +211,30 @@ printed areas of uploads.
 Merged and deployed as `0e056d9`. Suites: backend 716 passed / 34 skipped, store 160 passed /
 1 skipped, frontend 351 passed. The live store's image drawings are re-interpreted with these
 readers once the running dimensions pass ends.
+
+### 00:50–01:15 UTC — wave 4 merged, live store re-interpreted again, fourth deploy
+
+**Stream J — plan finish (`on/j-plan-polish`)**, all at drawing time (no re-interpretation):
+labels at the pole of inaccessibility, sized to the room, dropped when they do not fit, never
+overlapping; door and window openings cut out of the wall fill; loose wall slivers dropped;
+duplicate door and window symbols drawn once; the 3D floor follows the building footprint;
+unlabelled rooms straightened; the Compare slider runs 0–100 %. Left: stubs still attached to a
+wall; store counts may be inflated by duplicate detections (drawn once, counted twice).
+
+**Stream K — demo paths (`on/k-demo-paths`)**: suggested-question chips follow what a drawing has
+(a sweep over ten drawing kinds: failing chips went from 21 to 2, both on the hitos IFC building:
+"Match stairs and shafts across all floors" and "Show all stairs"); an IFC model without spaces
+answers "0 rooms" with the reason; room counts read "10 rooms (8 labelled, 2 without a label)".
+Not done: multi-page PDF handling beyond what already worked, source chip labels in other languages.
+
+Merge note: both streams added an `unlabelled` field to a room; the duplicate keyword was caught
+by the store suite and removed. Suites: backend 720 passed / 34 skipped, store 166 passed /
+1 skipped, frontend 356 passed.
+
+Live store: the dimensions pass over the remaining 276 image drawings finished (0 failures), then
+all 316 image drawings with rooms were re-interpreted with the merged readers (0 failures, 9 min,
+from cache). The store now holds dimensions on 248 drawings and 733 rooms without a label.
+
+Deployed `aa03080`. Checked in a browser on the live site: the school plan and the CubiCasa plan
+"High quality 108" render as clean vector plans (walls, door swings, tinted rooms, approximate
+areas, the balcony and bathroom present), no console errors.
