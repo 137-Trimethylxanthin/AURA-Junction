@@ -725,6 +725,9 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
                           kind="count", subject=subject, value=0.0, numbers=[0.0], ms=_ms(t0),
                           summary=f"0 {noun(subject, 2)}: no {noun(subject, 1)} was read on this sheet.",
+                          # what the sheet was read from decides the label: never "exact CAD geometry" for a PDF or a scan
+                          method=("pdf_vector" if d.drawing.get("source_ext") == ".pdf" else
+                                  "vision" if d.drawing.get("kind") == "raster" else "cad_geometry"),
                           meta={"none_in_model": True})
     if not d.engine.supports(subject):
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects",
