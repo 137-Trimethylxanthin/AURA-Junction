@@ -693,7 +693,7 @@ class StoreLibrary:
                 urls = [*(d.drawing.get("images") or {}).values(), d.drawing.get("thumbnail")]
                 if not any(isinstance(u, str) and "/plan.svg" in u for u in urls):
                     return None  # this drawing shows its page; no rebuilt plan to make
-                return _cached(d.dir / f"plan-v4-{tag}.svg", lambda: _bytes(self.source.plan_svg(e.key, e.slug, page)))
+                return _cached(d.dir / f"plan-v5-{tag}.svg", lambda: _bytes(self.source.plan_svg(e.key, e.slug, page)))
         except Exception:  # a missing image is a 404, never a 500
             log.exception("store library: %s could not be made", name)
         return None
