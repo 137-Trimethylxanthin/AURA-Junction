@@ -60,6 +60,7 @@ ROOM_TYPES = [
     ("shaft", r"schacht|gaine|cavedio|shaft|kuilu"),
     ("void", r"luftraum|\bvide\b|void"),
     ("staircase", r"treppe|escalier|scala|stair|porras"),
+    ("mezzanine", r"mezzanin|zwischengeschoss|soppalco|\bparvi\b"),
     ("elevator", r"\blift\b|ascenseur|ascensore|elevator|aufzug|hissi"),
     ("bedroom", r"schlaf|chambre|camera da letto|\bcamera\b|bedroom|makuuhuone|\bmh\b"),
     ("living_room", r"wohnen|wohnzimmer|sejour|soggiorno|living|lounge|salon|olohuone|\boh\b"),
@@ -77,11 +78,34 @@ ROOM_TYPES = [
                 r"rangement|garderobe|dressing"),
     ("office", r"buro|bureau|ufficio|office|toimisto|tyohuone"),
     ("commercial", r"gewerbe|commerce|commercio|laden|retail|shop|liike"),
-    ("technical", r"technik|technique|tecnico|mechanical|plant|tekninen|heizung"),
+    ("technical", r"technik|technique|tecnico|mechanical|utility|plant|tekninen|heizung"),
     ("garage", r"garage|carport|autotalli|parking|einstellhalle"),
     ("room", r"zimmer|piece|stanza|\braum\b|\blocale?\b|\broom\b|huone"),
 ]
 ROOM_TYPES = [(k, re.compile(p)) for k, p in ROOM_TYPES]
+
+# Abbreviations printed on (mostly US) sheets -> the room word they stand for.  A whole token only ("BR", "BR 2",
+# "BR2", "MEZZ."), and only when the label as written names no room type, so words of other languages keep theirs.
+ABBREVIATIONS = {
+    "mezz": "mezzanine", "br": "bedroom", "bdrm": "bedroom", "bedrm": "bedroom", "bath": "bathroom",
+    "ba": "bathroom", "kit": "kitchen", "lr": "living room", "liv": "living room", "dr": "dining room",
+    "din": "dining room", "mech": "mechanical", "stor": "storage", "cl": "closet", "clo": "closet",
+    "corr": "corridor", "elev": "elevator", "util": "utility", "off": "office",
+}
+_TOKEN = re.compile(r"[a-z]+")
+_BESIDE = re.compile(r"\b(?:under|below|above|over|behind|unter|sous|sotto)\b")      # "ROOM UNDER MEZZ."
+
+
+def expand(label: str | None) -> str:
+    """The plain label with its abbreviations written out: "MEZZ." -> "mezzanine", "BR 2" -> "bedroom 2"."""
+    return _TOKEN.sub(lambda m: ABBREVIATIONS.get(m.group(0), m.group(0)), plain(label or ""))
+
+
+def _typed(s: str) -> str | None:
+    for kind, rx in ROOM_TYPES:
+        if rx.search(s):
+            return kind
+    return None
 
 
 def room_type(label: str | None) -> str | None:
@@ -89,10 +113,10 @@ def room_type(label: str | None) -> str | None:
     s = plain(label or "")
     if not s:
         return None
-    for kind, rx in ROOM_TYPES:
-        if rx.search(s):
-            return kind
-    return None
+    kind = _typed(s)
+    if kind in (None, "room") and not _BESIDE.search(s):    # "MECH. ROOM" is a technical room, "BR 2" a bedroom
+        kind = _typed(expand(s)) or kind
+    return kind
 
 
 def indoor(label: str | None) -> bool:

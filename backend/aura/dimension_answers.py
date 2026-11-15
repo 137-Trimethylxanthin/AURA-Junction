@@ -21,6 +21,7 @@ import re
 from typing import Any
 
 from . import answer as A
+from . import room_words as RW
 from .contract import Box, EvidenceRoom, ToolResult
 from .router import LABEL_CONCEPTS, ROOMS_WITH, _scope
 from .tools import LoadedDrawing, _rid
@@ -161,7 +162,9 @@ def classify(question: str, d: LoadedDrawing) -> dict | None:
     axis = "size" if wants_s or (wants_w and wants_l) else "width" if wants_w else "length"
     if sup and RANK_ROOM.search(q) and not (OTHER.search(q) or FILTER.search(q) or ROOMS_WITH.search(q)):
         return {"ask": "room", "axis": axis, "scope": {"kind": "floor"}, "rank": sup}  # "how wide is the largest room"
-    if OTHER.search(q) or FILTER.search(q) or sup or ROOMS_WITH.search(q):
+    # "how wide is the stair": a stair the sheet labels as a room is a room; other stair questions are not lengths
+    stair_room = "staircase" in _types_asked(q, d)
+    if OTHER.search(RW.STAIR_WORDS.sub(" ", q) if stair_room else q) or FILTER.search(q) or sup or ROOMS_WITH.search(q):
         return None
     scope = _scope(q, d.ctx)
     if scope and scope.get("kind") in ("room", "label"):
@@ -184,7 +187,7 @@ CONCEPT_TYPES = {"bedroom": ("bedroom",), "living": ("living", "living_room", "d
 
 def _types_asked(q: str, d: LoadedDrawing) -> set[str]:
     """The room types the question names that this drawing has (a room labelled TUPAK is a kitchen)."""
-    have = {str(r.get("room_type")) for r in d.drawing.get("rooms") or [] if r.get("room_type")}
+    have = {k for r in d.drawing.get("rooms") or [] if (k := RW.room_kind(r))}
     out: set[str] = set()
     for concept, rx, _printed_labels in LABEL_CONCEPTS:
         if rx.search(q):
@@ -192,7 +195,7 @@ def _types_asked(q: str, d: LoadedDrawing) -> set[str]:
     for t in have - {"room"}:  # the type's own name ("office", "toilet", "laundry")
         if _rx(re.escape(t.replace("_", " ")) + "s?").search(q):
             out.add(t)
-    return out
+    return out | (have & RW.asked_types(q))  # room words and the abbreviations a sheet prints ("MEZZ.", "ELEV.")
 
 
 def _result(d: LoadedDrawing, args: dict, kind: str, value: float | None, text: str, boxes: list[Box],
@@ -411,7 +414,7 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         rooms = [(max if rank == "max" else min)(cands, key=lambda r: r["area_m2"])] if cands else []
     else:
         rooms = [r for r in d.drawing.get("rooms") or []
-                 if (r.get("room_type") in types if types else
+                 if (RW.room_kind(r) in types if types else
                      r["room_id"] == scope.get("room_id") if scope["kind"] == "room" else r.get("name") == scope.get("label"))]
     if (types or rank) and len(rooms) == 1:
         scope = {"kind": "room", "room_id": rooms[0]["room_id"]}

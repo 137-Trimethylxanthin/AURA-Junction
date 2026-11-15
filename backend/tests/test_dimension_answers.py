@@ -269,3 +269,26 @@ def test_a_pdf_sheet_whose_rooms_were_traced_on_its_page_image_is_not_called_a_s
     b = da.try_answer("What are the dimensions of the bedroom?", "en", sheet)
     assert "traced on the sheet image" in b.body["answer"]["value"] and "scan" not in b.body["answer"]["value"]
     assert b.body["basis"] == "estimate"
+
+
+def test_room_words_match_the_abbreviations_a_sheet_prints_without_reinterpretation():
+    from aura import room_words as rw
+    for label, kind in [("MEZZ.", "mezzanine"), ("BR", "bedroom"), ("BDRM 2", "bedroom"), ("BATH", "bathroom"),
+                        ("BA", "bathroom"), ("KIT.", "kitchen"), ("LR", "living_room"), ("LIV.", "living_room"),
+                        ("DR", "dining_room"), ("DIN.", "dining_room"), ("MECH.", "technical"), ("STOR.", "storage"),
+                        ("CL", "storage"), ("CLO.", "storage"), ("CORR.", "corridor"), ("ELEV.", "elevator"),
+                        ("UTIL.", "technical"), ("OFF.", "office"), ("STAIR", "staircase")]:
+        assert rw.label_type(label) == kind, label
+    assert rw.label_type("ROOM UNDER MEZZ.") is None and rw.label_type("CLINIC") is None
+    size = {"length_m": 6.0, "width_m": 3.0, "source": "measured"}
+    rooms = [_room("r1", "STAIR", size, rtype="staircase"), _room("r2", "MEZZ.", size), _room("r3", "ELEV.", size),
+             _room("r4", "Mech. Room", size, rtype="room")]
+    d = _drawing([], rooms)
+    for q, rid in [("How wide is the stair?", "r1"), ("How wide is the mezzanine?", "r2"),
+                   ("How wide is the elevator?", "r3"), ("Wie breit ist die Treppe?", "r1"),
+                   ("Quanto è larga la scala?", "r1"), ("How wide is the mechanical room?", "r4")]:
+        b = da.try_answer(q, "en", d)
+        assert b is not None and b.body["answer"] == {"kind": "quantity", "value": 3.0, "unit": "m"}, q
+        assert [r["room_id"] for r in b.body["evidence"]["rooms"]] == [rid], q
+    assert da.classify("How wide is the stair door?", d) is None      # a door, not the room
+    assert da.classify("How wide are the stairs?", _drawing([], rooms[1:])) is None   # no stair room on this sheet
