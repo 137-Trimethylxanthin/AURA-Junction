@@ -441,23 +441,76 @@ function FactCard({
   )
 }
 
+const SCAN_SHORT: Record<string, string> = {
+  "scan-area-within-5": "of room areas within 5 %",
+  "scan-area-within-2": "of room areas within 2 %",
+  "scan-perimeter-within-2": "of room perimeters within 2 %",
+  "scan-area-median": "median room-area error",
+}
+
+/** The scan results as one highlighted band: big numbers first, the measurement details once below. */
+function ScanHighlight({ facts }: { facts: Fact[] }) {
+  const first = facts[0]
+  return (
+    <Reveal amount={0.2}>
+      <RevealItem>
+        <div
+          data-fact="scan-highlight"
+          className="overflow-hidden rounded-2xl bg-primary text-primary-foreground shadow-lg"
+        >
+          <div className="flex flex-col gap-8 p-6 sm:p-10">
+            <div className="flex flex-col gap-2">
+              <p className="text-sm font-semibold tracking-[0.18em] uppercase opacity-70">
+                Scans · no CAD · no BIM
+              </p>
+              <h3 className="text-2xl leading-tight font-semibold tracking-[-0.02em] text-balance sm:text-3xl">
+                From a plan image alone, measured against the CAD original
+              </h3>
+            </div>
+            <ul className="grid grid-cols-2 gap-x-6 gap-y-8 lg:grid-cols-4">
+              {facts.map((f) => (
+                <li key={f.id} data-fact={f.id} className="flex flex-col gap-2">
+                  <CountUp
+                    value={f.value}
+                    className="text-5xl leading-none font-semibold tracking-[-0.03em] tabular-nums sm:text-6xl"
+                  />
+                  <span className="text-base font-medium text-pretty opacity-90">
+                    {SCAN_SHORT[f.id] ?? f.label}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-sm text-pretty opacity-75">
+              {fmtInt(first.n)} {first.n_unit}: {first.scope}. Measured{" "}
+              {fmtDate(first.measured)}. {first.caveat}
+            </p>
+          </div>
+        </div>
+      </RevealItem>
+    </Reveal>
+  )
+}
+
 function Measured() {
   if (!RESULTS.length) return null
+  const scans = RESULTS.filter((f) => f.id.startsWith("scan-"))
+  const rest = RESULTS.filter((f) => !f.id.startsWith("scan-"))
   return (
     <Section
       id="measured"
       title="Accuracy and cost, measured with their n"
-      lead="The CAD and IFC figures were measured on AURA’s deterministic geometry engine (0 model calls). The figures marked Scans were measured on plan images alone, with no CAD or BIM file. Sample size and date are shown on each."
+      lead="Scan figures were measured on plan images alone, with no CAD or BIM file. The CAD and IFC figures below them were measured on AURA’s deterministic geometry engine (0 model calls). Sample size and date are shown on each."
     >
+      {scans.length ? <ScanHighlight facts={scans} /> : null}
       <Reveal
         as="ul"
         className={cn(
           "grid gap-4",
-          RESULTS.length > 1 && "lg:grid-cols-2",
-          RESULTS.length === 3 && "xl:grid-cols-3"
+          rest.length > 1 && "lg:grid-cols-2",
+          rest.length === 3 && "xl:grid-cols-3"
         )}
       >
-        {RESULTS.map((f) => (
+        {rest.map((f) => (
           <RevealItem as="li" key={f.id}>
             <FactCard fact={f} />
           </RevealItem>
