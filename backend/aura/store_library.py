@@ -78,6 +78,9 @@ SOURCE_NAMES = {"cubicasa5k": "CubiCasa5K", "swiss_dwellings": "Swiss Dwellings"
                 "ifc_models": "IFC models", "ifc_bench": "IFC bench", "stress": "Stress test"}
 SOURCE_ORDER = ["stress", "swiss_dwellings", "opening_design", "ifc_models", "ifc_bench", "cubicasa5k",
                 "wikimedia", "finna", "habs", "europeana"]
+#: the collection a source belongs to (the library's source filter)
+ORIGIN = {"swiss_dwellings": "swiss", "cubicasa5k": "cubicasa", "opening_design": "us_sheets", "ifc_models": "ifc",
+          "ifc_bench": "ifc", "wikimedia": "historic", "finna": "historic", "habs": "historic", "europeana": "historic"}
 SWISS_KEY = re.compile(r"^site(\d+)_bldg(\d+)_floor(\d+)$")
 
 
@@ -244,6 +247,7 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
             "credit": credit_of(project, lic), "source": "library",
             "created_at": (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ingested)) if ingested else None),
             "source_ext": _ext_of(formats),
+            "origin": "ifc" if _kind_of(formats) == "ifc" else ORIGIN.get(source, "other"),
         }
         src_rank = SOURCE_ORDER.index(source) if source in SOURCE_ORDER else len(SOURCE_ORDER)
         file_ids = tuple(f["file_id"] for f in r["files"])
@@ -252,7 +256,7 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
             what = [_n(counts.get("room", 0), "room"), _n(counts.get("door", 0), "door"),
                     _n(counts.get("window", 0), "window"), _n(fixtures, "fixture")]
             summ = base | {
-                "id": did,
+                "id": did, "n_rooms": int(counts.get("room", 0)), "n_doors": int(counts.get("door", 0)),
                 "thumbnail": (f"/drawings/{did}/thumb.png{version}" if r.get("has_image")
                               else f"/drawings/{did}/plan.svg{version}"),
                 "subtitle": " · ".join(x for x in (source_name, fmt, r.get("scale"),
@@ -272,6 +276,7 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
             occupied = st.get("n_rooms", 0) + st.get("n_items", 0) > 0
             summ = base | {
                 "id": did, "title": (f"{title} · {name}" if name else title)[:160],
+                "n_rooms": int(st.get("n_rooms", 0)),
                 "thumbnail": f"/drawings/{did}/thumb.png{version}",
                 "subtitle": " · ".join(x for x in (
                     name or None, level, _n(st.get("n_rooms", 0), "room"), _n(st.get("n_items", 0), "object"),

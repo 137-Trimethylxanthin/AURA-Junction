@@ -234,6 +234,11 @@ export interface DrawingSummary {
   floor_label?: string
   /** 1.2: vertical floor sort order (e.g. -1 basement, 0 ground, 1..N upper, 99 attic). */
   floor_order?: number
+  /** 1.2 additive (store drawings): the collection the drawing comes from. */
+  origin?: 'swiss' | 'ifc' | 'cubicasa' | 'us_sheets' | 'historic' | 'other'
+  /** 1.2 additive (store drawings): rooms / doors read from the drawing (0 = a sheet without a plan). */
+  n_rooms?: number
+  n_doors?: number
 }
 
 /** 1.2: one ordered floor entry inside a multi-plan house/building `ProjectBundle`. */

@@ -1,5 +1,6 @@
 import { useUi } from "@/i18n/uiLang"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { ORIGIN_LABEL, type Origin, originCounts, originOf, plansFirst } from "./origin"
 import { Link } from "react-router"
 import {
   FileUpIcon,
@@ -164,6 +165,7 @@ export default function LibraryPage() {
   const { list, retry, refresh } = useLibrary(base)
   const [query, setQuery] = useState("")
   const [kind, setKind] = useState<"all" | FileType>("all")
+  const [origin, setOrigin] = useState<"all" | Origin>("all")
 
   const [grouping, setGrouping] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -276,6 +278,7 @@ export default function LibraryPage() {
       .filter((t) => present.has(t))
       .map((t) => ({ t, n: drawings.filter((d) => fileTypeOf(d) === t).length }))
   }, [drawings])
+  const origins = useMemo(() => originCounts(drawings), [drawings])
   // Sheets of a project are shown by the project card, not again one by one (except while grouping).
   const [projectsVersion, setProjectsVersion] = useState(0)
   useEffect(() => myProjects.subscribe(() => setProjectsVersion((n) => n + 1)), [])
@@ -285,9 +288,11 @@ export default function LibraryPage() {
   }, [drawings, projectsVersion])
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return drawings.filter((d) => {
+    // Plans first, sheets without a plan after them (nothing is hidden); search and the chips narrow the list.
+    return plansFirst(drawings).filter((d) => {
       if (!grouping && inProject.has(d.id)) return false
       if (kind !== "all" && fileTypeOf(d) !== kind) return false
+      if (origin !== "all" && originOf(d) !== origin) return false
       if (!q) return true
       const display = displayDrawingTitle(d).toLowerCase()
       return (
@@ -297,7 +302,7 @@ export default function LibraryPage() {
         d.id.toLowerCase().includes(q)
       )
     })
-  }, [drawings, query, kind, grouping, inProject])
+  }, [drawings, query, kind, origin, grouping, inProject])
   const anyFacts = drawings.some((d) => d.facts)
   const offline = !base || list.state === "error"
 
@@ -385,6 +390,26 @@ export default function LibraryPage() {
                   {kinds.map(({ t, n }) => (
                     <ToggleGroupItem key={t} value={t} aria-label={`${typeLabel(t, tu)} (${n})`}>
                       {typeLabel(t, tu)}
+                      <span className="num text-muted-foreground">{n}</span>
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              ) : null}
+              {origins.length > 1 ? (
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  spacing={1}
+                  value={origin}
+                  onValueChange={(v) => setOrigin((v || "all") as typeof origin)}
+                  aria-label="Source"
+                  className="flex-wrap"
+                  data-origin-filter
+                >
+                  <ToggleGroupItem value="all">{tu("lib_all")}</ToggleGroupItem>
+                  {origins.map(({ o, n }) => (
+                    <ToggleGroupItem key={o} value={o} aria-label={`${ORIGIN_LABEL[o]} (${n})`}>
+                      {ORIGIN_LABEL[o]}
                       <span className="num text-muted-foreground">{n}</span>
                     </ToggleGroupItem>
                   ))}

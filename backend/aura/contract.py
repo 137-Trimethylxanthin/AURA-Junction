@@ -531,6 +531,11 @@ class DrawingSummary(_M):
     project_id: str | None = None
     floor_label: str | None = None
     floor_order: int | FiniteFloat | None = None
+    # 1.2 additive (store drawings): the collection the drawing comes from, for a source filter in the library,
+    # and how many rooms / doors were read, so sheets without a plan can be listed last without a request per card
+    origin: Literal["swiss", "ifc", "cubicasa", "us_sheets", "historic", "other"] | None = None
+    n_rooms: int | None = None
+    n_doors: int | None = None
 
 
 class ProjectFloor(_M):
