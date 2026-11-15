@@ -39,6 +39,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+MIN_SIDE = 1400          # shorter scans are upscaled before tracing (up to 3x)
 WORK_SIDE = 2400          # long side of the working copy (bounded memory / time)
 MIN_CONTACTS = 1
 WALL_MIN_LEN = 3.5       # wall pieces shorter than this many thicknesses are glyphs or symbols
@@ -51,7 +52,10 @@ def _load(path: Path) -> tuple[np.ndarray, int, int, float]:
     with Image.open(path) as im:
         W, H = im.size
         k = min(1.0, WORK_SIDE / max(W, H))
-        if k < 1.0:
+        if max(W, H) < MIN_SIDE:  # small scans: walls a few px thick close up whole rooms; trace them larger
+            k = min(3.0, MIN_SIDE / max(W, H))
+            im = im.convert('RGBA' if 'A' in im.mode else 'RGB').resize((round(W * k), round(H * k)), Image.LANCZOS)
+        elif k < 1.0:
             im.draft('RGB', (max(1, round(W * k)), max(1, round(H * k))))  # JPEG: decode at a lower scale
             f = int(1 / k)
             if f >= 2 and im.size == (W, H):
