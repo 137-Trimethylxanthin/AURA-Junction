@@ -1,5 +1,6 @@
 import { appStore, useAppStore } from '@/store'
 import { licenceLabel, safeUrl } from '@/api/contract'
+import { useUi } from '@/i18n/uiLang'
 import './plan.css'
 
 export { PlanStage } from './PlanStage'
@@ -11,6 +12,7 @@ if (import.meta.env.DEV) (window as unknown as { __aura: typeof appStore }).__au
 /** Dataset credit and licence: always visible, wraps to a second line where needed. */
 export function Credit() {
   const credit = useAppStore((s) => s.session.drawing.credit)
+  const { lang } = useUi()
   return (
     // Wraps rather than truncates: the full attribution stays readable without interaction.
     <p className="min-w-0 leading-snug text-pretty">
@@ -22,10 +24,10 @@ export function Credit() {
           rel="noreferrer"
           className="rounded-sm font-medium whitespace-nowrap text-foreground underline underline-offset-2"
         >
-          {licenceLabel(credit)}
+          {licenceLabel(credit, lang)}
         </a>
       ) : (
-        <span className="font-medium whitespace-nowrap text-foreground">{licenceLabel(credit)}</span>
+        <span className="font-medium whitespace-nowrap text-foreground">{licenceLabel(credit, lang)}</span>
       )}
     </p>
   )

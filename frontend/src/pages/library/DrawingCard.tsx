@@ -69,7 +69,7 @@ function CardBody({
       ? Math.round(Math.min(1, Math.max(0, d.progress)) * 100)
       : null
   const selected = selectedOrder !== null && selectedOrder !== undefined
-  const compact = compactCredit(d.credit)
+  const compact = compactCredit(d.credit, uiLanguage)
   const sepIdx = compact.indexOf(" · ")
   const licHead = sepIdx >= 0 ? compact.slice(0, sepIdx) : compact
   const creditRest = sepIdx >= 0 ? compact.slice(sepIdx + 3) : ""

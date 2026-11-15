@@ -608,7 +608,9 @@ def page_counts(db: DB, key: str, page: tuple[str, int] | None = None) -> tuple[
     sheet = sheet_of(db, base)
     if sheet is None:
         return None
-    rows = db.run(f"""select e.kind, count(*) as n from jstore.entity e
+    rows = db.run(f"""select case when e.kind = 'room' and not coalesce((e.attrs->>'indoor')::boolean, true)
+                                  then 'outdoor' else e.kind end as kind, count(*) as n
+                       from jstore.entity e
                        where e.drawing_key = :k and e.status = 'active' and not ({OFF_PAGE_SQL}) group by 1""",
                   k=key, f=base.file_id, p=base.page_no)
     return sheet, {r["kind"]: int(r["n"]) for r in rows}

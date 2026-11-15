@@ -162,9 +162,19 @@ export function safeUrl(u: string | undefined): string | null {
   return /^https?:\/\//i.test(s) ? s : null
 }
 
-export function licenceLabel(c: Pick<Credit, 'license' | 'license_name'>): string {
-  if (c.license_name) return c.license_name
-  return /^LicenseRef-/i.test(c.license) ? 'Licence terms' : c.license
+/** The fixed licence phrases the backend sends in English, in the interface languages. */
+const LICENCE_PHRASES: Record<string, Partial<Record<Lang, string>>> = {
+  'Licence of the source dataset': {
+    de: 'Lizenz des Quelldatensatzes', fr: 'Licence du jeu de données source', fi: 'Lähdeaineiston lisenssi',
+    it: 'Licenza del dataset di origine',
+  },
+  'Uploaded by you': { de: 'Von Ihnen hochgeladen', fr: 'Importé par vous', fi: 'Sinun lataamasi', it: 'Caricato da te' },
+  'Licence terms': { de: 'Lizenzbedingungen', fr: 'Conditions de licence', fi: 'Lisenssiehdot', it: 'Condizioni di licenza' },
+}
+
+export function licenceLabel(c: Pick<Credit, 'license' | 'license_name'>, lang: Lang = 'en'): string {
+  const label = c.license_name ? c.license_name : /^LicenseRef-/i.test(c.license) ? 'Licence terms' : c.license
+  return LICENCE_PHRASES[label]?.[lang] ?? label
 }
 
 export interface Drawing {

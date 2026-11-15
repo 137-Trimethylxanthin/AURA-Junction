@@ -873,8 +873,11 @@ class JStoreSource:
                 where f.drawing_key not in (select u.drawing_key from jstore.source_file u where u.project_id like 'upload/%')
                 group by f.drawing_key order by f.drawing_key""")
             counts: dict[str, dict[str, int]] = {}
-            for c in db.run("""select drawing_key, kind, count(*) as n from jstore.entity
-                               where status = 'active' group by 1, 2"""):
+            # rooms are counted as answers count them: an outdoor space (balcony, terrace) is not a room
+            for c in db.run("""select drawing_key,
+                                      case when kind = 'room' and not coalesce((attrs->>'indoor')::boolean, true)
+                                           then 'outdoor' else kind end as kind, count(*) as n
+                               from jstore.entity where status = 'active' group by 1, 2"""):
                 counts.setdefault(c["drawing_key"], {})[c["kind"]] = int(c["n"])
             storeys = am.storey_index(db) if any("ifc" in r["formats"] for r in rows) else {}
             # a PDF of several pages is shown as one of them: its counts are those of that page (the same

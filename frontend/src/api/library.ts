@@ -10,6 +10,7 @@ import {
   type Credit,
   type DrawingKind,
   type DrawingSummary,
+  type Lang,
   type ProjectBundle,
   type ProjectFloor,
   type UploadResult,
@@ -773,8 +774,8 @@ export function displayDrawingTitle(d: Pick<DrawingSummary, 'title'> & Partial<P
 }
 
 /** Compact 1-line attribution for library cards that always preserves the licence token (`CC BY 4.0`, `CC BY-NC 4.0`, etc.). */
-export function compactCredit(credit: Credit): string {
-  const lic = licenceLabel(credit)
+export function compactCredit(credit: Credit, lang: Lang = 'en'): string {
+  const lic = licenceLabel(credit, lang)
   const text = credit.text.trim()
   if (/Swiss Dwellings/i.test(text)) {
     const m = /Swiss Dwellings(?:\s+v[\d.]+)?/i.exec(text)
