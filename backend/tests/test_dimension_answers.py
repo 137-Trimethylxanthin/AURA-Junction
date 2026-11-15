@@ -261,3 +261,11 @@ def test_basis_says_where_the_value_comes_from():
     assert A.area_basis(up, ["a", "b"], "vision") == {"basis": "estimate"}
     assert A.area_basis(up, ["b"], "cad_geometry") == {"basis": "measured"}
     assert A.area_basis(up, ["c"], "cad_geometry") == {} and A.area_basis(up, [], "vision") == {}
+
+
+def test_a_pdf_sheet_whose_rooms_were_traced_on_its_page_image_is_not_called_a_scan():
+    sheet = _drawing([], [_room("r2", "BEDROOM", {"length_m": 5.21, "width_m": 3.84, "source": "measured"}, rtype="bedroom")])
+    sheet.drawing["source_ext"] = "pdf"
+    b = da.try_answer("What are the dimensions of the bedroom?", "en", sheet)
+    assert "traced on the sheet image" in b.body["answer"]["value"] and "scan" not in b.body["answer"]["value"]
+    assert b.body["basis"] == "estimate"
