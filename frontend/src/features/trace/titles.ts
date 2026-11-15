@@ -69,6 +69,18 @@ const BODIES: Record<string, Tr> = {
     fi: 'Tämän PDF:n huoneet luettiin sen vektoriviivoista ja painetusta tekstistä, joten lukumäärät ja pinta-alat tulevat siitä ilman kuvamallia.',
     it: 'I locali di questo PDF sono stati letti dalle linee vettoriali e dal testo stampato: conteggi e superfici vengono da questo indice, senza modello d’immagine.',
   },
+  'The drawing store indexed this upload; these items were detected on the page image by a model, so the count is an estimate.': {
+    de: 'Der Zeichnungsspeicher hat diesen Upload indexiert; diese Elemente wurden von einem Modell im Seitenbild erkannt, die Zählung ist daher eine Schätzung.',
+    fr: 'Le magasin de dessins a indexé cet envoi ; ces éléments ont été détectés par un modèle sur l’image de la page, le comptage est donc une estimation.',
+    fi: 'Piirustusvarasto indeksoi tämän latauksen; malli tunnisti nämä kohteet sivun kuvasta, joten lukumäärä on arvio.',
+    it: 'L’archivio dei disegni ha indicizzato questo caricamento; gli elementi sono stati rilevati da un modello sull’immagine della pagina, quindi il conteggio è una stima.',
+  },
+  'No independent image to check against: this drawing has only its own geometry, and checking our own rendering would be circular.': {
+    de: 'Kein unabhängiges Bild zum Gegenprüfen: Diese Zeichnung hat nur ihre eigene Geometrie, und unsere eigene Darstellung zu prüfen wäre ein Zirkelschluss.',
+    fr: 'Aucune image indépendante pour vérifier : ce dessin n’a que sa propre géométrie, et vérifier notre propre rendu serait circulaire.',
+    fi: 'Ei riippumatonta kuvaa tarkistukseen: tällä piirustuksella on vain oma geometriansa, ja oman renderöintimme tarkistaminen olisi kehäpäätelmä.',
+    it: 'Nessuna immagine indipendente con cui confrontare: questo disegno ha solo la propria geometria, e controllare la nostra stessa resa sarebbe circolare.',
+  },
   'These values were read by OCR from the page image, so the answer is an estimate.': {
     de: 'Diese Werte wurden per OCR aus dem Seitenbild gelesen; die Antwort ist daher eine Schätzung.',
     fr: 'Ces valeurs ont été lues par OCR sur l’image de la page ; la réponse est donc une estimation.',
@@ -134,6 +146,65 @@ const PATTERNS: [RegExp, (m: RegExpMatchArray, lang: Lang) => string | null][] =
     de: `${m[1]} m², im Plan gezeigt.`, fr: `${m[1]} m², montré sur le plan.`,
     fi: `${m[1]} m², näytetty pohjassa.`, it: `${m[1]} m², mostrato sulla pianta.`,
   }[lang as 'de' | 'fr' | 'fi' | 'it'] ?? null)],
+  [/^(\d+) rooms?\. Each room is lit on the plan for you to check\.$/, (m, lang) => {
+    const w = noun('room', Number(m[1]), lang)
+    return ({
+      de: `${m[1]} ${w}. Jeder Raum ist zur Kontrolle im Plan hervorgehoben.`,
+      fr: `${m[1]} ${w}. Chaque pièce est mise en évidence sur le plan pour vérification.`,
+      fi: `${m[1]} ${w}. Jokainen huone on korostettu pohjassa tarkistettavaksi.`,
+      it: `${m[1]} ${w}. Ogni locale è evidenziato sulla pianta per il controllo.`,
+    }[lang as 'de' | 'fr' | 'fi' | 'it'] ?? null)
+  }],
+  [/^(\d+) rooms? \((\d+) labelled, (\d+) without a label\)\. Each room is lit on the plan for you to check\.$/, (m, lang) => {
+    const w = noun('room', Number(m[1]), lang)
+    return ({
+      de: `${m[1]} ${w} (${m[2]} beschriftet, ${m[3]} ohne Beschriftung). Jeder Raum ist zur Kontrolle im Plan hervorgehoben.`,
+      fr: `${m[1]} ${w} (${m[2]} avec libellé, ${m[3]} sans libellé). Chaque pièce est mise en évidence sur le plan pour vérification.`,
+      fi: `${m[1]} ${w} (${m[2]} nimettyä, ${m[3]} ilman nimeä). Jokainen huone on korostettu pohjassa tarkistettavaksi.`,
+      it: `${m[1]} ${w} (${m[2]} con etichetta, ${m[3]} senza etichetta). Ogni locale è evidenziato sulla pianta per il controllo.`,
+    }[lang as 'de' | 'fr' | 'fi' | 'it'] ?? null)
+  }],
+  [/^0 ([a-z]+): no [a-z]+ was read on this sheet\.$/, (m, lang) => {
+    const w = noun(m[1], 0, lang)
+    if (!w) return null
+    return ({
+      de: `0 ${w}: auf diesem Blatt wurde nichts davon gelesen.`,
+      fr: `0 ${w} : aucune n’a été lue sur cette feuille.`,
+      fi: `0 ${w}: tältä lehdeltä ei luettu yhtään.`,
+      it: `0 ${w}: su questo foglio non ne è stato letto nessuno.`,
+    }[lang as 'de' | 'fr' | 'fi' | 'it'] ?? null)
+  }],
+  [/^(\d+) numbered rooms? on this floor plan(?:; (\d+) outdoor left out)?\.$/, (m, lang) => {
+    const out = m[2]
+    return ({
+      de: `${m[1]} nummerierte Räume auf diesem Grundriss` + (out ? `; ${out} im Freien nicht mitgezählt.` : '.'),
+      fr: `${m[1]} pièces numérotées sur ce plan` + (out ? ` ; ${out} en extérieur non comptées.` : '.'),
+      fi: `${m[1]} numeroitua huonetta tässä pohjassa` + (out ? `; ${out} ulkotilaa jätetty pois.` : '.'),
+      it: `${m[1]} locali numerati su questa pianta` + (out ? `; ${out} esterni esclusi.` : '.'),
+    }[lang as 'de' | 'fr' | 'fi' | 'it'] ?? null)
+  }],
+  [/^Read (\d+) rooms? from the indexed drawing in (\d+) ms\.$/, (m, lang) => ({
+    de: `${m[1]} Räume aus der indexierten Zeichnung gelesen, in ${m[2]} ms.`,
+    fr: `${m[1]} pièces lues dans le dessin indexé en ${m[2]} ms.`,
+    fi: `${m[1]} huonetta luettu indeksoidusta piirustuksesta, ${m[2]} ms.`,
+    it: `${m[1]} locali letti dal disegno indicizzato in ${m[2]} ms.`,
+  }[lang as 'de' | 'fr' | 'fi' | 'it'] ?? null)],
+  [/^Read the indexed room table: (\d+) rooms? with their printed or outlined areas in (\d+) ms, (\d+) model calls\.$/, (m, lang) => ({
+    de: `Indexierte Raumtabelle gelesen: ${m[1]} Räume mit gedruckten oder umrissenen Flächen in ${m[2]} ms, ${m[3]} Modellaufrufe.`,
+    fr: `Table des pièces indexée lue : ${m[1]} pièces avec leurs surfaces imprimées ou tracées en ${m[2]} ms, ${m[3]} appels de modèle.`,
+    fi: `Indeksoitu huonetaulukko luettu: ${m[1]} huonetta painetuin tai rajatuin pinta-aloin, ${m[2]} ms, ${m[3]} mallikutsua.`,
+    it: `Tabella dei locali indicizzata letta: ${m[1]} locali con superfici stampate o tracciate in ${m[2]} ms, ${m[3]} chiamate al modello.`,
+  }[lang as 'de' | 'fr' | 'fi' | 'it'] ?? null)],
+  [/^(\d+) ([a-z]+) found by the drawing store's symbol detection \(a model estimate\)\.$/, (m, lang) => {
+    const w = noun(m[2], Number(m[1]), lang)
+    if (!w) return null
+    return ({
+      de: `${m[1]} ${w} von der Symbolerkennung des Zeichnungsspeichers gefunden (eine Modellschätzung).`,
+      fr: `${m[1]} ${w} trouvées par la détection de symboles du magasin de dessins (estimation du modèle).`,
+      fi: `${m[1]} ${w} löytyi piirustusvaraston symbolintunnistuksella (mallin arvio).`,
+      it: `${m[1]} ${w} trovati dal rilevamento dei simboli dell’archivio dei disegni (stima del modello).`,
+    }[lang as 'de' | 'fr' | 'fi' | 'it'] ?? null)
+  }],
 ]
 
 /**

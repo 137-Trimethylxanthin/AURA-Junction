@@ -614,3 +614,12 @@ perimeter questions abstain. None is a reader fault that a general rule would fi
 - `AREA UNDER PRECAST` (once in each of the two 1810 S Park sets) is an area note, not a room tag; the outline found
   at the label is of another size than the 3,3xx SF printed, and is dropped by the size check.
 - `STORAGE` (8,394 SF) is the whole storage hall; no outline was returned for it on the page render.
+
+### Reasoning tree: the most frequent step sentences in the interface language
+
+`frontend/src/features/trace/titles.ts` now also translates (de/fr/fi/it) the step sentences that occur most often in
+the stored answers: room counts ("N rooms. Each room is lit ...", with and without the labelled/unlabelled split),
+zero counts on a sheet, numbered rooms with outdoor ones left out, the two "read the indexed rooms" steps, the
+store's symbol-detection count, and two fixed notes (store-indexed upload; no independent image to check against).
+Rarer sentences composed by a tool or the model (IFC storey names, verifier tallies, layer notes) stay as sent.
+Frontend suite: 373 passed.

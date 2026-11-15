@@ -50,4 +50,16 @@ describe('traceTag and traceHint', () => {
   it('has a hint for every language', () => {
     for (const l of ['en', 'de', 'fr', 'fi', 'it'] as const) expect(traceHint(l).length).toBeGreaterThan(20)
   })
+
+  it('translates the frequent room and store sentences', () => {
+    expect(traceBody('19 rooms. Each room is lit on the plan for you to check.', 'de'))
+      .toBe('19 Räume. Jeder Raum ist zur Kontrolle im Plan hervorgehoben.')
+    expect(traceBody('21 numbered rooms on this floor plan; 2 outdoor left out.', 'de'))
+      .toBe('21 nummerierte Räume auf diesem Grundriss; 2 im Freien nicht mitgezählt.')
+    expect(traceBody('0 rooms: no room was read on this sheet.', 'fi')).toBe('0 huonetta: tältä lehdeltä ei luettu yhtään.')
+    expect(traceBody("129 doors found by the drawing store's symbol detection (a model estimate).", 'de'))
+      .toContain('129 Türen')
+    expect(traceBody('Read 19 rooms from the indexed drawing in 0 ms.', 'it')).toContain('19 locali')
+    expect(traceBody('19 rooms. Each room is lit on the plan for you to check.', 'en')).toContain('Each room is lit')
+  })
 })
