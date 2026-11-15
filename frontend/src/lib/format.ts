@@ -64,7 +64,7 @@ export function fmtRoomArea(area: number, source: string | undefined, lang: Lang
 
 /** "(estimate)" in the language of the interface. */
 export function estimateTag(lang: Lang): string {
-  return ({ en: '(estimate)', fr: '(estimation)', fi: '(arvio)', de: '(Schätzung)' } as Record<string, string>)[lang] ?? '(estimate)'
+  return ({ en: '(estimate)', fr: '(estimation)', fi: '(arvio)', de: '(Schätzung)', it: '(stima)' } as Record<string, string>)[lang] ?? '(estimate)'
 }
 
 export function fmtCount(n: number, lang: Lang): string {
@@ -199,4 +199,13 @@ export function noun(subject: BoxSubjectAny, n: number, lang: Lang): string {
 /** "12 windows", "1 ikkuna", "22 ovea". */
 export function countPhrase(subject: BoxSubjectAny, n: number, lang: Lang): string {
   return `${fmtCount(n, lang)} ${noun(subject, n, lang)}`
+}
+
+/**
+ * The plan image in the interface language: a plan.svg whose scale was estimated carries a footnote drawn inside
+ * the image, which the server translates on `?lang=`. English and other images are requested as they are.
+ */
+export function localisedPlanSrc(src: string, lang: Lang): string {
+  if (lang === 'en' || !/\/plan\.svg(?:\?|$)/.test(src)) return src
+  return `${src}${src.includes('?') ? '&' : '?'}lang=${lang}`
 }

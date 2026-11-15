@@ -21,6 +21,7 @@ _THING = r"(?:drawing|sheet|plan|floor ?plan|page|file|image|document|picture)"
 _DE = r"(?:zeichnung|plan|grundriss|blatt|seite|datei|bild)"
 _FR = r"(?:dessin|plan|feuille|page|fichier|image|document)"
 _FI = r"(?:piirustus|piirustuksessa|pohjapiirros|pohjapiirroksessa|kuva|kuvassa|sivu|sivulla|tiedosto)"
+_IT = r"(?:disegno|pianta|planimetria|tavola|foglio|pagina|file|immagine|documento)"
 _END = r"[\s?.!…]*$"
 ASK = re.compile(
     r"^\s*(?:please\s+|can you\s+|could you\s+|bitte\s+)?(?:"
@@ -41,32 +42,38 @@ ASK = re.compile(
     rf"|décri(?:s|vez|re) (?:ce|cette|le|la) {_FR}"
     rf"|mitä (?:tämä|tässä|tällä) {_FI} (?:esittää|näyttää|kuvaa|on)"
     rf"|kuvaile (?:tämä|tätä) {_FI}"
+    rf"|(?:che )?cosa (?:mostra|rappresenta|contiene|raffigura) quest[oa'’] ?{_IT}"
+    rf"|(?:che )?cos['’ ]?[èe] quest[oa'’] ?{_IT}"
+    rf"|(?:che )?cosa (?:si vede|c['’ ]?è|è raffigurato|è rappresentato) (?:in|su) quest[oa'’] ?{_IT}"
+    rf"|descriv(?:i|a|ere|imi) quest[oa'’] ?{_IT}"
     rf"){_END}", re.IGNORECASE)
 
 # the kind of sheet, read from its title (first match wins): (pattern, {lang: name})
 SHEET_KINDS: list[tuple[re.Pattern[str], dict[str, str]]] = [
     (re.compile(r"\bsite\s*plan\b|\blageplan\b|\bplan de (?:masse|situation)\b|\basemapiirros\b", re.IGNORECASE),
-     {"en": "a site plan", "de": "ein Lageplan", "fr": "un plan de masse", "fi": "asemapiirros"}),
+     {"en": "a site plan", "de": "ein Lageplan", "fr": "un plan de masse", "fi": "asemapiirros", "it": "una planimetria generale"}),
     (re.compile(r"\belevations?\b|\bansicht(?:en)?\b|\bfa[cç]ades?\b|\bjulkisivu", re.IGNORECASE),
-     {"en": "an elevation sheet", "de": "ein Ansichtsblatt", "fr": "une feuille d’élévations", "fi": "julkisivupiirustus"}),
+     {"en": "an elevation sheet", "de": "ein Ansichtsblatt", "fr": "une feuille d’élévations", "fi": "julkisivupiirustus", "it": "una tavola di prospetti"}),
     (re.compile(r"\bsections?\b|\bschnitte?\b|\bcoupes?\b|\bleikkaus", re.IGNORECASE),
-     {"en": "a section sheet", "de": "ein Schnittblatt", "fr": "une feuille de coupes", "fi": "leikkauspiirustus"}),
+     {"en": "a section sheet", "de": "ein Schnittblatt", "fr": "une feuille de coupes", "fi": "leikkauspiirustus", "it": "una tavola di sezioni"}),
     (re.compile(r"\bschedules?\b|\blegend\b|\bt[üu]rliste\b|\bnomenclature\b", re.IGNORECASE),
      {"en": "a schedule sheet (not a plan)", "de": "ein Listenblatt (kein Grundriss)",
-      "fr": "une feuille de nomenclature (pas un plan)", "fi": "luettelolehti (ei pohjapiirros)"}),
+      "fr": "une feuille de nomenclature (pas un plan)", "fi": "luettelolehti (ei pohjapiirros)",
+      "it": "una tavola di abachi (non una pianta)"}),
     (re.compile(r"\bdetails?\b|\bdetailzeichnung\b|\bd[ée]tails?\b|\bdetalji", re.IGNORECASE),
-     {"en": "a detail sheet", "de": "ein Detailblatt", "fr": "une feuille de détails", "fi": "detaljipiirustus"}),
+     {"en": "a detail sheet", "de": "ein Detailblatt", "fr": "une feuille de détails", "fi": "detaljipiirustus", "it": "una tavola di dettagli"}),
     (re.compile(r"\b(?:cover|title)\s*(?:sheet|page)\b|\bgeneral notes\b|\bdeckblatt\b", re.IGNORECASE),
      {"en": "a cover or notes sheet (not a plan)", "de": "ein Deck- oder Hinweisblatt (kein Grundriss)",
-      "fr": "une page de garde ou de notes (pas un plan)", "fi": "kansi- tai huomautuslehti (ei pohjapiirros)"}),
+      "fr": "une page de garde ou de notes (pas un plan)", "fi": "kansi- tai huomautuslehti (ei pohjapiirros)",
+      "it": "un frontespizio o una tavola di note (non una pianta)"}),
     (re.compile(r"\broof\s*plan\b|\bdachaufsicht\b|\bplan de toiture\b", re.IGNORECASE),
-     {"en": "a roof plan", "de": "eine Dachaufsicht", "fr": "un plan de toiture", "fi": "kattopiirustus"}),
+     {"en": "a roof plan", "de": "eine Dachaufsicht", "fr": "un plan de toiture", "fi": "kattopiirustus", "it": "una pianta della copertura"}),
     (re.compile(r"\bfloor\s*plan\b|\bgrundriss\b|\bplan d['’]étage\b|\bpohjapiirros\b|\b(?:first|second|third|ground|"
                 r"basement|upper|lower|main)\s+(?:floor|level)\b|\bfloor\b|\bgeschoss\b|\bétage\b|\bkerros\b", re.IGNORECASE),
-     {"en": "a floor plan", "de": "ein Grundriss", "fr": "un plan d’étage", "fi": "pohjapiirros"}),
+     {"en": "a floor plan", "de": "ein Grundriss", "fr": "un plan d’étage", "fi": "pohjapiirros", "it": "una pianta"}),
 ]
 FLOOR_PLAN = SHEET_KINDS[-1][1]
-DRAWING = {"en": "a drawing", "de": "eine Zeichnung", "fr": "un dessin", "fi": "piirustus"}
+DRAWING = {"en": "a drawing", "de": "eine Zeichnung", "fr": "un dessin", "fi": "piirustus", "it": "un disegno"}
 
 FORMATS = {"DWG", "DXF", "IFC", "PDF", "PNG", "JPG", "SVG"}
 FORMAT_OF_KIND = {"cad_dxf": "CAD", "ifc": "IFC", "raster": "image"}
@@ -83,6 +90,9 @@ NOUNS: dict[str, dict[str, tuple[str, str]]] = {
            "fixture": ("équipement", "équipements"), "dimension": ("cote imprimée", "cotes imprimées")},
     "fi": {"room": ("huone", "huonetta"), "door": ("ovi", "ovea"), "window": ("ikkuna", "ikkunaa"),
            "fixture": ("kaluste", "kalustetta"), "dimension": ("mittamerkintä", "mittamerkintää")},
+    "it": {"room": ("locale", "locali"), "door": ("porta", "porte"), "window": ("finestra", "finestre"),
+           "fixture": ("elemento di arredo o sanitario", "elementi di arredo e sanitari"),
+           "dimension": ("quota stampata", "quote stampate")},
 }
 TEXT = {
     "en": {"is": "“{title}” is {kind}", "from": " from {source}", "page": "page {n} of {m}", "found": "Read from it: {list}.",
@@ -97,6 +107,9 @@ TEXT = {
     "fi": {"is": "”{title}” on {kind}", "from": ", lähde {source}", "page": "sivu {n}/{m}", "found": "Siitä luettu: {list}.",
            "and": " ja ", "none": "Siitä ei luettu huoneita, ovia, ikkunoita, kalusteita eikä mittamerkintöjä.",
            "outdoor": " (joista {n} ulkona)", "this_page": "Luvut koskevat näytettyä sivua."},
+    "it": {"is": "«{title}» è {kind}", "from": " da {source}", "page": "pagina {n} di {m}", "found": "Vi è stato letto: {list}.",
+           "and": " e ", "none": "Non vi sono stati letti locali, porte, finestre, elementi di arredo o quote stampate.",
+           "outdoor": " (di cui {n} esterni)", "this_page": "I conteggi valgono per la pagina mostrata."},
 }
 
 
@@ -163,7 +176,8 @@ def describe(doc: dict, lang: str) -> str:
 
 
 _LANG_OF = [("de", re.compile(r"^\W*(?:bitte\s+)?(?:was|beschreib)", re.IGNORECASE)), ("fr", re.compile(r"^\W*(?:que?\b|qu['’]|décri)", re.IGNORECASE)),
-            ("fi", re.compile(r"^\W*(?:mitä|kuvaile)", re.IGNORECASE))]
+            ("fi", re.compile(r"^\W*(?:mitä|kuvaile)", re.IGNORECASE)),
+            ("it", re.compile(r"^\W*(?:che cos|cos['’ ]?[èea]|descriv)", re.IGNORECASE))]
 
 
 def try_answer(question: str, lang: str, d: LoadedDrawing) -> A.Built | None:
