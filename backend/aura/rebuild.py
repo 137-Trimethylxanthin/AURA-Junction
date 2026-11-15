@@ -65,6 +65,29 @@ def _ring(points: Any) -> list[list[float]] | None:
     return [[float(p[0]), float(p[1])] for p in points]
 
 
+def plausible_plan(vec: dict) -> bool:
+    """True when the traced geometry looks like a floor plan: a modest share of wall ink (a photo, an
+    elevation or a hatched section is mostly "wall"; a faint scan has almost none) and at least one
+    enclosed room-sized region, none covering most of the sheet. Calibrated on the dataset's plans vs its photos,
+    elevations and sections (plans: 2-8 % wall; non-plans: 60-80 % or under 0.5 %)."""
+    from shapely.geometry import Polygon
+
+    w, h = float(vec.get("width") or 0), float(vec.get("height") or 0)
+    if w <= 0 or h <= 0:
+        return False
+    area = w * h
+    wall = 0.0
+    for wl in vec.get("walls") or []:
+        outer = wl.get("outer") if isinstance(wl, dict) else wl
+        if not outer or len(outer) < 3:
+            continue
+        holes = wl.get("holes", []) if isinstance(wl, dict) else []
+        wall += max(0.0, Polygon(outer).area - sum(Polygon(x).area for x in holes if len(x) >= 3))
+    rooms = [float(r.get("area_px") or 0) for r in vec.get("rooms") or [] if isinstance(r, dict)]
+    big = [a for a in rooms if a >= 0.002 * area]
+    return 0.005 <= wall / area <= 0.30 and len(big) >= 1 and max(rooms, default=0) <= 0.6 * area
+
+
 def refine_rooms(drawing: dict, vec: dict) -> dict:
     """Room outlines from the vector plan: each labelled room takes the enclosed region its label sits in.
     Several labels in one region (an open kitchen-living) split it by nearest label (Voronoi cells clipped to
@@ -150,6 +173,9 @@ def apply(out_dir: Path, drawing: dict) -> dict:
             return drawing
         vec = _vector(out_dir)
         if not vec or not vec.get("walls"):
+            return drawing
+        if not plausible_plan(vec):  # a photo, elevation or section: keep the original, no rebuild
+            log.info("no vector rebuild for %s: does not look like a floor plan", drawing.get("id"))
             return drawing
         images = dict(drawing.get("images") or {})
         base = f"/drawings/{drawing['id']}"

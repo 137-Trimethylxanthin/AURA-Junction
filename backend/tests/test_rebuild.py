@@ -86,3 +86,28 @@ def test_apply_end_to_end_on_a_drawn_plan(tmp_path):
     # perimeter; m² at 0.1 m per pct.
     truth = (500 * 200 + 250 * 200 - 2000 * 5) / (800 * 600) * 100 * 100 * 0.1 * 0.1
     assert room["area_m2"] == pytest.approx(truth, rel=0.05)
+
+
+def test_a_photo_or_elevation_gets_no_rebuild(tmp_path):
+    """Mostly ink (a photo, an elevation): the original stays the plan shown, Compare is hidden."""
+    from PIL import Image, ImageDraw
+
+    im = Image.new("RGB", (800, 600), "white")
+    g = ImageDraw.Draw(im)
+    g.rectangle((40, 40, 760, 560), fill=(60, 60, 60))  # a dark photo-like blob
+    for x in range(60, 740, 40):
+        g.line((x, 60, x, 540), fill="white", width=3)
+    im.save(tmp_path / "original.png")
+    d = {"id": "up-p", "images": {"rebuilt": "/drawings/up-p/original.png"}, "rooms": []}
+    out = rebuild.apply(tmp_path, d)
+    assert out is d and not (tmp_path / "plan.svg").exists()
+
+
+def test_plausible_plan_on_traced_geometry():
+    plan = {"width": 1000, "height": 500, "walls": [{"outer": [[0, 0], [1000, 0], [1000, 10], [0, 10]]},
+                                                  {"outer": [[0, 0], [10, 0], [10, 500], [0, 500]]}],
+            "rooms": [{"area_px": 40000}, {"area_px": 30000}]}
+    assert rebuild.plausible_plan(plan)
+    assert not rebuild.plausible_plan(plan | {"rooms": [{"area_px": 400}]})
+    blob = plan | {"walls": [{"outer": [[0, 0], [1000, 0], [1000, 400], [0, 400]]}]}
+    assert not rebuild.plausible_plan(blob)
