@@ -44,6 +44,20 @@ PLURAL = {'door': 'doors', 'window': 'windows', 'room': 'rooms (spaces)', 'wall'
           'light': 'light fixtures'}
 
 
+#: project names an authoring tool writes when nobody named the project: they say nothing about the building
+PLACEHOLDER_PROJECT = re.compile(r"\s*(?:default\s+project|project(?:\s*(?:name|number|#?\d+))?|unnamed(?:\s+project)?|"
+                                 r"untitled(?:\s+project)?|projekt|undefined|none|n/?a|-+|\?+)?\s*", re.IGNORECASE)
+
+
+def project_title(name: str | None, stem: str) -> str:
+    """The IFC project's own name, or, when that is empty or a known placeholder, the file's name made readable
+    ('hitos_arc' -> 'Hitos arc')."""
+    if name and not PLACEHOLDER_PROJECT.fullmatch(str(name)):
+        return str(name)
+    pretty = re.sub(r"[_\-.]+", " ", stem).strip()
+    return (pretty[:1].upper() + pretty[1:]) if pretty else stem
+
+
 @dataclass
 class IfcModel:
     id: str
@@ -253,7 +267,7 @@ def load(ifc_path: str | Path, storey: str | None = None, drawing_id: str | None
         el.pop('id', None)
 
     proj = f.by_type('IfcProject')
-    project = (proj[0].LongName or proj[0].Name or ifc_path.stem) if proj else ifc_path.stem
+    project = project_title((proj[0].LongName or proj[0].Name) if proj else None, ifc_path.stem)
     if drawing_id is None:
         slug = re.sub(r'[^a-z0-9]+', '-', (storey or 'model').lower()).strip('-')
         drawing_id = f'ifc-{ifc_path.stem}' + (f'--{slug}' if storey else '')

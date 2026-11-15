@@ -107,8 +107,9 @@ def test_prose_shows_both_values():
     assert U.convert_prose(t, U.BY_KEY["sqft"]) == (
         "Sum of 12 net room areas = 3,675 sq ft (341.42 m²), hall 41.01 ft (12.5 m) wide, "
         "13,288 sq ft (1,234.5 m2) in total; 3 mm joints.")
-    assert U.convert_prose("Fläche 341,42 m².", U.BY_KEY["sqft"], "de") == "Fläche 3.675 sq ft (341,42 m²).".replace(
-        "3.675", "3 675")
+    # thousands as the interface's own number format writes them: de 3.675, fr 3 675 (narrow no-break space)
+    assert U.convert_prose("Fläche 341,42 m².", U.BY_KEY["sqft"], "de") == "Fläche 3.675 sq ft (341,42 m²)."
+    assert U.convert_prose("Surface 341,42 m².", U.BY_KEY["sqft"], "fr") == "Surface 3\u202f675 sq ft (341,42 m²)."
     assert U.convert_prose("12.5 m", U.BY_KEY["acre"]) == "12.5 m"  # acres have no length
 
 
@@ -230,7 +231,7 @@ def test_exact_route_cache_and_default_metric(tmp_path):
         assert "display" not in again and "sq ft" not in json.dumps(again)  # the cache stayed metric
         de = ask("Wie groß ist die Nettofläche von Wohnung A in Quadratfuß?")
         assert de["answer"]["kind"] == "area" and de["display"]["unit"] == "sqft"
-        assert de["detected_lang"] == "de" and " " in de["display"]["text"] or de["display"]["value"] < 1000
+        assert de["detected_lang"] == "de" and "1.500 sq ft" == de["display"]["text"] or de["display"]["value"] < 1000
 
 
 def test_chat_follow_up_in_another_unit(tmp_path):
@@ -306,3 +307,20 @@ def test_a_converted_estimate_keeps_the_approximately_sign_and_no_false_decimals
     exact = U.apply({**resp, "answer": {"kind": "area", "value": 22.3, "unit": "m2"}}, U.BY_KEY["sqft"])
     assert exact["display"]["text"] == "240 sq ft" and exact["display"]["metric_text"] == "22.30 m²"
     assert U.metric_response(out)["explanation"] == resp["explanation"]
+
+
+def test_said_in_the_language_of_the_question():
+    from aura import answer as A
+    from aura.solvers import ifc
+
+    en = "0 windows: this storey of the model file contains no window elements."
+    assert A.none_in_model_said("en", "window", en) == en
+    assert A.none_in_model_said("it", "window", en) == en  # Italian answers in English
+    assert A.none_in_model_said("de", "window", en) == "0 Fenster: dieses Geschoss der Modelldatei enthält keine Fenster-Elemente."
+    assert A.none_in_model_said("fr", "door", "0 doors: the model file contains no door elements.").startswith("0 portes : la maquette")
+    assert A.OUTDOOR_NOTE["en"][0].format(n=1) == "(1 outdoor space not counted)"
+    # a placeholder project name gives way to the file's name
+    assert ifc.project_title("Default Project", "hitos_arc") == "Hitos arc"
+    assert ifc.project_title("", "ac20") == "Ac20" and ifc.project_title(None, "x") == "X"
+    assert ifc.project_title("Projekt Buerogebaeude", "ac20") == "Projekt Buerogebaeude"
+    assert ifc.project_title("Project", "a-b") == "A b" and ifc.project_title("Unnamed", "m") == "M"

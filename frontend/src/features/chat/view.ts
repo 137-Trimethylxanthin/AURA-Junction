@@ -320,6 +320,21 @@ function roomLabel(room: RoomPoly | undefined, id: string | undefined): string {
   return `${room.name} ${room.num}`
 }
 
+/** A machine id (an IFC GlobalId of 22 characters, a `<sheet>:<id>` remap) is never a badge: 6 characters of it are. */
+const MACHINE_ID = /^(?:[0-9A-Za-z_$]{22}|.*:.*)$/
+const shortId = (id: string) => (id.split(':').pop() ?? id).slice(0, 6)
+
+function roomBadge(num: string | undefined, id: string): string {
+  if (num) return num
+  return MACHINE_ID.test(id) ? shortId(id) : id
+}
+
+function roomFallbackName(num: string | undefined, id: string, lang: Lang): string {
+  const word = cap(noun('room', 1, lang))
+  if (num) return `${word} ${num}`
+  return MACHINE_ID.test(id) ? `${word} ${shortId(id)}` : id
+}
+
 export function rows(
   resp: AskResponse,
   toggles: Toggles,
@@ -375,8 +390,8 @@ export function rows(
     return {
       id: roomEvidenceId(r.room_id),
       kind: 'room',
-      badge: poly?.num ?? r.room_id,
-      title: `${poly?.name ?? r.room_id}${poly?.outdoor ? ` (${t(lang, 'outdoor')})` : ''}`,
+      badge: roomBadge(poly?.num || r.num, r.room_id),
+      title: `${poly?.name || r.name || roomFallbackName(poly?.num || r.num, r.room_id, lang)}${poly?.outdoor ? ` (${t(lang, 'outdoor')})` : ''}`,
       sub: `${on && r.area_m2 !== null ? '+ ' : ''}${area}${r.edited ? ` · ${t(lang, 'your_whatif_size')}` : ''}${grp ? ` · ${grp.label}` : ''}`,
       ...(grp ? { groupId: grp.id, groupColor: grp.color, groupLabel: grp.label } : {}),
       ...(drawingId ? { drawingId } : {}),

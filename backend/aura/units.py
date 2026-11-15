@@ -140,7 +140,8 @@ def fmt_number(v: float, lang: str = "en", decimals: int | None = None) -> str:
     if not fixed and "." in s:
         s = s.rstrip("0").rstrip(".")  # 200 sq ft, not 200.0
     if lang in _DEC_COMMA:
-        s = s.replace(",", " ").replace(".", ",")
+        # the thousands separator the interface's own number format writes (Intl: de 3.675, fr and fi 3 675)
+        s = s.replace(",", "\x00").replace(".", ",").replace("\x00", "." if lang in ("de", "it") else " ")
     return s
 
 

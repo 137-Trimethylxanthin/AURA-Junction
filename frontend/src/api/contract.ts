@@ -516,6 +516,9 @@ export interface EvidenceRoom {
   group_id?: string
   /** 1.2: floor drawing id when evidence spans a multi-plan house/project bundle. */
   drawing_id?: string
+  /** Additive: name and number of a room of another floor (the open drawing holds only its own rooms). */
+  name?: string
+  num?: string
 }
 
 /** 1.2: categorical color-coded evidence group (e.g. Apartment A, Stair S1 -> 1. OG). */
@@ -1214,7 +1217,9 @@ const evRoomOk = (r: unknown) =>
   (r.area_m2 === null || isNum(r.area_m2)) &&
   (r.edited === undefined || typeof r.edited === 'boolean') &&
   optStr(r.group_id) &&
-  optStr(r.drawing_id)
+  optStr(r.drawing_id) &&
+  optStr(r.name) &&
+  optStr(r.num)
 const evRowOk = (r: unknown) => isObj(r) && isStr(r.id) && optStr(r.name) && optNum(r.value)
 
 /**
