@@ -7,10 +7,10 @@ was checked, and what is still open.
 
 ## Result at a glance (written 02:15 UTC, last updated 05:55 UTC)
 
-Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `4fe7a9d`. Not pushed
+Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `4ea2805`. Not pushed
 (no GitHub credentials on the devbox): `git push -u origin overnight-improvements`.
-Suites on the final tree: backend 767 passed / 35 skipped, store 225 passed / 1 skipped,
-frontend 368 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
+Suites on the final tree: backend 767 passed / 35 skipped, store 226 passed,
+frontend 370 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
 duplicate removal, Italian interface) and the open findings of the closing sweep are described at
 the end of this file.
 
@@ -575,3 +575,13 @@ floors" chosen: "What is the total net floor area?" → 453.12 m² (38 rooms inc
 out), "How many doors are there?" answered; after a page reload "How many windows are there?" →
 24 (18 + 6), all "Exact · CAD geometry" with 0 model calls and no failed request; the test project
 was ungrouped afterwards and is gone from the library. Screenshots `/root/aura-deploy/verify/grp-*.png`.
+
+### Reasoning tree in the interface language (deployed `4ea2805`)
+
+The fixed sentences of reasoning-tree steps (which source answers and why, "No model has checked
+this answer", the abstention line) and the count and area sentences around numbers ("36 doors. Each
+one is drawn on the plan for you to check.", "Sum of 31 net room areas = …") are shown in
+de/fr/fi/it by a frontend table (`features/trace/titles.ts`), next to the step titles. Checked on
+the live site in the German interface on a Swiss plan: titles and the source sentence are German.
+Still English there: step tags ("router", "DXF · door layer"), a tool's own summary sentence, the
+image-check paragraph, and one hint line under the tree. Suites: frontend 370 passed.
