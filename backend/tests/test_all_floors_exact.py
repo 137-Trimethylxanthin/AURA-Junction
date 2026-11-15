@@ -105,3 +105,44 @@ def test_largest_room_under_an_estimated_scale_is_approximate_in_the_answer():
     exact = _floor("cad", [_room("a", "Zimmer", 11.95)])
     ans = A.room_rank("largest room?", "en", exact, tools.rank_rooms(exact, "max", {"kind": "floor"}), {"kind": "floor"}, []).body["answer"]
     assert "approximate" not in ans and "11.95 m²" in ans["value"]
+
+
+def test_model_file_without_spaces_counts_zero_rooms_not_unknown():
+    door = {"id": "door-01", "x": 1, "y": 1, "w": 2, "h": 2, "subject": "door"}
+    a = _floor("m--a", [], kind="ifc", evidence={"door": [door]}, evidence_method={"door": "cad_geometry"})
+    b = _floor("m--b", [], kind="ifc", evidence={"door": [door]}, evidence_method={"door": "cad_geometry"})
+    d, scope = _group(a, b)
+    one = tools.count_objects(a, "room", {"kind": "floor"})
+    assert one.kind == "count" and one.value == 0
+    assert "this storey of the model file contains no room (space) elements" in one.summary
+    body = A.count("How many rooms are there?", "en", a, one, {"kind": "floor"}, None).body
+    assert body["answer"] == {"kind": "count", "value": 0, "subject": "room"}
+    assert "contains no room (space) elements" in body["explanation"]
+    tr = tools.count_objects(d, "room", scope)
+    assert tr.kind == "count" and tr.value == 0 and tr.meta["none_in_model"]
+    body = A.count("How many rooms are there?", "en", d, tr, scope, None).body
+    assert body["answer"] == {"kind": "count", "value": 0, "subject": "room"}
+    assert "the model file contains no room (space) elements on these 2 floors" in body["explanation"]
+    # a scan without rooms still abstains: nothing lists its elements
+    assert tools.count_objects(_floor("s", [], kind="raster", evidence={"door": []}), "room").kind == "none"
+
+
+def test_this_floor_is_recognised_in_finnish_inflections():
+    from aura.building import THIS_FLOOR
+    for q in ("Montako ovea tässä kerroksessa on?", "Montako ovea tässä pohjapiirroksessa on?",
+              "Montako huonetta tällä kerroksella on?", "How many windows are on this storey?"):
+        assert THIS_FLOOR.search(q), q
+    assert not THIS_FLOOR.search("Montako ovea rakennuksessa on?")
+
+
+def test_room_count_says_how_many_rooms_have_no_label():
+    rooms = [_room("1", "OH", 20.0), _room("2", "MH", 10.0),
+             _room("3", "Room without label", 4.0) | {"unlabelled": True}]
+    d = _floor("scan", rooms, kind="raster")
+    tr = tools.count_objects(d, "room", {"kind": "floor"})
+    body = A.count("How many rooms are there?", "en", d, tr, {"kind": "floor"}, None).body
+    assert body["answer"] == {"kind": "count", "value": 3, "subject": "room"}
+    assert body["explanation"].startswith("3 rooms (2 labelled, 1 without a label).")
+    plain = _floor("cad", rooms[:2])
+    body = A.count("How many rooms are there?", "en", plain, tools.count_objects(plain, "room"), {"kind": "floor"}, None).body
+    assert "explanation" not in body

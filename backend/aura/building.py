@@ -82,7 +82,7 @@ _E = r"(?![\w])"
 THIS_FLOOR = re.compile(
     _W + r"(?:this|the\s+current|current|diese[rsmn]?|dieses|aktuelle[rnms]?|cette|cet|ce|le\s+présent|tämä|tässä|tällä|nykyi\w+)"
     r"\s+(?:floor|sheet|plan|level|storey|story|drawing|geschoss|etage|stockwerk|grundriss|blatt|"
-    r"[ée]tage|niveau|feuille|kerros\w*|piirustu\w*|taso\w*)" + _E,
+    r"[ée]tage|niveau|feuille|kerro[sk]\w*|pohjapiirro\w*|piirustu\w*|taso\w*)" + _E,
     re.IGNORECASE,
 )
 
@@ -498,6 +498,12 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
         whys = [(sh.id, r["explanation"]) for _, sh, r in others if isinstance(r, dict) and r.get("explanation")]
         if whys:
             body["explanation"] = next((w for i, w in whys if i == plan.active), whys[0][1])
+    elif answer["kind"] == "count" and answer["value"] == 0 and not failed:
+        # a model file with none of these elements on any floor: the real zero keeps its reason
+        whys = [r.get("explanation") or "" for _, _, r in oks]
+        if whys and all("of the model file contains no" in w for w in whys):
+            body["explanation"] = whys[0].replace("this storey of the model file", "the model file").rstrip(".") + (
+                f" on these {len(oks)} floors." if len(oks) > 1 else ".")
     return with_unknown_areas(body)
 
 

@@ -257,6 +257,7 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
         return unclear(question, lang, d, intent_tag=intent_tag,
                        look="The tool returned no value for this count.")
     value = int(tr.value)
+    unlabelled_note: str | None = None
     plural = noun(subject, 2)
     gold = None if overrides or scope.get("kind") == "region" or tr.method == "vision" else (
         gold_for(d, lang, "count", subject, scope, value))
@@ -296,6 +297,13 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                       "evidence_ids": all_ids, "tool": tool_meta(tr)})
         check_ids = []
         answer_body = f"{value} {noun(subject, value)}. Each room is lit on the plan for you to check."
+        bare = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("unlabelled")}
+        n_bare = sum(1 for r in tr.rooms if r.included and r.room_id in bare and not getattr(r, "drawing_id", None))
+        if subject == "room" and n_bare and scope.get("kind", "floor") == "floor":
+            # spaces the sheet prints no label for are rooms too: the count says how many of each
+            unlabelled_note = (f"{value} {noun(subject, value)} ({value - n_bare} labelled, {n_bare} without a label). "
+                               "Each room is lit on the plan for you to check.")
+            answer_body = unlabelled_note
         if subject == "apartment":
             canonical = ("How many apartments are on this floor plan" if scope.get("kind") == "floor"
                          else f"How many apartments are {where_en(scope)}")
@@ -326,6 +334,8 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
         body["gold"] = gold
     if value == 0 and tr.meta.get("none_in_model"):
         body["explanation"] = tr.summary
+    if unlabelled_note:
+        body["explanation"] = unlabelled_note
     return Built(body, [tr], check_ids, subject)
 
 
