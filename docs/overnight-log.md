@@ -5,6 +5,64 @@ Each work stream runs in its own git worktree and branch, is verified on a priva
 and is then merged here. This file is the running record: what was asked, what was done, how it
 was checked, and what is still open.
 
+## Result at a glance (written 02:15 UTC)
+
+Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `5094bef`. Not pushed
+(no GitHub credentials on the devbox): `git push -u origin overnight-improvements`.
+Suites on the final tree: backend 723 passed / 34 skipped, store 173 passed / 1 skipped,
+frontend 356 passed, typecheck clean.
+
+| Asked | State | Evidence |
+|---|---|---|
+| 1. "All N floors": `Unknown project` | Fixed | Browser and API: hitos 198 doors / 226 windows / 8,351.15 m²; two grouped Swiss floors 453.12 m² (= 344.58 + 108.54) and 38 doors; a store IFC building answers "0 windows" / "0 rooms" with the reason |
+| 2. Compare for image imports | Fixed | The rebuilt side is a vector drawing made from the image (walls with openings, room polygons, door and window symbols); slider 0–100 %, aligned; checked on about 30 image drawings by two testers and an auditor |
+| 3. 3D for image imports | Fixed | Walls extruded from the wall polygons on a footprint-shaped floor; wall height follows plan size where the scale is estimated |
+| 4. Rectangular rooms | Fixed | Rooms from images are polygons with and without a stated scale; without one the scale is estimated and areas read "≈ 22 m² (estimate)" |
+| 5. Units | Done | mm to km, in, ft, ft-in, yd, their squares, ha, acre, volumes; five languages; quantities inside a question; follow-ups convert without a model call; metric is the default and always shown |
+| 6. Printed dimensions and areas | Mostly done | Dimensions on 248 drawings of the live store; length questions answer from the printed value ("21' - 0 1/4\" as printed = 6.41 m") with a highlight, else from outlines, never as a count; printed room areas are preferred and labelled "Read from the sheet". Rooms on US sheets without an outline often still abstain, with the reason |
+
+Other fixes found on the way: inflated whole-building totals (990 for 198); budget refusals
+cached and replayed; scan answers labelled exact; the landing page's sample button; `/api/api`
+404s; two drawings that failed to load; suggested-question chips that led nowhere (21 → 0 in a sweep
+of ten drawing kinds, by offering only what a drawing has); a library with source chips and plans
+before non-plan sheets; PDF sheets shown as their page render instead of an unreadable wireframe.
+
+**Known limits**
+- The estimated scale of a scan without scale note, printed area or dimension is rough: median
+  error about 6 %, one plan in ten off by more than 50 %. Areas from it are always marked "≈".
+- Unlabelled spaces: a guard drops spaces that run along the page edge or are not mostly walled;
+  it also drops real balconies bounded only by railings. `JSTORE_UNLABELLED_SPACES=0` turns the
+  reader off for new interpretations.
+- Detections drawn twice are drawn once but still counted twice: 88 door pairs of 6,806 detected
+  doors and 130 window pairs of 6,440 windows in the live store overlap by more than 60 %.
+- German, French and Finnish answer sentences are translated for the common cases; Italian and the
+  composed dimension sentences are still English.
+- A DWG site plan answers "1 door, Exact" (one CAD door entity in the store).
+- Multi-page PDFs show one page; dimensions on other pages are cited without a box.
+- The answer cache was reset by the last deploy (cache key version 3); the main demo questions were
+  asked once afterwards so they are warm.
+
+**How to demo the new parts**
+1. Library → source chip "CubiCasa" → open a plan (for example "High quality 108"): the plan is a
+   vector drawing; "Compare with original"; 3D; "What is the area of the living room?" → "≈ 22 m²
+   (estimate)"; "… in square feet?".
+2. "Special school level00": "How many rooms are there?" → 82 (80 labelled, 2 without a label);
+   "What is the circumference of the Multi-Purpose Hall in feet?" → 208.6 ft = 63.57 m.
+3. An IFC building (hitos): choose "All 5 floors": doors 198, windows 226, total floor area.
+4. US sheet "705 Cherokee Path": "What is the longest dimension printed on this sheet?" →
+   21' - 0 1/4" as printed = 6.41 m, highlighted on the sheet.
+5. A Swiss bundle: "What is the net floor area in square feet?", then "and in square yards?".
+
+**Operations done on the live deployment tonight**
+- Six deploys of this branch (`537b0c6`, `a3c5e98`, `0e056d9`, `aa03080`, `9b0bacf`, `5094bef`).
+- The live store was re-interpreted three times for image drawings (all from the Gemini cache) and
+  twice with the dimensions reader (new model calls); false unlabelled spaces were pruned once.
+  Backups: `/root/aura-deploy/backup/store-20261114T2301-pre-overnight.dump` and
+  `store-20261115T0143-pre-prune.dump`.
+- Deployment setting changed: `JSTORE_INTERPRET_TIMEOUT_S=420` (the dimensions reader needs it).
+- Demo video re-cut: `/root/aura-deploy/demo/aura-demo.mp4` (84.9 s): scan scene shows the rebuilt
+  plan, Compare and 3D; cost scene shows current figures (0 calls; 2 calls, $0.0015; running total).
+
 ## What was asked
 
 1. "All N floors" fails: `Couldn't answer this one — Unknown project 'proj-…'`.
@@ -268,3 +326,17 @@ Suites: backend 722 passed / 34 skipped, store 173 passed / 1 skipped, frontend 
 
 Demo video: the scan scene was re-recorded on the live site to show the rebuilt plan, Compare and
 3D (`/root/aura-deploy/demo/aura-demo.mp4`, 84.7 s; the earlier cut is kept as `aura-demo-v1.mp4`).
+
+### 01:50–02:15 UTC — last polish, sixth deploy
+
+`on/m-last-polish`, merged and deployed as `5094bef`: a PDF sheet without a CAD file shows its page
+render as the plan (evidence boxes on top, Compare hidden); the largest-room sentence, the outdoor
+note and the "0 windows" reason are translated (de/fr/fi); German thousands match the headline; IFC
+evidence rows show room name and number instead of the GUID; a placeholder IFC project name
+("Default Project") is replaced by the model name; "(1 outdoor space not counted)" explains a
+room count below the header. Suites: backend 723 passed / 34 skipped, store 173 passed /
+1 skipped, frontend 356 passed.
+
+After the deploy the main demo questions were asked through the public API (all answered, most
+with 0 model calls) and three drawings were opened in a browser (a US PDF sheet, a CubiCasa plan,
+an IFC storey): no console errors.
