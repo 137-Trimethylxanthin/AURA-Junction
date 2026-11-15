@@ -28,6 +28,7 @@ from shapely.geometry import box as make_box
 
 from ..db import DB
 from . import store
+from . import plan_tidy
 from .plan_symbols import door_paths, door_symbol, opening_cut
 
 CONTRACT_VERSION = "1.1"
@@ -716,9 +717,10 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
                 g = g.buffer(0)
             simple = g.simplify(0.03) if len(shapely.get_coordinates(g)) > 400 else g
             pts = _ring(simple) or _ring(g.envelope)
-            try:
-                c = g.representative_point()
-                at = [_r(c.x), _r(c.y)]
+            try:                                         # the label goes where the room is widest (in page proportions)
+                k = base.h / base.w if base is not None and base.w else 1.0
+                cx, cy, _ = plan_tidy.pole(affinity.scale(g, 1.0, k, origin=(0, 0)))
+                at = [_r(cx), _r(cy / k)]
             except Exception:  # noqa: BLE001
                 at = [_r(v) for v in g.centroid.coords[0]] if not g.is_empty else at
         area = float(r["area_m2"]) if r["area_m2"] is not None and math.isfinite(float(r["area_m2"])) else None
@@ -731,7 +733,7 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
                     entity_id=r["entity_id"], room_type=r["room_type"], storey=r["storey"], area_method=r["area_source"],
                     n_sources=r["n_sources"], agreement=r["agreement"], is_duplicate=r["is_duplicate"],
                     sources=values.get(r["entity_id"], []), evidence_id=f"room-{rid}", kind="room",
-                    size=_room_size(sizes.get(r["entity_id"]), base))
+                    size=_room_size(sizes.get(r["entity_id"]), base), unlabelled=not (r["label"] or "").strip())
         m.rooms.append(room)
         m.by_entity[r["entity_id"]] = room
     room_ids = {r["num"]: r["room_id"] for r in m.rooms if r["num"]}
@@ -806,7 +808,43 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
             if not g.is_empty:
                 m.walls.append(g)
         m.walls = _walls_around_rooms(m.walls, m.rooms)
+        _tidy_rooms(m, frame_to_pct)
     return m
+
+
+def _tidy_rooms(m: Model, frame_to_pct) -> None:
+    """Ragged room outlines of an image plan (spaces without a label, traced around their fixtures) straightened for the drawing: the
+    points and the label position change, the stored area does not."""
+    base = m.base
+    if base is None or frame_to_pct is None or not base.w or not base.h:
+        return
+    px = (base.w / 100.0, 0.0, 0.0, 0.0, base.h / 100.0, 0.0)             # percent -> pixels (isotropic)
+    back = inv(px)
+    pct_to_m = mul(base.frame, inv(base.to_pct)) if base.frame and inv(base.to_pct) else None
+    u = math.hypot(pct_to_m[0], pct_to_m[3]) / (base.w / 100.0) if pct_to_m else 0.0     # metres per pixel
+    polys = {}
+    for i, r in enumerate(m.rooms):
+        if len(r["points"]) >= 3:
+            p = transform(shapely.Polygon(r["points"]), px)
+            polys[i] = p if p.is_valid else p.buffer(0)
+    if u <= 0 or not polys:
+        return
+    walls = transform(shapely.union_all(m.walls), px) if m.walls else None
+    for i, p in list(polys.items()):
+        if not m.rooms[i].get("unlabelled") or len(m.rooms[i]["points"]) <= 4:
+            continue                                     # a space found without a label: traced around its fixtures
+        others = shapely.union_all([q for j, q in polys.items() if j != i]) if len(polys) > 1 else None
+        try:
+            t = plan_tidy.tidy_outline(p, u, walls, others)
+        except Exception:  # noqa: BLE001 - the outline stays as it is stored
+            continue
+        if t is p:
+            continue
+        polys[i] = t
+        g = transform(t, back)
+        cx, cy, _ = plan_tidy.pole(t)
+        at = apply(back, cx, cy)
+        m.rooms[i]["points"], m.rooms[i]["label_at"] = _ring(g) or m.rooms[i]["points"], [_r(at[0]), _r(at[1])]
 
 
 def _walls_around_rooms(walls: list, rooms: list[dict]) -> list:
@@ -1200,20 +1238,10 @@ def _scan_plan_svg(m: Model) -> str:
         if len(r["points"]) >= 3:
             pts = " ".join(f"{x * sx:.1f},{y * sy:.1f}" for x, y in r["points"])
             out.append(f'<polygon points="{pts}" fill="{"#f4f1e6" if r["outdoor"] else "#e8f0f8"}" stroke="#b6c2d0" stroke-width="0.6"/>')
-    out.append('</g><g data-layer="walls">')
-    glass = [i["shape"] for i in m.items if i["kind"] == "window" and i.get("shape") is not None
-             and i["shape"].geom_type in ("Polygon", "MultiPolygon")]
-    cut = shapely.union_all(glass) if glass else None    # a window is an opening of the wall it sits in
-    for g in m.walls:
-        if cut is not None:
-            g = g.difference(cut)
-        for geom in getattr(g, "geoms", [g]):
-            d = d_of(geom)
-            if d:
-                out.append(f'<path d="{d}" fill="{WALL_FILL}" fill-rule="evenodd"/>')
+    out.append('</g>')
     to_svg = (sx, 0.0, 0.0, 0.0, sy, 0.0)
     solid = transform(shapely.union_all(m.walls), to_svg) if m.walls else None     # in the units of the drawing
-    doors, windows, fixtures, cuts = [], [], [], []
+    doors, windows, fixtures, cuts, syms = [], [], [], [], []
     polys = [shapely.Polygon(r["points"]) for r in m.rooms if len(r["points"]) >= 3]
     indoors = shapely.union_all([p if p.is_valid else p.buffer(0) for p in polys]).buffer(1.0) if polys else None
     door_boxes = [(i["box"]["x"] * sx, i["box"]["y"] * sy, i["box"]["w"] * sx, i["box"]["h"] * sy)
@@ -1228,16 +1256,23 @@ def _scan_plan_svg(m: Model) -> str:
     if solid is not None or polys:
         lines = ([solid] if solid is not None else []) + [transform(p.boundary, to_svg) for p in polys]
         near = shapely.union_all(lines).buffer(0.5 / u if u > 0 else 6.0)
+    win = [i for i in m.items if i["kind"] == "window" and i["box"]]
+    twice = plan_tidy.duplicate_boxes([(i["box"]["x"] * sx, i["box"]["y"] * sy, i["box"]["w"] * sx, i["box"]["h"] * sy) for i in win])
+    twice = {id(win[k]) for k in twice}                  # a window detected twice is drawn once
     for it in m.items:
         g, b = it.get("shape"), it["box"]
         if not b or it["subject"] == "label":
             continue
         x, y, w, h = b["x"] * sx, b["y"] * sy, b["w"] * sx, b["h"] * sy
         if it["kind"] == "window":
+            if id(it) in twice:
+                continue
             if near is not None and not near.intersects(shapely.box(x, y, x + w, y + h)):
                 continue                                 # a window stands in a wall: one detected away from all is not drawn
             d = d_of(g) if g is not None and g.geom_type in ("Polygon", "MultiPolygon") else ""
             windows.append(f'<path d="{d or f"M{x:.1f},{y:.1f}h{w:.1f}v{h:.1f}h{-w:.1f}Z"}" fill="#ffffff" stroke="{WINDOW_STROKE}" stroke-width="0.8"/>')
+            if d:                                        # a window is an opening of the wall it sits in
+                cuts.append(transform(g, to_svg))
             a, c = ((x, y + h / 2), (x + w, y + h / 2)) if w >= h else ((x + w / 2, y), (x + w / 2, y + h))
             windows.append(f'<path d="M{a[0]:.1f},{a[1]:.1f}L{c[0]:.1f},{c[1]:.1f}" fill="none" stroke="{WINDOW_STROKE}" stroke-width="0.5"/>')
         elif it["kind"] == "door":
@@ -1250,13 +1285,7 @@ def _scan_plan_svg(m: Model) -> str:
             if sym.get("oversized") and any(not (abs(o[0] - x) < 1 and abs(o[1] - y) < 1) and x <= o[0] + o[2] / 2 <= x + w and y <= o[1] + o[3] / 2 <= y + h
                                             for o in door_boxes):
                 continue                                 # an oversized box around another door: that door is the symbol
-            cut = opening_cut(sym, solid, u)
-            if cut is not None:
-                for geom in getattr(cut, "geoms", [cut]):
-                    if geom.geom_type == "Polygon":
-                        cuts.append('<path d="M' + " ".join(f"{px:.1f},{py:.1f}" for px, py in geom.exterior.coords[:-1])
-                                    + 'Z" fill="#ffffff"/>')
-            doors += door_paths(sym, DOOR_STROKE)
+            syms.append(sym)
         elif indoors is None or shapely.contains_xy(indoors, b["x"] + b["w"] / 2, b["y"] + b["h"] / 2):
             r = min(w, h) * 0.18                     # (a fixture detected outside every room is not part of the plan)
             d = (f"M{x + r:.1f},{y:.1f}h{w - 2 * r:.1f}l{r:.1f},{r:.1f}v{h - 2 * r:.1f}l{-r:.1f},{r:.1f}h{-(w - 2 * r):.1f}"
@@ -1264,27 +1293,47 @@ def _scan_plan_svg(m: Model) -> str:
             fixtures.append(f'<path d="{d}" fill="none" stroke="{FIXTURE_STROKE}" stroke-width="0.7"/>')
             fixtures.append(f'<path d="M{x + w * 0.25:.1f},{y + h * 0.25:.1f}h{w * 0.5:.1f}v{h * 0.5:.1f}h{-w * 0.5:.1f}Z" fill="none" '
                             f'stroke="{FIXTURE_STROKE}" stroke-width="0.4"/>')
-    out += [*cuts, '</g><g data-layer="windows">', *windows, '</g><g data-layer="doors">', *doors,
+    syms.sort(key=plan_tidy.door_rank, reverse=True)       # two symbols on one opening: the better-supported one stays
+    placed = []
+    for sym in syms:
+        if any(plan_tidy.same_opening(sym, o, u) for o in placed):
+            continue
+        placed.append(sym)
+        cut = opening_cut(sym, solid, u)
+        if cut is not None:
+            cuts.append(cut)
+        doors += door_paths(sym, DOOR_STROKE)
+    out.append('<g data-layer="walls">')                 # wall fill: openings cut out, loose fragments dropped
+    if solid is not None:
+        rooms_u = shapely.union_all([transform(p if p.is_valid else p.buffer(0), to_svg) for p in polys]) if polys else None
+        holes = shapely.union_all([c if c.is_valid else c.buffer(0) for c in cuts]) if cuts else None
+        for geom in plan_tidy.clean_walls([solid], u, rooms_u, holes):
+            d = d_of(transform(geom, (1 / sx, 0.0, 0.0, 0.0, 1 / sy, 0.0)))
+            if d:
+                out.append(f'<path d="{d}" fill="{WALL_FILL}" fill-rule="evenodd"/>')
+    out += ['</g><g data-layer="windows">', *windows, '</g><g data-layer="doors">', *doors,
             '</g><g data-layer="fixtures">', *fixtures, '</g><g data-layer="labels">']
     tall = max(1.0, H / SVG_W)                           # a tall sheet is shown smaller: its text grows with it
+    want = []
     for r in m.rooms:
         if len(r["points"]) < 3:
             continue
-        xs, ys = [p[0] * sx for p in r["points"]], [p[1] * sy for p in r["points"]]
-        x, y = r["label_at"][0] * sx, r["label_at"][1] * sy
         lines = [(r["num"], 700)] if r["num"] else []
         if r["name"] and r["name"] != "Room":
             lines.append((r["name"][:28], 400))
         if area_text(r):
             lines.append((area_text(r), 400))
-        if not lines:
+        if lines:
+            want.append(dict(poly=shapely.Polygon([(x * sx, y * sy) for x, y in r["points"]]), lines=[t for t, _ in lines],
+                             weight=dict(lines)))
+    # each label at the widest place of its room, sized to it; the area goes first, then the name; none over another
+    for w_, lab in zip(want, plan_tidy.place_labels(want, 3.2 * tall, 14.0 * tall)):
+        if lab is None:
             continue
-        longest = max(len(t) for t, _ in lines)          # the label fits the room: by its longest line and its lines
-        size = max(3.0 * tall, min(11.0 * tall, (max(xs) - min(xs)) / (0.56 * longest + 1),
-                                   (max(ys) - min(ys)) / (1.3 * len(lines) + 0.5)))
-        y -= (len(lines) - 1) * size * 0.6
-        for text, weight in lines:
-            out.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size:.1f}" font-weight="{weight}" text-anchor="middle" '
+        size, x = lab["size"], lab["x"]
+        y = lab["y"] - (len(lab["lines"]) - 1) * size * 0.6
+        for text in lab["lines"]:
+            out.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size:.1f}" font-weight="{w_["weight"][text]}" text-anchor="middle" '
                        f'dominant-baseline="middle" fill="#0f172a" stroke="#ffffff" stroke-width="{size * 0.22:.1f}" '
                        f'paint-order="stroke">{html.escape(text)}</text>')
             y += size * 1.2

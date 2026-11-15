@@ -1,3 +1,5 @@
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { footprintStrips } from './footprint'
 import * as THREE from 'three'
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import type { Box, Drawing, RoomPoly } from '@/api/contract'
@@ -366,10 +368,19 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
   const w = bb.max.x - bb.min.x
   const d = bb.max.z - bb.min.z
   group.position.set(-center.x, 0, -center.z)
-  const baseGeo = track(new THREE.BoxGeometry(w + 1.6, 0.16, d + 1.6))
+  // The board follows the building (rooms and walls, 0.8 m lip), so an L-shaped plan does not stand on a rectangle.
+  const outlines: THREE.Vector2[][] = rooms.map((r) => r.room.points.map((p) => toWorld(p[0], p[1])))
+  for (const s of plan.walls) outlines.push(s.getPoints(6).map((p) => new THREE.Vector2(p.x * f.sx - f.cx, p.y * f.sz - f.cz)))
+  const strips = footprintStrips(outlines, 0.8)
+  const boxes = strips.map((s) =>
+    new THREE.BoxGeometry(s.x1 - s.x0, 0.16, s.z1 - s.z0).translate((s.x0 + s.x1) / 2, -0.081, (s.z0 + s.z1) / 2),
+  )
+  const merged = boxes.length ? mergeGeometries(boxes) : null
+  for (const g of boxes) g.dispose()
+  const baseGeo = track(merged ?? new THREE.BoxGeometry(w + 1.6, 0.16, d + 1.6).translate(center.x, -0.081, center.z))
   const baseMat = track(new THREE.MeshStandardMaterial({ color: COLORS.base, roughness: 0.95 }))
   const base = new THREE.Mesh(baseGeo, baseMat)
-  base.position.set(center.x, -0.081, center.z)
+  base.name = 'base'
   base.receiveShadow = true
   group.add(base)
   const root = new THREE.Group()
