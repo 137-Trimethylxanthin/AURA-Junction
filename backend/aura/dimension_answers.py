@@ -467,7 +467,7 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
                 how += (f"; their product, {w['value_m'] * dp['value_m']:.2f} m², agrees with the room's printed area "
                         f"({r['area_m2']:.2f} m²)")
             else:
-                how += "; the room has no outline on this page, so a line may cover only part of the room"
+                how += "; the room has no outline on this page, so a line may cover more or less than the room itself"
             lines.append(f"{name}: {(' × ' if w is not None and dp is not None else '; ').join(bits)} ({how})")
             used += mine
             boxes += [b for b in (_box(x) for x in mine) if b is not None]
