@@ -320,8 +320,8 @@ function roomLabel(room: RoomPoly | undefined, id: string | undefined): string {
   return `${room.name} ${room.num}`
 }
 
-/** A machine id (an IFC GlobalId of 22 characters, a store id, a `<sheet>:<id>` remap) is never a badge: 6 characters of it are. */
-const MACHINE_ID = /^(?:[0-9A-Za-z_$]{22}|e\d{3,}|.*:.*)$/
+/** A machine id (an IFC GlobalId of 22 characters, a `<sheet>:<id>` remap) is never a badge: 6 characters of it are. */
+const MACHINE_ID = /^(?:[0-9A-Za-z_$]{22}|.*:.*)$/
 const shortId = (id: string) => (id.split(':').pop() ?? id).slice(0, 6)
 
 function roomBadge(num: string | undefined, id: string): string {
