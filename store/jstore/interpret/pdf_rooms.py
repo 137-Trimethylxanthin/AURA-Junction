@@ -143,6 +143,9 @@ def text_items(words: list[dict]) -> list[dict]:
     return out
 
 
+GENERIC_LABELS = {"room", "rooms", "area", "space", "name", "room name"}
+
+
 def room_tags(items: list[dict]) -> list[dict]:
     """Stacks of lines that read as a room tag.  -> [{label, number, area, lines, bbox, strong, x, y}]"""
     items = sorted(items, key=lambda o: (o["y0"], o["x0"]))
@@ -686,6 +689,10 @@ def interpret(db: DB, f: dict) -> dict:
             # weak tags need an outline drawn with the room pen; a lone name also needs company on the page
             if not t["strong"] and (t["poly"] is None or (t.get("how") == "closed_path" and not t.get("family"))
                                     or (t["num"] is None and not company)):
+                continue
+            # a bare column heading ("Room" above an area in a schedule): no number, no outline, no outlined room near
+            if t["poly"] is None and t["num"] is None and not company \
+                    and (t["label"] or "").strip().lower() in GENERIC_LABELS:
                 continue
             src, claims = [], []
             attrs = dict(indoor=is_indoor(t["label"]), reader="pdf_rooms", page_no=no)

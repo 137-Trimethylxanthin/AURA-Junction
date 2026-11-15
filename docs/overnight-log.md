@@ -593,3 +593,12 @@ tags, the hint line, the header counts line and the licence phrase are Italian; 
 tool or the store composes ("82 numbered rooms on this floor plan.", the store's note on why a
 count is an estimate) and the answer step's sentence for a room count are still English.
 Frontend suite: 372 passed.
+
+## Last fix before the hard stop
+
+- `store/jstore/interpret/pdf_rooms.py`: a bare heading ("Room", "Area", "Space", "Name") above a printed area, with no
+  number, no outline and no outlined room on the page, is no longer stored as a room. The door schedule
+  `A-801 - Door and Finish Schedules & Wall Types` was re-read on the live store: its false 40 m² room is gone.
+- PDF rooms without an outline are now 8, not 9. Six of them sit on pages without a scale, so an outline cannot be
+  turned into metres there; why the other two (on a scaled page) have none was not investigated.
+- Store suite: 225 passed, 1 skipped.
