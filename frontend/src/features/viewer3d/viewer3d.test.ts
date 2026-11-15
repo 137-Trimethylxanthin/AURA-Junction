@@ -171,3 +171,38 @@ describe('image pixels', () => {
     expect(paper.ink[30 * w + 5]).toBe(0)
   })
 })
+
+describe('base board', () => {
+  it('follows an L-shaped footprint instead of its bounding rectangle', async () => {
+    const { footprintStrips } = await import('./footprint')
+    const L = [
+      { x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 6 }, { x: 6, y: 6 }, { x: 6, y: 20 }, { x: 0, y: 20 },
+    ]
+    const strips = footprintStrips([L], 0.8)
+    const covers = (x: number, z: number) => strips.some((s) => x >= s.x0 && x <= s.x1 && z >= s.z0 && z <= s.z1)
+    expect(covers(3, 3) && covers(18, 3) && covers(3, 18)).toBe(true)
+    expect(covers(-0.5, -0.5) && covers(20.6, 3)).toBe(true) // the lip
+    expect(covers(14, 14) || covers(8, 8)).toBe(false) // the empty corner of the L
+    const area = strips.reduce((a, s) => a + (s.x1 - s.x0) * (s.z1 - s.z0), 0)
+    expect(area).toBeGreaterThan(204)
+    expect(area).toBeLessThan(21.6 * 21.6 * 0.75)
+    expect(Math.min(...strips.map((s) => s.x0))).toBeCloseTo(-0.8, 5)
+    expect(Math.max(...strips.map((s) => s.x1))).toBeCloseTo(20.8, 5)
+    // a courtyard is part of the board; nothing to stand on gives no board
+    const ring = footprintStrips([[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 1 }, { x: 0, y: 1 }], [{ x: 0, y: 9 }, { x: 10, y: 9 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+      [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 10 }, { x: 0, y: 10 }], [{ x: 9, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 9, y: 10 }]], 0.5)
+    expect(ring.some((s) => 5 >= s.x0 && 5 <= s.x1 && 5 >= s.z0 && 5 <= s.z1)).toBe(true)
+    expect(footprintStrips([], 0.8)).toEqual([])
+  })
+
+  it('the plan model stands on a board named base that covers its rooms', () => {
+    const m = buildPlanModel(bundledDrawing, parsePlanSvg(svgText))
+    const base = m.group.getObjectByName('base') as THREE.Mesh
+    expect(base).toBeTruthy()
+    base.geometry.computeBoundingBox()
+    const bb = new THREE.Box3().setFromObject(m.rooms[0].mesh.parent!)
+    expect(base.geometry.boundingBox!.max.y).toBeLessThan(0)
+    expect(bb.isEmpty()).toBe(false)
+    m.dispose()
+  })
+})

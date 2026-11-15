@@ -98,7 +98,7 @@ export function PlanContextMenu({
         {hasOriginal ? (
           <ContextMenuItem
             onSelect={() => {
-              swipeSplit.current = Math.min(98, Math.max(2, x))
+              swipeSplit.current = Math.min(100, Math.max(0, x))
               actions().setCompare({ on: true, mode: 'swipe' })
             }}
           >

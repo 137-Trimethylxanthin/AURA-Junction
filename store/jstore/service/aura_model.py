@@ -1327,7 +1327,7 @@ def _scan_plan_svg(m: Model) -> str:
             want.append(dict(poly=shapely.Polygon([(x * sx, y * sy) for x, y in r["points"]]), lines=[t for t, _ in lines],
                              weight=dict(lines)))
     # each label at the widest place of its room, sized to it; the area goes first, then the name; none over another
-    for w_, lab in zip(want, plan_tidy.place_labels(want, 3.2 * tall, 11.0 * tall)):
+    for w_, lab in zip(want, plan_tidy.place_labels(want, 3.2 * tall, 14.0 * tall)):
         if lab is None:
             continue
         size, x = lab["size"], lab["x"]

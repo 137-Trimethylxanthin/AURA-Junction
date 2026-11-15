@@ -302,6 +302,8 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
     return good
 
 
+DOC_VERSION = 2          # raised when the document of an unchanged drawing is built differently (cached ones are rebuilt)
+
 # ---- the document (pure: what the source built -> our drawing.json) -------------------------------
 
 
@@ -352,7 +354,7 @@ def to_drawing(entry: Entry, built: dict, signature: str) -> dict:
     # would count the whole model, so there the document's own index stays the owner.
     owner = "store" if entry.slug is None or entry.siblings <= 1 else "ours"
     doc["store"] = {"drawing_key": entry.key, "file_ids": list(entry.file_ids), "owner": owner,
-                    "signature": signature, "page": built.get("page"), "synthetic": bool(built.get("synthetic")),
+                    "signature": signature, "doc": DOC_VERSION, "page": built.get("page"), "synthetic": bool(built.get("synthetic")),
                     **({"storey": entry.storey} if entry.slug is not None else {})}
     return apply_entry(doc, entry)
 
@@ -631,7 +633,8 @@ class StoreLibrary:
         doc = None
         try:
             cached = json.loads(path.read_text(encoding="utf-8"))
-            if (cached.get("store") or {}).get("signature") == want and cached.get("id") == e.id:
+            st = cached.get("store") or {}
+            if st.get("signature") == want and st.get("doc") == DOC_VERSION and cached.get("id") == e.id:
                 doc = apply_entry(cached, e)
         except (OSError, ValueError, AttributeError):
             doc = None
