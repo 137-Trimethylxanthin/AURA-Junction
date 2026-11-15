@@ -1098,6 +1098,10 @@ def drawing_doc(m: Model, project_meta: dict | None = None) -> dict:
         images = dict(rebuilt=f"/drawings/{did}/plan.svg")
     elif base is not None and base.image is None:        # never rendered: the rebuilt plan is the only picture
         images = dict(rebuilt=f"/drawings/{did}/plan.svg")
+    elif m.linework is not None and base.format == "pdf" and not any(f["format"] in CAD for f in m.files):
+        # a PDF sheet without a CAD file beside it: its page render (fills, hatches, line weights, lettering) reads far better than the
+        # strokes redrawn as hairlines, so the page is the plan; rooms, doors and dimensions are laid over it
+        images = dict(rebuilt=f"/drawings/{did}/original.png")
     elif m.linework is not None and m.placed > 0:        # the plan rebuilt from the store over the page it was read from
         images = dict(rebuilt=f"/drawings/{did}/plan.svg", original=f"/drawings/{did}/original.png", original_alignment="exact")
     elif m.vector_scan:                                  # an image plan: the vector plan drawn from its model, beside the scan

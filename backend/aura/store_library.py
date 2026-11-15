@@ -302,7 +302,7 @@ def build_entries(rows: list[dict], covered: set[str], patterns: list[str],
     return good
 
 
-DOC_VERSION = 4          # raised when the document of an unchanged drawing is built differently (cached ones are rebuilt)
+DOC_VERSION = 5          # raised when the document of an unchanged drawing is built differently (cached ones are rebuilt)
 
 # ---- the document (pure: what the source built -> our drawing.json) -------------------------------
 
