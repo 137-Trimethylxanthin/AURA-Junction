@@ -569,6 +569,9 @@ Deployed `4fe7a9d`. Suites: backend 767 passed / 35 skipped, store 226 passed, f
 **Open at the end:** reasoning-tree step bodies (the sentences inside each step) are English in
 every interface language; 9 PDF rooms have no outline (site plans, a door schedule, name-only tags
 on pages without a scale); the rescue of railing-bounded balconies was decided against (see above).
-The saved manual group was verified end to end in a browser on a private instance of the same
-code (group two Swiss floors, save, open, "All 2 floors", ask, reload, ask again, ungroup) and
-through the public API; it was not saved on the live site, to keep test data out of it.
+The saved manual group was also verified end to end on the LIVE site in a browser (06:25 UTC):
+group mode, two Swiss floors (Site 294 and Site 980) selected, saved as a project, opened, "All 2
+floors" chosen: "What is the total net floor area?" → 453.12 m² (38 rooms included, outdoor left
+out), "How many doors are there?" answered; after a page reload "How many windows are there?" →
+24 (18 + 6), all "Exact · CAD geometry" with 0 model calls and no failed request; the test project
+was ungrouped afterwards and is gone from the library. Screenshots `/root/aura-deploy/verify/grp-*.png`.
