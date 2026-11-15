@@ -127,19 +127,21 @@ function CardBody({
       </div>
       <CardHeader>
         <CardTitle className="min-w-0">
-          <h3 className="truncate" title={title}>
+          <h3 className="line-clamp-2 [overflow-wrap:anywhere]" title={title} data-card-title>
             {title}
           </h3>
         </CardTitle>
         {subtitle ? (
           <CardDescription
-            className="num min-w-0 truncate text-xs"
+            // Full card width (under the kind badge too) and two lines: the page number and the counts stay readable.
+            className="num col-span-full row-start-2 min-w-0 line-clamp-2 text-xs"
             title={subtitle}
+            data-card-subtitle
           >
             {subtitle}
           </CardDescription>
         ) : null}
-        <CardAction>
+        <CardAction className="row-span-1">
           <Badge variant="outline">{kindLabel}</Badge>
         </CardAction>
       </CardHeader>

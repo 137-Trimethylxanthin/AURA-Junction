@@ -909,6 +909,11 @@ def _label_hits(name: str, printed: list[str]) -> bool:
     return any(n == p.casefold() or n.startswith(p.casefold() + "/") for p in printed)
 
 
+# An IFC space that stands for a whole storey's gross area ("Bruttoareal 1etg", "BGF EG") is not a room.
+_GROSS_SPACE = re.compile(r"^\s*(?:brutto\s*-?\s*(?:areal|fl(?:ä|ae)che|grundfl(?:ä|ae)che)|gross\s+(?:floor\s+)?area|"
+                          r"bruttoareal|bta|bgf|gfa)\b", re.IGNORECASE)
+
+
 def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
                printed: list[str] | None = None, concept: str | None = None) -> ToolResult:
     """Stage 1 grab every indexed room with its area; stage 2 keep indoor rooms (of the room type,
@@ -925,6 +930,7 @@ def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
         a = _area(r)
         reason = ("no printed or outlined area" if a is None else
                   "outdoor space" if r.get("outdoor") else
+                  "gross-area space, not a room" if _GROSS_SPACE.search(r.get("name") or "") else
                   f"not a {concept}" if printed and not _label_hits(r.get("name", ""), printed) else None)
         if reason:
             dropped.append({"id": r["room_id"], "name": r.get("name", ""), "reason": reason})

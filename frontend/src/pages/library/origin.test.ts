@@ -1,6 +1,6 @@
 import type { DrawingSummary } from "@/api/contract"
 import { describe, expect, it } from "vitest"
-import { isSheetWithoutPlan, originCounts, originOf, plansFirst } from "./origin"
+import { isSheetWithoutPlan, originCounts, originOf, plansFirst, projectsUnderChips } from "./origin"
 
 const s = (id: string, over: Partial<DrawingSummary> = {}): DrawingSummary => ({
   id,
@@ -37,5 +37,14 @@ describe("library source filter", () => {
     expect(plansFirst(us).map((d) => d.id)).toEqual(["cherokee", "site", "blank"])
     const many = Array.from({ length: 800 }, (_, i) => s(`d${i}`, { n_rooms: i % 3 }))
     expect(plansFirst(many)).toHaveLength(800)
+  })
+  it("keeps only the projects with a floor that passes the active chips", () => {
+    const ifc = { id: "p1", floors: [{ drawing_id: "ifc-a" }, { drawing_id: "ifc-b" }] }
+    const swiss = { id: "p2", floors: [{ drawing_id: "sw-1" }, { drawing_id: "sw-2" }] }
+    // no chip active: every project stays
+    expect(projectsUnderChips([ifc, swiss], null)).toEqual([ifc, swiss])
+    // the CubiCasa chip: no project has a CubiCasa floor, so the plans start at the top
+    expect(projectsUnderChips([ifc, swiss], new Set(["cc-108"]))).toEqual([])
+    expect(projectsUnderChips([ifc, swiss], new Set(["sw-2", "cc-108"]))).toEqual([swiss])
   })
 })

@@ -15,7 +15,7 @@ from aura.writer import Writer
 
 # Bumped when stored answers would be wrong under the current code (2: replayed budget refusals and
 # scan answers stored as exact); older entries are then never hit and expire with their TTL.
-KEY_VERSION = 5
+KEY_VERSION = 6  # 6: room-rank answers without IFC GUIDs or gross-area spaces
 
 
 def answer_key(drawing_id: str, question: str, scope: dict | None, overrides: list | None,
@@ -58,6 +58,15 @@ class AnswerCache:
         if isinstance(arr, list) and len(arr) >= 6:
             return str(arr[0]), str(arr[1]), arr[2], arr[3], arr[5]
         return None, None, None, None, None
+
+    @staticmethod
+    def _key_version(key: str) -> int | None:
+        """The KEY_VERSION an answer was stored under (None for keys older than versioning)."""
+        try:
+            arr = json.loads(key.split("|", 1)[0])
+        except (ValueError, TypeError):
+            return None
+        return arr[6] if isinstance(arr, list) and len(arr) >= 7 and isinstance(arr[6], int) else None
 
     def get(self, key: str) -> dict | None:
         now = self._clock()
@@ -123,8 +132,8 @@ class AnswerCache:
             if "|prev:" in k:
                 return False, None
             d_id, q_norm, k_scope, k_overrides, k_models = self._parse_key(k)
-            if d_id != drawing_id:
-                return False, None
+            if d_id != drawing_id or self._key_version(k) != KEY_VERSION:
+                return False, None  # an answer stored under an older key version is never "the same question"
             if k_scope != scope or k_overrides != overrides or k_models != models_on:
                 return False, None
             return True, q_norm

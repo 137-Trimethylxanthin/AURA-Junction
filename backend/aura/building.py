@@ -291,6 +291,24 @@ def _num(v: float) -> float | int:
     return int(v) if float(v).is_integer() else _round(v)
 
 
+_RANK_Q = re.compile(r"^Which is the (largest|smallest) ")
+
+
+def _rank_winner(oks: list[tuple[Any, dict]]) -> tuple[Any, dict] | None:
+    """Every floor answered 'which room is the largest / smallest' (a note with the winner's area):
+    the floor whose winner is the extreme of the building. None when the answers are anything else."""
+    words = set()
+    for _, r in oks:
+        a, m = r.get("answer") or {}, _RANK_Q.match(str(r.get("canonical_en") or ""))
+        if not m or a.get("kind") != "note" or a.get("unit") != "m2" or not isinstance(a.get("number"), (int, float)):
+            return None
+        words.add(m.group(1))
+    if len(words) != 1:
+        return None
+    pick = max if words == {"largest"} else min
+    return pick(oks, key=lambda t: t[1]["answer"]["number"])
+
+
 def _text_of(a: dict) -> str:
     k = a.get("kind")
     if k == "count":
@@ -443,6 +461,10 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
     elif kinds == {"quantity"} and len(units) == 1:
         answer = {"kind": "quantity", "value": _round(sum(r["answer"]["value"] for _, _, r in oks)),
                   "unit": units.pop()}
+    elif (best := _rank_winner([(sh, r) for _, sh, r in oks])) is not None:
+        # "the largest room" over a building: the one winner of all floors, not a sentence per floor
+        sh, r = best
+        answer = {**r["answer"], "value": f"{sh.label}: {r['answer']['value']}"}
     else:
         answer = {"kind": "note",
                   "value": "\n".join(f"{sh.label}: {_text_of(r['answer'])}" for _, sh, r in sorted(oks, key=lambda t: t[0]))}

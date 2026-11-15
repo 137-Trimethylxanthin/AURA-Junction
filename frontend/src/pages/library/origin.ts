@@ -63,3 +63,15 @@ export function plansFirst<T extends DrawingSummary>(drawings: T[]): T[] {
   const tier = (d: T) => (isSheetWithoutPlan(d) ? 2 : d.n_rooms === 0 ? 1 : 0)
   return [0, 1, 2].flatMap((t) => drawings.filter((d) => tier(d) === t))
 }
+
+/**
+ * The project tiles that belong on screen under the active source / file-type chips: a project
+ * stays when one of its floors passes the chips; with no chip active every project stays.
+ */
+export function projectsUnderChips<P extends { floors: { drawing_id: string }[] }>(
+  projects: P[],
+  passing: ReadonlySet<string> | null | undefined
+): P[] {
+  if (!passing) return projects
+  return projects.filter((p) => p.floors.some((f) => passing.has(f.drawing_id)))
+}

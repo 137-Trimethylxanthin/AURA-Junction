@@ -445,3 +445,22 @@ def test_sqlite_answer_cache_persists_across_restarts(tmp_path):
         assert entries == [(k, "Show all north windows")]
 
     asyncio.run(go())
+
+
+def test_similar_question_candidates_skip_answers_stored_under_an_older_key_version(tmp_path):
+    """An answer written before a KEY_VERSION bump (old wording, no evidence) must not come back as
+    'the same question' through the similar-question reuse: only current-version keys are offered."""
+    import json
+
+    from aura.cache import KEY_VERSION, AnswerCache, answer_key
+
+    c = AnswerCache()
+    new = answer_key("d1", "circumference of the hall in m?", None, None, "en", True) + "|router:12|data:1"
+    arr = json.loads(new.split("|", 1)[0])
+    arr[6] = KEY_VERSION - 3
+    old = json.dumps(arr, sort_keys=True, ensure_ascii=False) + "|router:12|data:1"
+    unversioned = json.dumps(arr[:6], sort_keys=True, ensure_ascii=False) + "|router:12|data:1"
+    for k in (old, unversioned, new):
+        c.put(k, {"answer": {"kind": "quantity", "value": 63.57, "unit": "m"}}, drawing_id="d1",
+              question="circumference of the hall in m?")
+    assert [k for k, _ in c.entries_for_drawing("d1", scope=None, overrides=None, models_on=True)] == [new]

@@ -1,3 +1,4 @@
+import { projectsUnderChips } from "./origin"
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { Link } from "react-router"
 import { toast } from "sonner"
@@ -249,6 +250,8 @@ export interface ProjectBundlerBarProps {
   selectedIds: string[]
   onSelectedIdsChange: (ids: string[]) => void
   onSelectionMetaChange?: (meta: Record<string, SelectionFloorMeta>) => void
+  /** Ids of the drawings that pass the active source / file-type chips; null = no chip active. */
+  chipIds?: ReadonlySet<string> | null
 }
 
 export function ProjectBundlerBar({
@@ -259,6 +262,7 @@ export function ProjectBundlerBar({
   selectedIds,
   onSelectedIdsChange,
   onSelectionMetaChange,
+  chipIds,
 }: ProjectBundlerBarProps) {
   const { lang, tu } = useUi()
   const extra = EXTRA_COPY[lang]
@@ -287,6 +291,12 @@ export function ProjectBundlerBar({
           (!p.auto_matched || p.floors.some((f) => planById.has(f.drawing_id)))
       )
   }, [summaryPlans, planById, projectsSnap])
+
+  // Under a source or file-type chip only the projects of that source are listed (while grouping: all).
+  const shownProjects = useMemo(
+    () => (grouping ? allProjects : projectsUnderChips(allProjects, chipIds)),
+    [allProjects, chipIds, grouping]
+  )
 
   const draftFloors = useMemo<ProjectFloor[]>(() => {
     if (!grouping || selectedIds.length === 0) return []
@@ -470,7 +480,7 @@ export function ProjectBundlerBar({
     [plans]
   )
 
-  if (!grouping && allProjects.length === 0) return null
+  if (!grouping && shownProjects.length === 0) return null
 
   return (
     <div className="flex min-w-0 flex-col gap-3" data-projects-region>
@@ -636,7 +646,7 @@ export function ProjectBundlerBar({
         </Card>
       ) : null}
 
-      {allProjects.length > 0 ? (
+      {shownProjects.length > 0 ? (
         <section
           aria-labelledby="projects-heading"
           className="flex min-w-0 flex-col gap-2.5"
@@ -652,7 +662,7 @@ export function ProjectBundlerBar({
               />
               <span>{tu("proj_section_title")}</span>
               <span className="num text-xs font-normal text-muted-foreground">
-                {allProjects.length}
+                {shownProjects.length}
               </span>
             </h3>
             <p className="text-xs text-muted-foreground">
@@ -664,7 +674,7 @@ export function ProjectBundlerBar({
             className="grid grid-cols-1 gap-3 sm:grid-cols-2"
             aria-label={tu("proj_section_title")}
           >
-            {allProjects.map((bundle) => {
+            {shownProjects.map((bundle) => {
               const sortedFloors = [...bundle.floors].sort(
                 (a, b) =>
                   a.order - b.order || a.drawing_id.localeCompare(b.drawing_id)

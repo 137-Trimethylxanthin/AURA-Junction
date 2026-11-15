@@ -535,7 +535,8 @@ RANK_SAID = {
 }
 
 #: an id the store gives a room or thing that carries no number on the sheet ("e143313"): never shown to people
-INTERNAL_ID = re.compile(r"e\d{3,}")
+# a store entity id ("e143313") or an IFC GlobalId (22 characters): never shown beside a room name
+INTERNAL_ID = re.compile(r"e\d{3,}|[0-9A-Za-z_$]{22}")
 
 
 def plain_ids(text: str, drawing: dict) -> str:
