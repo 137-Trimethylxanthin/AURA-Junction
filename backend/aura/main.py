@@ -36,7 +36,7 @@ from aura import ingest_cost, tools, uploads
 from aura.agent_client import AgentClient
 from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, Ledger, RequestRecord
 from aura.cache import AnswerCache, CheckCache
-from aura.config import Settings, get_settings, kill_file, models_enabled
+from aura.config import BACKEND_DIR, Settings, get_settings, kill_file, models_enabled
 from aura.contract import (
     CONTRACT_VERSION,
     AskRequest,
@@ -448,10 +448,26 @@ def create_app(
                         ledger=Ledger(settings.db_path,
                                       flush=volume.commit if volume else None))
         client = GeminiClient(settings, budget, transport) if use_gemini else None
+        effective_extras = list(extra_drawings or [])
+        if (
+            extra_drawings is None
+            and settings.build_dir == BACKEND_DIR / "build" / "drawings"
+            and not any((d / "swiss-46639" / "drawing.json").is_file() for d in settings.drawing_dirs())
+        ):
+            repo_bundle = BACKEND_DIR.parent / "frontend" / "src" / "data" / "drawing.swiss-46639.json"
+            repo_assets = BACKEND_DIR.parent / "design" / "assets"
+            if repo_bundle.is_file():
+                bundled = tools.load_file(
+                    repo_bundle, assets_dir=repo_assets if repo_assets.is_dir() else None
+                )
+                imgs = bundled.drawing.get("images")
+                if isinstance(imgs, dict) and str(imgs.get("original", "")).endswith("/original-crop.png"):
+                    imgs["original"] = "/drawings/swiss-46639/original.png"
+                effective_extras.append(bundled)
         registry = tools.Registry(settings.drawing_dirs(),
-                                  {d.id: d for d in extra_drawings or []},
+                                  {d.id: d for d in effective_extras},
                                   uploads_dir=settings.uploads_dir)
-        for ed in extra_drawings or ():
+        for ed in effective_extras:
             ed.registry = registry
         agent = (
             AgentClient(settings, budget, client, registry, transport=sidecar_transport)

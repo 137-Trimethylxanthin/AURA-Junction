@@ -469,7 +469,11 @@ class LoadedDrawing:
         if self.dir is None or "/" in name or name.startswith("."):
             return None
         p = self.dir / name
-        return p if p.is_file() else None
+        if p.is_file():
+            return p
+        if name == "original.png" and (self.dir / "original-crop.png").is_file():
+            return self.dir / "original-crop.png"
+        return None
 
 
 class Registry:
@@ -500,7 +504,7 @@ class Registry:
         for base in self.dirs:
             index = base / "index.json"
             try:
-                rows = json.loads(index.read_text()) if index.is_file() else []
+                rows = json.loads(index.read_text(encoding="utf-8")) if index.is_file() else []
             except ValueError:
                 rows = []
             if isinstance(rows, list):  # the library order written by preprocess
@@ -570,27 +574,27 @@ def load_dir(p: Path, drawing_id: str | None = None) -> LoadedDrawing:
     """Dispatch on the drawing's kind: raster.json → RasterEngine; kind 'ifc' → IfcEngine;
     a Swiss model.json → SwissEngine; evidence in drawing.json → BundleEngine.
     Anything else raises UnreadableDrawing."""
-    data = json.loads((p / "drawing.json").read_text())
+    data = json.loads((p / "drawing.json").read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("rooms", []), list):
         raise UnreadableDrawing("drawing.json is not a Drawing")
     gold = data.get("gold") or []
     if not gold and (p / "gold.json").is_file():
-        g = json.loads((p / "gold.json").read_text())
+        g = json.loads((p / "gold.json").read_text(encoding="utf-8"))
         gold = g.get("gold", g) if isinstance(g, dict) else g
     kind = data.get("kind", "cad_dxf")
     engine: Engine
     if (p / "raster.json").is_file():
-        engine = RasterEngine(json.loads((p / "raster.json").read_text()))
+        engine = RasterEngine(json.loads((p / "raster.json").read_text(encoding="utf-8")))
     elif kind == "ifc":
         from aura.solvers import ifc
 
-        engine = IfcEngine(ifc.IfcModel.from_json(json.loads((p / "model.json").read_text())))
+        engine = IfcEngine(ifc.IfcModel.from_json(json.loads((p / "model.json").read_text(encoding="utf-8"))))
     elif (p / "model.json").is_file():
         if kind != "cad_dxf":
             raise UnreadableDrawing(f"unknown drawing kind {kind!r}")
         from aura.solvers import swiss
 
-        m = json.loads((p / "model.json").read_text())
+        m = json.loads((p / "model.json").read_text(encoding="utf-8"))
         if "schema" in m:
             raise UnreadableDrawing("model.json is not a Swiss model")
         engine = SwissEngine(swiss.SwissModel.from_json(m))
@@ -604,7 +608,7 @@ def load_dir(p: Path, drawing_id: str | None = None) -> LoadedDrawing:
 
 
 def load_file(path: Path, assets_dir: Path | None = None) -> LoadedDrawing:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     return LoadedDrawing(id=data["id"], dir=assets_dir, drawing=data, engine=BundleEngine(data),
                          gold=list(data.get("gold") or []), anchors=list(data.get("anchors") or []))
 

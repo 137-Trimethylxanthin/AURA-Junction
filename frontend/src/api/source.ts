@@ -341,6 +341,18 @@ export function createSource(opts: SourceOptions = {}): Source {
             chatOffUntil = e.transient ? Date.now() + CHAT_RETRY_MS : Infinity
             return this.ask(askReq)
           }
+          // Server is up (e.g. store-only or fresh deploy without the bundled Swiss plan): answer swiss-46639 locally.
+          if (
+            e instanceof ApiError &&
+            e.status === 404 &&
+            e.code === 'unknown_drawing' &&
+            !seen &&
+            turn.drawing_id === BUNDLED_DRAWING_ID &&
+            turn.scope?.kind !== 'project' &&
+            !signal?.aborted
+          ) {
+            return { response: local(askReq), fellBack: true }
+          }
           if (
             e instanceof TransportError &&
             e.kind !== 'timeout' &&
@@ -411,6 +423,15 @@ export function createSource(opts: SourceOptions = {}): Source {
           return { response: await callAsk(), fellBack: false }
         }
       } catch (e) {
+        if (
+          e instanceof ApiError &&
+          e.status === 404 &&
+          e.code === 'unknown_drawing' &&
+          req.drawing_id === BUNDLED_DRAWING_ID &&
+          req.scope?.kind !== 'project'
+        ) {
+          return { response: local(req), fellBack: true }
+        }
         if (e instanceof ApiError) throw e
         // A slow answer is not a dead server: only network errors and 5xx demote the session to local data.
         if (e instanceof TransportError && e.kind !== 'timeout' && req.drawing_id === BUNDLED_DRAWING_ID) {

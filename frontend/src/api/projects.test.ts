@@ -172,4 +172,38 @@ describe('myProjects tokens and pruning', () => {
     expect(changed).toBe(2)
     expect(myProjects.list().map((p) => [p.id, p.floors.map((f) => f.drawing_id)])).toEqual([['keep', ['a', 'b']]])
   })
+
+  it('answers swiss-46639 locally when an API server returns 404 unknown_drawing without demoting API status', async () => {
+    const { createSource } = await import('./source')
+    const src = createSource({
+      baseUrl: 'http://x',
+      fetch: async (url: string) => {
+        if (url.endsWith('/health')) {
+          return new Response(JSON.stringify({ ok: true, contract_version: CONTRACT_VERSION }))
+        }
+        return new Response(
+          JSON.stringify({
+            contract_version: CONTRACT_VERSION,
+            error: "Unknown drawing 'swiss-46639'",
+            code: 'unknown_drawing',
+          }),
+          { status: 404, headers: { 'content-type': 'application/json' } },
+        )
+      },
+    })
+    const chatRes = await src.chat(
+      { drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' },
+      () => {},
+    )
+    expect(chatRes.fellBack).toBe(true)
+    expect(chatRes.response.answer).toMatchObject({ kind: 'count', value: 12 })
+    expect(src.status().kind).toBe('api')
+
+    const askRes = await src.ask({
+      drawing_id: 'swiss-46639',
+      question: 'How many windows are drawn on this floor plan?',
+    })
+    expect(askRes.fellBack).toBe(true)
+    expect(askRes.response.answer).toMatchObject({ kind: 'count', value: 12 })
+  })
 })
