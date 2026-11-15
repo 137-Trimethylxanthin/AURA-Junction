@@ -920,6 +920,8 @@ def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
     if one is named) and pick the largest (`order='max'`) or smallest. 0 model calls."""
     scope = scope or {"kind": "floor"}
     args: dict[str, Any] = {"scope": scope, "order": order, **({"room_type": concept} if concept else {})}
+    if scope.get("kind") == "project":
+        return _rank_across_floors(d, order, scope, printed, concept, args)
     if (bad := _model_scope_unsupported(d, "list_rooms", args)) is not None:
         return bad
     t0 = time.perf_counter()
@@ -962,6 +964,40 @@ def rank_rooms(d: LoadedDrawing, order: str, scope: dict | None = None,
                              "area_m2": runner[1]} if runner else None),
               "kept": [r["room_id"] for r, _ in kept], "dropped": dropped, "order": order,
               "concept": concept, "tie": tie})
+
+
+def _rank_across_floors(d: LoadedDrawing, order: str, scope: dict, printed: list[str] | None,
+                        concept: str | None, args: dict) -> ToolResult:
+    """The largest / smallest room over the floors of a building or group ("All N floors"): each floor is
+    ranked by the one-floor rule and the extreme of the floor winners is the answer, named with its floor."""
+    t0 = time.perf_counter()
+    ids = list(dict.fromkeys(i for i in scope.get("drawing_ids") or [] if isinstance(i, str))) or [d.id]
+    best: tuple[ToolResult, str, str] | None = None
+    seen = 0
+    for fid in ids:
+        fd = d if fid == d.id else (d.registry.get(fid) if d.registry is not None else None)
+        if fd is None:
+            continue
+        tr = rank_rooms(fd, order, {"kind": "floor"}, printed, concept)
+        if not tr.supported or tr.kind == "none" or tr.value is None:
+            continue
+        seen += 1
+        better = best is None or (tr.value > best[0].value if order == "max" else tr.value < best[0].value)
+        if better:
+            best = (tr, fid, str(fd.drawing.get("floor_label") or fd.drawing.get("title") or fid))
+    if best is None:
+        return ToolResult(result_id=_rid(d.id, "list_rooms", args), tool="list_rooms", args=args, kind="none",
+                          subject="room", summary=f"No floor in this scope has an indoor {concept or 'room'} "
+                                                  "with an area.", ms=_ms(t0), meta={"grabbed": 0, "dropped": []})
+    tr, fid, name = best
+    meta = dict(tr.meta or {})
+    win = dict(meta.get("winner") or {})
+    win["name"] = f"{win.get('name') or 'Room'} ({name})"
+    meta.update(winner=win, runner_up=None, floor=name, floors_ranked=seen)
+    return tr.model_copy(update={
+        "result_id": _rid(d.id, "list_rooms", args), "args": args, "ms": _ms(t0), "meta": meta,
+        "rooms": [r.model_copy(update={"drawing_id": fid}) for r in tr.rooms if r.included],
+        "summary": f"Ranked the rooms of {seen} floor{'s' if seen != 1 else ''}; the winner is on {name}. {tr.summary}"})
 
 
 # A door's box spans its wall opening, so it touches the outline of the room on each side of the

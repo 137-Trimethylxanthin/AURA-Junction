@@ -38,3 +38,26 @@ def test_building_rank_picks_the_one_winner_of_all_floors():
     other = (SimpleNamespace(label="c"), {"answer": {"kind": "note", "value": "text"}, "canonical_en": "List the rooms"})
     assert building._rank_winner([*floors, other]) is None
     assert building._rank_winner([floors[0], small[0]]) is None
+
+
+def test_largest_room_over_all_floors_names_one_winner_with_its_floor():
+    """Explicit "All N floors" scope: the room rank is the extreme of the floor winners, not an abstention."""
+    import os
+    from pathlib import Path
+
+    import pytest
+
+    from aura import tools
+
+    root = Path(os.environ.get("AURA_TEST_BUILD_DIR") or Path(__file__).resolve().parents[1] / "build" / "drawings")
+    ids = ["ifc-hitos_arc--kjeller", "ifc-hitos_arc--u-etg", "ifc-hitos_arc--1-etg", "ifc-hitos_arc--2-etg",
+           "ifc-hitos_arc--3-etg"]
+    if not all((root / i / "drawing.json").exists() for i in ids):
+        pytest.skip("the hitos bundles are not built here")
+    reg = tools.Registry([root])
+    d = reg.get(ids[2])
+    one = [tools.rank_rooms(reg.get(i), "max", {"kind": "floor"}) for i in ids]
+    tr = tools.rank_rooms(d, "max", {"kind": "project", "project_id": "p", "drawing_ids": ids})
+    assert tr.kind == "area" and tr.value == max(t.value for t in one if t.value is not None)
+    assert tr.meta["floors_ranked"] == sum(t.value is not None for t in one) and "(" in tr.meta["winner"]["name"]
+    assert [r.included for r in tr.rooms] == [True] and tr.rooms[0].drawing_id in ids
