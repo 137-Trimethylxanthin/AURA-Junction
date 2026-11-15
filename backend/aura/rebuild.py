@@ -169,13 +169,17 @@ def apply(out_dir: Path, drawing: dict) -> dict:
 def apply_file(out_dir: Path) -> bool:
     """`apply` on out_dir/drawing.json in place (atomic write). True when the drawing changed."""
     path = out_dir / "drawing.json"
-    if not path.is_file():
+    try:
+        if not path.is_file():
+            return False
+        drawing = json.loads(path.read_text(encoding="utf-8"))
+        new = apply(out_dir, drawing)
+        if new == drawing:
+            return False
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(new, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+    except Exception:  # noqa: BLE001 - never fails the upload
+        log.exception("vector rebuild could not update %s", path)
         return False
-    drawing = json.loads(path.read_text(encoding="utf-8"))
-    new = apply(out_dir, drawing)
-    if new == drawing:
-        return False
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(new, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
-    return True

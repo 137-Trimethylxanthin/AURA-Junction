@@ -153,6 +153,8 @@ DIM_WORD = S(r"dimensions?|measurements?|length|long|width|wide|depth|deep|size|
              r"lunghezza|larghezza|profondità|dimensioni")
 DIM_WHOLE = S(r"overall|outside|exterior|outer|total|whole|entire|building|house|plan|floor ?plan|footprint|"
               r"bâtiment|maison|plan|rakennus|talo|gebäude|haus|grundriss|edificio|casa|pianta")
+DIM_THING = S(r"walls|rooms?|corridors?|hallways?|halls?|balcon\w*|terrace\w*|garage|stairs?\w*|lift|elevator|"
+              r"parking|garden|yard|plot|lot\b|murs|pièces?|wände|räume|zimmer|seinät|huonee\w*|muri|stanze")
 DIM_WIDTH = S(r"width|wide|largeur|leveys|breite|breit|larghezza")
 DIM_DEPTH = S(r"depth|deep|profondeur|syvyys|tiefe|profondità")
 DIM_LENGTH = S(r"length|long|longueur|pituus|länge|lunghezza")
@@ -166,6 +168,11 @@ def dimension_subject(s: str) -> str | None:
     if not (DIM_WORD.search(s) and DIM_WHOLE.search(s)):
         return None
     if re.search(r"area|surface|m²|m2|sq\.? ?ft|square", s, re.IGNORECASE):
+        return None
+    # "how wide are the doors", "total length of the walls", "how long is the corridor": the size of a thing on the
+    # plan, not of the building. Only the building / plan itself is answered from its printed dimensions.
+    if (any(rx.search(s) for _, rx in SUBJECTS) or any(rx.search(s) for _, rx, _ in LABEL_CONCEPTS)
+            or DIM_THING.search(s)):
         return None
     if DIM_WIDTH.search(s) and not DIM_LENGTH.search(s):
         return "width"

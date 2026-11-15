@@ -190,6 +190,11 @@ _REQ_RE = re.compile(
 )
 
 
+_THRESHOLD = re.compile(
+    r"(?:than|over|under|above|below|exceed\w*|at\s+(?:least|most)|minimum|maximum|min\.?|max\.?|[<>≥≤]=?|"
+    r"als|über|unter|mindestens|höchstens|plus de|moins de|yli|alle|oltre|sotto)\s*\d", re.IGNORECASE)
+
+
 def requested_unit(text: str) -> tuple[str | None, str]:
     """('ft2', question without the phrase) when a drawing question asks for a specific unit.
 
@@ -201,11 +206,16 @@ def requested_unit(text: str) -> tuple[str | None, str]:
     if not m:
         return None, text
     raw = m["u"]
+    if raw.strip().lower() in ("mi", "a", "l", "in", "m"):  # "doors in MI?": a scope letter, not a unit
+        return None, text
     key = "imperial" if raw.lower().startswith("imperial") else unit_of(raw)
     if key is None:
         return None, text
     if key != "imperial" and key not in IMPERIAL:
         return key, text  # metric is what answers are in: the question is routed exactly as asked
+    before = text[:m.start()]
+    if _THRESHOLD.search(before):
+        return None, text  # "rooms larger than 200 in square feet": the unit belongs to the number
     cleaned = (text[:m.start()] + text[m.end():]).rstrip().rstrip(",;")
     if not cleaned.endswith("?") and text.rstrip().endswith("?"):
         cleaned += "?"

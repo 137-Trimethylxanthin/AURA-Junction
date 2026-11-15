@@ -216,3 +216,40 @@ def test_dimensions_read_on_phone_photos(name, monkeypatch):
     overall = next(d for d in dims if d.text.replace(" ", "") in ("98'-0\"", "98'-0") and d.orientation == "h")
     assert overall.px_length * m == pytest.approx(ftin(98), rel=0.03)
     assert conf >= 0.6
+
+
+class _DB:
+    def __init__(self):
+        self.rows = []
+
+    def run(self, *a, **k):
+        return []
+
+    def copy(self, table, cols, rows):
+        self.rows += rows
+
+
+def test_an_error_in_dimension_reading_does_not_fail_the_interpretation(monkeypatch):
+    from jstore.interpret import raster_rooms as R
+
+    def boom(*a, **k):
+        raise ValueError("bad line")
+    monkeypatch.setenv("JSTORE_DIMENSIONS_GEMINI", "0")
+    monkeypatch.setattr(D, "read_dimensions", boom)
+    out = R.read_dimension_strings(_DB(), {"file_id": 1}, Image.new("L", (64, 64), 255), [], 1e12)
+    assert out["mpp"] is None and "ValueError" in out["error"]
+
+
+def test_dimension_reading_stops_at_the_deadline(monkeypatch):
+    import time
+    from jstore.interpret import raster_rooms as R
+    seen = {}
+
+    def spy(gray, words, **k):
+        seen.update(k)
+        return []
+    monkeypatch.setenv("JSTORE_DIMENSIONS_GEMINI", "0")
+    monkeypatch.setattr(D, "read_dimensions", spy)
+    deadline = time.time() + 5                     # sooner than DIM_SECONDS
+    out = R.read_dimension_strings(_DB(), {"file_id": 1}, Image.new("L", (64, 64), 255), [], deadline)
+    assert seen["deadline"] == deadline and out["mpp"] is None and "error" not in out

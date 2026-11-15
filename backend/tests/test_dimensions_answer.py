@@ -61,3 +61,17 @@ def test_length_questions_are_answered_from_printed_dimensions(tmp_path):
     assert abs(wide["answer"]["number"] - 29.87) < 0.01
     assert abs(wall["answer"]["number"] - 6.375) < 0.01 and "Wall #1" in wall["answer"]["value"]
     assert [x["id"] for x in wall["evidence"]["boxes"]] == ["dim-04"]
+
+
+def test_dimension_route_never_answers_the_size_of_a_thing_on_the_plan():
+    from aura.router import DrawingCtx, route
+
+    ctx = DrawingCtx(labels=["BEDROOM #1", "KITCHEN"], kind="raster", has_dimensions=True)
+    for q in ("How wide are the doors in the plan?", "What is the total length of the walls in the building?",
+              "How long is the corridor in the house?", "What is the depth of the balcony on the plan?",
+              "What size are the windows on this plan?"):
+        assert route(q, ctx).intent != "dimension", q
+    for q, sub in (("What are the overall dimensions of the building?", "overall"),
+                   ("How wide is the building?", "width"), ("What is the length of wall #1?", "wall:1")):
+        r = route(q, ctx)
+        assert (r.intent, r.subject) == ("dimension", sub), q

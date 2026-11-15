@@ -531,7 +531,8 @@ def _scope_rooms(model: SwissModel, scope: dict) -> list[dict] | None:
         r = model.room(scope.get('room_id'))
         return [r] if r else None
     if k == 'label':
-        return [r for r in model.rooms if r['name'] == scope.get('label')]
+        from aura.router import label_hit
+        return [r for r in model.rooms if label_hit(r['name'], scope.get('label') or '')]
     if k == 'region':
         return [r for r in model.rooms if _in_rect(label_at(model, r), scope['rect'])]
     raise ValueError(f'unknown scope kind {k!r}')

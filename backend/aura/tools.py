@@ -718,7 +718,10 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
         within = scope.get("within") if isinstance(scope.get("within"), dict) else None
         tr = count_objects(fd, subject, within or {"kind": "floor"})
         if (within and within.get("kind") == "label" and (tr.value is None or not tr.supported)
-                and subject == "room" and fd.drawing.get("rooms")):
+                and fd.drawing.get("rooms") and (subject == "room" or fd.engine.supports(subject))
+                and not any(label_hit(str(r.get("name") or ""), within.get("label") or "")
+                            for r in fd.drawing["rooms"])):
+            # this floor has no room of that type: it counts 0 (not "not counted")
             tr = tr.model_copy(update={"kind": "count", "value": 0.0, "supported": True, "boxes": [], "rooms": []})
         if not tr.supported or tr.kind == "none" or tr.value is None:
             missing.append(fd.drawing.get("floor_label") or fd.drawing.get("title") or fid)
@@ -788,7 +791,7 @@ def count_rooms_labelled(d: LoadedDrawing, label: str, scope: dict | None = None
         return bad
     t0 = time.perf_counter()
     rows = d.engine.room_list(scope)
-    hits = [r for r in rows if r["name"].casefold() == label.casefold()]
+    hits = [r for r in rows if r["name"].casefold() == label.casefold() or label_hit(r["name"], label)]
     n = len(hits)
     names = sorted({r["name"] for r in rows})
     summary = (f"{n} rooms labelled {hits[0]['name'] if hits else label} {where_en(scope)}."

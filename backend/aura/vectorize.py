@@ -46,16 +46,22 @@ SNAP_DEG = 8.0            # edges within this angle of an axis are snapped to it
 
 
 def _load(path: Path) -> tuple[np.ndarray, int, int, float]:
-    Image.MAX_IMAGE_PIXELS = None
+    """The image at most WORK_SIDE px on its long side, as RGB on white. It is shrunk first (reduce, then
+    resample) so a large upload never exists at full size in another mode: this runs in the API process."""
     with Image.open(path) as im:
         W, H = im.size
         k = min(1.0, WORK_SIDE / max(W, H))
-        im = im.convert('RGBA')
-        bg = Image.new('RGBA', im.size, (255, 255, 255, 255))
-        im = Image.alpha_composite(bg, im).convert('RGB')
         if k < 1.0:
+            im.draft('RGB', (max(1, round(W * k)), max(1, round(H * k))))  # JPEG: decode at a lower scale
+            f = int(1 / k)
+            if f >= 2 and im.size == (W, H):
+                im = im.reduce(f)
             im = im.resize((max(1, round(W * k)), max(1, round(H * k))), Image.LANCZOS)
-        a = np.asarray(im)
+        if im.mode in ('RGBA', 'LA', 'PA') or (im.mode == 'P' and 'transparency' in im.info):
+            im = im.convert('RGBA')
+            bg = Image.new('RGBA', im.size, (255, 255, 255, 255))
+            im = Image.alpha_composite(bg, im)
+        a = np.asarray(im.convert('RGB'))
     return a, W, H, k
 
 

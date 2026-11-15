@@ -1064,7 +1064,8 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             return
 
         # Short exact context inheritance (e.g. "how many doors?" -> "and in apartment B?")
-        r = route(question, _project_ctx(d, scope_dump))
+        r = route(question, await asyncio.to_thread(_project_ctx, d, scope_dump)
+                  if (scope_dump or {}).get("kind") == "project" else d.ctx)
         if context and not has_followup_semantics:
             short = len(question.split()) <= 5
             cue = short and bool(FOLLOW_UP_CUE.search(question))
@@ -1093,8 +1094,10 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
         # A count across a building's floors is exact too (each floor counted, then summed): no model needed.
         exact_project = is_project and r.intent == "count"
-        if exact_project and r.scope and r.scope.get("kind") in ("label", "unit", "room"):
-            eff_scope = eff_scope | {"within": r.scope}  # kept per floor; never in the response scope
+        # A room-type filter ("how many bedrooms") applies on every floor; only the exact step sees it, so it
+        # never reaches a response scope. Unit letters and room ids repeat per floor, so only labels.
+        exact_scope = (eff_scope | {"within": r.scope}
+                       if exact_project and r.scope and r.scope.get("kind") == "label" else eff_scope)
         if mode == "hybrid" and (not is_project or exact_project) and not has_followup_semantics:
             if (indexed and r.intent in (
                     "count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count",
@@ -1106,7 +1109,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
                 tag = ("router · reference" if ref else
                        "router · follow-up" if "follow-up" in r.matched else "router")
                 exact_built, ok_exact = await _execute_exact_intent(
-                    d, question, lang, r.intent, r.subject, eff_scope, overrides, r.matched,
+                    d, question, lang, r.intent, r.subject, exact_scope, overrides, r.matched,
                     tag=tag, pattern=r.pattern, topic=r.topic, ref=ref,
                 )
                 if isinstance(exact_built.body.get("scope"), dict):
@@ -1462,7 +1465,12 @@ def with_units(inner):
             req = req.model_copy(update={"question": cleaned})
         async for ev, data in inner(svc, req, caller, context, history, meters, **kw):
             if requested is not None and ev == "answer" and isinstance(data.get("response"), dict):
-                data = data | {"response": _with_converted(data["response"], requested)}
+                conv = _with_converted(data["response"], requested)
+                if "converted" in conv and svc.writer is not None and conv.get("answer_id"):
+                    # stored history, CSV and reloaded conversations show the converted answer too
+                    svc.writer.submit("UPDATE answers SET response=? WHERE id=?",
+                                      (json.dumps(conv, ensure_ascii=False), conv["answer_id"]))
+                data = data | {"response": conv}
             yield ev, data
 
     return wrapped

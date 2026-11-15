@@ -42,6 +42,8 @@ def test_drawing_questions_are_not_conversions(q):
     ("How big is the living room (in imperial)?", "imperial", "How big is the living room?"),
     ("Fläche der Küche in Quadratfuß?", "ft2", "Fläche der Küche?"),
     ("how many rooms are there in the plan?", None, "how many rooms are there in the plan?"),
+    ("How many rooms are larger than 200 in square feet?", None, "How many rooms are larger than 200 in square feet?"),
+    ("How many doors in MI?", None, "How many doors in MI?"),
     ("What is the net floor area of the room 'LIFT (113)' on '1.korrus', in m²?", "m2",
      "What is the net floor area of the room 'LIFT (113)' on '1.korrus', in m²?"),
 ])
@@ -76,3 +78,9 @@ def test_api_area_in_square_feet_carries_converted(client):
     assert asked["converted"]["unit"] == "sq ft"
     assert asked["converted"]["value"] == pytest.approx(plain["answer"]["value"] / 0.09290304, rel=1e-6)
     assert "converted" not in plain
+
+
+def test_numbered_room_keeps_its_number_but_thresholds_keep_their_unit():
+    assert units.requested_unit("What is the area of bedroom 2 in square feet?") == (
+        "ft2", "What is the area of bedroom 2?")
+    assert units.requested_unit("rooms over 20 in sq ft")[0] is None

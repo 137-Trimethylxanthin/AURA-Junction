@@ -29,7 +29,7 @@ How a room comes about (each step is recorded in the definition rows and in the 
   3. scale    in this order: the frame of the page, printed scale with the DPI of the file (above 96), the
               dimension chains (jstore.dimensions: printed dimension strings over the spans between their drawn
               end marks, median of those that agree, confirmed when a chain adds up to its overall dimension;
-              read before the labels, stored as raster_detection rows class 'dimension' also when no room is
+              read while Gemini reads the labels, stored as raster_detection rows class 'dimension' also when no room is
               found), printed scale with the paper size named on the sheet (the image must have the ISO proportions), the scale
               bar measured in the pixels, the scale bar as Gemini boxed it, the printed room areas themselves
               over the outlines of step 2 (>= 3 rooms that agree; the Gemini polygons where there are any).
@@ -761,23 +761,30 @@ def read_dimension_strings(db: DB, f: dict, im: Image.Image, words: list[dict], 
     dimension is stored as a raster_detection row (class 'dimension', box = its text, attrs = text, metres, the
     measured span p0 / p1 in pixels, how it was read, whether it agrees with the scale).
     -> {mpp, confidence, n, of, chains_confirmed, gemini} (mpp None when no dimension was read)."""
-    from .. import dimensions as D
     out: dict = dict(mpp=None, confidence=0.0, n=0, of=0, chains_confirmed=0)
-    db.run("delete from jstore.raster_detection where file_id = :f and class = 'dimension'", f=f["file_id"])
     try:
-        gray = np.asarray(im.convert("L"))
-        use_gemini = bool(os.environ.get("GEMINI_API_KEY")) and os.environ.get("JSTORE_DIMENSIONS_GEMINI", "1") != "0"
-        with cf.ThreadPoolExecutor(1) as ex:
-            fut = ex.submit(D.gemini_dimensions, gray, deadline) if use_gemini else None
-            dims = D.read_dimensions(gray, words, deadline=time.time() + DIM_SECONDS)
-            g = fut.result() if fut is not None else None
-        if g is not None and "error" in g:
-            out["gemini"] = dict(error=g["error"])
-        elif g is not None:
-            out["gemini"] = dict(D.add_gemini(dims, g["dims"], gray.shape), cached=g["cached"], model=g["model"])
+        return _read_dimension_strings(db, f, im, words, deadline, out)
     except MemoryError:
         out["error"] = "out of memory"
-        return out
+    except Exception as e:  # noqa: BLE001 - the dimensions are an extra scale source: never fail the rooms
+        out["error"] = f"{type(e).__name__}: {e}"[:300]
+    print(f"raster_rooms: dimension reading failed for file {f.get('file_id')}: {out['error']}", flush=True)
+    return out
+
+
+def _read_dimension_strings(db: DB, f: dict, im: Image.Image, words: list[dict], deadline: float, out: dict) -> dict:
+    from .. import dimensions as D
+    db.run("delete from jstore.raster_detection where file_id = :f and class = 'dimension'", f=f["file_id"])
+    gray = np.asarray(im.convert("L"))
+    use_gemini = bool(os.environ.get("GEMINI_API_KEY")) and os.environ.get("JSTORE_DIMENSIONS_GEMINI", "1") != "0"
+    with cf.ThreadPoolExecutor(1) as ex:
+        fut = ex.submit(D.gemini_dimensions, gray, deadline) if use_gemini else None
+        dims = D.read_dimensions(gray, words, deadline=min(deadline, time.time() + DIM_SECONDS))
+        g = fut.result() if fut is not None else None
+    if g is not None and "error" in g:
+        out["gemini"] = dict(error=g["error"])
+    elif g is not None:
+        out["gemini"] = dict(D.add_gemini(dims, g["dims"], gray.shape), cached=g["cached"], model=g["model"])
     D.attach_notes(dims, words)
     mpp, conf, used = D.scale_from_dimensions(dims)
     if mpp and len(used) >= 2:                       # one dimension alone may be a misreading
@@ -976,9 +983,11 @@ def interpret(db: DB, f: dict) -> dict:
     words = db.run("select id, text, conf, x0, y0, x1, y1 from jstore.raster_word where file_id = :f and page_no = 0",
                    f=f["file_id"])
     toks = _ocr_tokens(words)
-    dims = read_dimension_strings(db, f, im, words, deadline - 30)
     log: dict = {}
-    g = read_labels(im, deadline - 25, log)
+    with cf.ThreadPoolExecutor(1) as ex:                  # the dimensions are read while Gemini reads the labels
+        fut = ex.submit(read_dimension_strings, db, f, im, words, deadline - 30)
+        g = read_labels(im, deadline - 25, log)
+        dims = fut.result()
     if g is not None and g["kind"] != "floor_plan":
         return _nothing(db, f, f"not a floor plan: the sheet shows a {g['kind'].replace('_', ' ')}", dict(gemini=log))
     rooms = g["rooms"] if g is not None else labels_from_ocr(toks)

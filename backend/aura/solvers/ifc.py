@@ -400,7 +400,8 @@ def answer(model: IfcModel, family: str, scope: dict | None = None) -> dict:
         elif k == 'model':
             rr = list(model.rooms)
         elif k == 'label':
-            rr = [r for r in model.rooms if r['storey'] == st and r['name'] == scope.get('label')]
+            from aura.router import label_hit
+            rr = [r for r in model.rooms if r['storey'] == st and label_hit(r['name'], scope.get('label') or '')]
         elif k == 'region':
             rect = scope['rect']
             rr = []

@@ -1208,7 +1208,7 @@ async def answer_with_tools(svc, d: tools.LoadedDrawing, question: str, lang: st
 
 
 REASON_TIMEOUT_S = 14.0  # the whole reasoning step, re-ask included: a typical answer stays under 10 s
-REASON_SHEET_TIMEOUT_S = 50.0  # with the sheet image on the vision model (image/PDF uploads)
+REASON_SHEET_TIMEOUT_S = 35.0  # with the sheet image on the vision model; gate + tools + this stay < 60 s
 REASON_MODEL = os.environ.get("AURA_REASON_MODEL", "gemini-3.5-flash-lite")  # fast; ~2-5 s an answer
 SUMMARY_CHARS = 24_000  # ~6 k tokens of plan data at most
 REASON_SCHEMA = {"type": "object", "properties": {
@@ -1349,27 +1349,27 @@ REASON_SHEET = (
 
 
 def _sheet_image(d) -> dict | None:
-    """The served image of an image/PDF upload as an inline JPEG part (long side <= SHEET_SIDE), else None."""
+    """The served image of an image/PDF upload as an inline JPEG part (long side <= SHEET_SIDE), else None.
+    The JPEG is made once per image (sheet.jpg beside it, rebuilt when the original changes)."""
     if d.drawing.get("kind") != "raster":
         return None
     try:
         import base64
-        import io
+        import os as _os
 
         from PIL import Image
 
         path = d.file("original.png")
         if path is None:
             return None
-        Image.MAX_IMAGE_PIXELS = None
-        with Image.open(path) as im:
-            im = im.convert("RGB")
-            k = min(1.0, SHEET_SIDE / max(im.size))
-            if k < 1.0:
-                im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
-            buf = io.BytesIO()
-            im.save(buf, "JPEG", quality=88)
-        return {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}}
+        sheet = path.with_name("sheet.jpg")
+        if not sheet.is_file() or sheet.stat().st_mtime < path.stat().st_mtime:
+            with Image.open(path) as im:
+                im.thumbnail((SHEET_SIDE, SHEET_SIDE), Image.LANCZOS, reducing_gap=3.0)
+                tmp = sheet.with_suffix(".jpg.tmp")
+                im.convert("RGB").save(tmp, "JPEG", quality=88)
+            _os.replace(tmp, sheet)
+        return {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(sheet.read_bytes()).decode()}}
     except Exception:  # noqa: BLE001 - the plan data alone still answers
         log.debug("sheet image unavailable", exc_info=True)
         return None
@@ -1441,7 +1441,7 @@ def _plan_summary(d, sess: Session | None) -> dict:
         "notes": "door_widths_m are clear openings; connects_to lists rooms sharing a door; outdoor rooms "
                  "are balconies/terraces.",
     }
-    if (texts := _printed_texts(d)):
+    if d.drawing.get("kind") == "raster" and (texts := _printed_texts(d)):
         out["printed_text"] = texts
         out["notes"] += (" printed_text lists text printed on the sheet (longest first) as 'text @ x%,y%' "
                          "(position on the sheet): labels, printed areas (m², BGF/NF/Wfl), dimensions (often "
