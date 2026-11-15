@@ -598,6 +598,13 @@ def load_dir(p: Path, drawing_id: str | None = None) -> LoadedDrawing:
         from aura.solvers import ifc
 
         engine = IfcEngine(ifc.IfcModel.from_json(json.loads((p / "model.json").read_text())))
+        # a drawing built before placeholder project names were replaced ("Default Project · kjeller"):
+        # title it after the model file, as a new build does
+        head, sep, tail = str(data.get("title") or "").partition(" · ")
+        stem = re.sub(r"^ifc-", "", str(drawing_id or data.get("id") or p.name)).split("--", 1)[0]
+        if stem and ifc.PLACEHOLDER_PROJECT.fullmatch(head):
+            data["title"] = ifc.project_title(None, stem) + sep + tail
+            engine.model.project = ifc.project_title(engine.model.project, stem)
     elif (p / "model.json").is_file():
         if kind != "cad_dxf":
             raise UnreadableDrawing(f"unknown drawing kind {kind!r}")

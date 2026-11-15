@@ -728,6 +728,23 @@ def _purge_late_sheet(svc: Any, drawing_id: str) -> None:
         writer.submit("DELETE FROM check_cache WHERE drawing_id=?", (drawing_id,))
 
 
+def _name_rooms(svc: Any, sheet_id: str, resp: dict) -> None:
+    """Evidence rooms of a floor carry their name and number: the viewer holds only the open floor's rooms and
+    would otherwise show the rooms of the other floors by their id (an IFC GlobalId)."""
+    try:
+        d = svc.registry.get(sheet_id)
+        known = {r.get("room_id"): r for r in (d.drawing.get("rooms") or [])} if d is not None else {}
+    except Exception:  # names are a nicety: never a reason to lose the answer
+        return
+    for r in (resp.get("evidence") or {}).get("rooms") or []:
+        room = known.get(r.get("room_id"))
+        if room:
+            if room.get("name") and not r.get("name"):
+                r["name"] = str(room["name"])[:120]
+            if room.get("num") and not r.get("num"):
+                r["num"] = str(room["num"])[:40]
+
+
 def _tag_sheet_evidence(resp: dict, sheet_id: str) -> None:
     """Ensure every evidence item from a non-active sheet carries its `drawing_id`."""
     ev = resp.get("evidence")
@@ -909,6 +926,7 @@ async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = Non
                     resp = copy.deepcopy(data["response"])
                     if only.id != req.drawing_id:
                         _tag_sheet_evidence(resp, only.id)
+                        _name_rooms(svc, only.id, resp)
                     trace = list(resp.get("trace") or [])
                     resp["trace"] = [*trace[:1], scope_node | {"parent": (trace[0]["id"] if trace else "q")}, *trace[1:]]
                     if svc is not None and getattr(svc, "writer", None) is not None and _answers_has_sheet_ids(svc):
@@ -943,7 +961,9 @@ async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = Non
                 async for ev, data in base_run(capped_svc, sub, caller, context, history,
                                                sheet_meters, deadline_s, agent_deadline_s):
                     if ev == "answer":
-                        return dict(data["response"])
+                        got = copy.deepcopy(data["response"])
+                        _name_rooms(svc, sheet.id, got)
+                        return got
             raise RuntimeError("the pipeline ended without an answer")
 
         raw = await asyncio.gather(*(one(s) for s in plan.sheets), return_exceptions=True)

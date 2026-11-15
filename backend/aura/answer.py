@@ -336,9 +336,18 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
     if gold:
         body["gold"] = gold
     if value == 0 and tr.meta.get("none_in_model"):
-        body["explanation"] = tr.summary
+        body["explanation"] = none_in_model_said(lang, subject, tr.summary)
     if unlabelled_note:
         body["explanation"] = unlabelled_note
+    if subject == "room" and scope.get("kind", "floor") == "floor" and not overrides:
+        # the header counts every space of the sheet; the answer leaves the outdoor ones out, and says so
+        outdoor = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("outdoor")}
+        n_out = sum(1 for r in tr.rooms if not r.included and r.room_id in outdoor
+                    and not getattr(r, "drawing_id", None))
+        if n_out:
+            one, many = OUTDOOR_NOTE.get(contract_lang(lang), OUTDOOR_NOTE["en"])
+            note = (one if n_out == 1 else many).format(n=n_out)
+            body["explanation"] = f"{body['explanation']} {note}" if body.get("explanation") else note
     return Built(body, [tr], check_ids, subject)
 
 
@@ -467,6 +476,52 @@ UNLABELLED_NOTE = {
     "fi": "{n} huonetta ({a} nimettyä, {b} ilman nimeä). Jokainen huone on korostettu pohjapiirroksessa tarkistusta varten.",
 }
 
+#: "(1 outdoor space not counted)": why a room count is lower than the number of spaces on the sheet
+OUTDOOR_NOTE = {
+    "en": ("({n} outdoor space not counted)", "({n} outdoor spaces not counted)"),
+    "de": ("({n} Außenbereich nicht mitgezählt)", "({n} Außenbereiche nicht mitgezählt)"),
+    "fr": ("({n} espace extérieur non compté)", "({n} espaces extérieurs non comptés)"),
+    "fi": ("({n} ulkotilaa ei laskettu mukaan)", "({n} ulkotilaa ei laskettu mukaan)"),
+}
+
+#: "0 windows: the model file contains no window elements" in the other interface languages
+NONE_IN_MODEL = {
+    "de": "0 {things}: {where} enthält keine {element}-Elemente.",
+    "fr": "0 {things} : {where} ne contient aucun élément de type {element}.",
+    "fi": "0 {things}: {where} ei sisällä {element}-elementtejä.",
+}
+_NONE_WORDS = {
+    "de": {"door": ("Türen", "Tür"), "window": ("Fenster", "Fenster"), "room": ("Räume", "Raum"),
+           "floor": "dieses Geschoss der Modelldatei", "model": "die Modelldatei"},
+    "fr": {"door": ("portes", "porte"), "window": ("fenêtres", "fenêtre"), "room": ("pièces", "espace"),
+           "floor": "cet étage de la maquette", "model": "la maquette"},
+    "fi": {"door": ("ovea", "ovi"), "window": ("ikkunaa", "ikkuna"), "room": ("huonetta", "tila"),
+           "floor": "mallitiedoston tämä kerros", "model": "mallitiedosto"},
+}
+
+
+def none_in_model_said(lang: str, subject: str, summary: str) -> str:
+    """The reason of a real zero from a model file, in the language of the question (English otherwise)."""
+    code = contract_lang(lang)
+    words = _NONE_WORDS.get(code, {})
+    if code not in NONE_IN_MODEL or subject not in words or "contains no" not in summary:
+        return summary
+    things, element = words[subject]
+    where = words["floor"] if "this storey" in summary or "this floor" in summary else words["model"]
+    text = NONE_IN_MODEL[code].format(things=things, where=where, element=element)
+    return text[:1].upper() + text[1:] if not text[0].isdigit() else text
+
+
+#: "X is the largest room: 45.60 m²; next is Y at 45.50 m²" in the other interface languages
+RANK_SAID = {
+    "de": {"max": "{name} ist der größte Raum: {area}", "min": "{name} ist der kleinste Raum: {area}",
+           "next": "; danach folgt {name} mit {area}", "tied": " (gleichauf)", "estimate": "Schätzung", "room": "Raum"},
+    "fr": {"max": "{name} est la plus grande pièce : {area}", "min": "{name} est la plus petite pièce : {area}",
+           "next": " ; vient ensuite {name} avec {area}", "tied": " (à égalité)", "estimate": "estimation", "room": "Pièce"},
+    "fi": {"max": "{name} on suurin huone: {area}", "min": "{name} on pienin huone: {area}",
+           "next": "; seuraavana on {name}, {area}", "tied": " (tasan)", "estimate": "arvio", "room": "Huone"},
+}
+
 #: an id the store gives a room or thing that carries no number on the sheet ("e143313"): never shown to people
 INTERNAL_ID = re.compile(r"e\d{3,}")
 
@@ -572,6 +627,17 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
     value = (f"{_n(win, 'Room')} is the {word} {what}: {_a(win)}"
              + (f"; next is {_n(ru, 'room')} at {_a(ru)}" if ru else "")
              + (" (tied)" if m.get("tie") else "") + ".")
+    # the sentence people read, in the language they asked in (the trace stays English); only for plain rooms
+    t = RANK_SAID.get(contract_lang(lang)) if what == "room" else None
+    said = value
+    if t:
+        def _al(room: dict) -> str:
+            if room["id"] in estimates:
+                return f"≈ {round(room['area_m2'])} m² ({t['estimate']})"
+            return f"{room['area_m2']:.2f}".replace(".", ",") + " m²"
+        said = (t[m["order"] if m["order"] in ("max", "min") else "max"].format(name=_n(win, t["room"]), area=_al(win))
+                + (t["next"].format(name=_n(ru, t["room"]), area=_al(ru)) if ru else "")
+                + (t["tied"] if m.get("tie") else "") + ".")
     all_ids = [room_eid(r.room_id) for r in tr.rooms]
     win_ids = [room_eid(win["id"])]
     dropped = m.get("dropped") or []
@@ -603,7 +669,7 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
                    evidence_ids=win_ids),
     ]
     body = _base(question, lang, scope) | {
-        "answer": {"kind": "note", "value": value, "number": round(float(win["area_m2"]), 2), "unit": "m2"}
+        "answer": {"kind": "note", "value": said, "number": round(float(win["area_m2"]), 2), "unit": "m2"}
                   | ({"approximate": True} if approx else {}),
         "evidence": {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]},
         "canonical_en": f"Which is the {word} {what} {where_en(scope)}",

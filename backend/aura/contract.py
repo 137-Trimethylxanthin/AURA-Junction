@@ -238,6 +238,8 @@ class EvidenceRoom(_M):
     edited: bool | None = None
     group_id: str | None = None
     drawing_id: str | None = None
+    name: str | None = None  # additive: the room's name and number as its own floor shows them,
+    num: str | None = None   # set for rooms of another floor of a building (the viewer has only the open floor)
 
 
 class EvidenceRow(_M):
