@@ -1022,6 +1022,10 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
     if taken is None and not COUNT.search(question):
         return None  # a row count is no answer to "what is the scale?": the reasoning step answers instead
     taken = taken or {"kind": "count", "value": q.get("total", 0), "unit": None, "rule": rs.rule}
+    if d.drawing.get("kind") == "raster" and taken.get("value") in (0, 0.0, None):
+        # On a scan or PDF sheet a planned query that finds nothing is weak evidence (its text filters are
+        # guesses): the reasoning step, which sees the sheet, decides whether it really is none.
+        return None
     ids = [int(i) for i in rs.ids if str(i).isdigit()]
     boxes, room_ids = store_sql.boxes_for(d, ids)
     method, estimate, why = q.get("method", store_sql.EXACT_METHOD), q.get("estimate", False), q.get("why", "")

@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 15  # 15: "bedroom 2" is BEDROOM #2; 14: printed dimensions of scans; 12/13: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
+ROUTER_VERSION = 16  # 16: zero SQL counts on sheets go to the reasoning step; 15: "bedroom 2" is BEDROOM #2; 14: printed dimensions of scans; 12/13: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count",
                            "dimension"})
 
