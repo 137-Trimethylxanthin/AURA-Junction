@@ -13,9 +13,13 @@ from __future__ import annotations
 import json
 import multiprocessing as mp
 import os
-import resource
 import sys
 from pathlib import Path
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows has no POSIX resource module
+    resource = None  # type: ignore[assignment]
 
 AS_LIMIT = 4096 * 1024 * 1024
 WORK_PIXELS = 80_000_000  # served copy of an uploaded image; below Pillow's own bomb warning (89 MP)
@@ -26,7 +30,10 @@ FSIZE_LIMIT = 200 * 1024 * 1024  # no single output file (plan.svg, model.json) 
 NOFILE_LIMIT = 64
 MAX_ITEMS = 3000  # countable objects in one uploaded DXF (the dataset's largest has ~600)
 MAX_TEXTS = 20000
-KEEP_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONPATH", "TMPDIR", "OMP_NUM_THREADS")
+KEEP_ENV = (
+    "PATH", "HOME", "LANG", "LC_ALL", "PYTHONPATH", "TMPDIR", "OMP_NUM_THREADS",
+    "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "USERPROFILE",
+)
 
 
 class TooLarge(ValueError):
@@ -35,7 +42,8 @@ class TooLarge(ValueError):
 
 def _limits() -> None:
     """M4: the child holds no secrets (it never needs Settings) and gets hard resource limits."""
-    for k in [k for k in os.environ if k not in KEEP_ENV]:  # second line of defence
+    keep_upper = {k.upper() for k in KEEP_ENV}
+    for k in [k for k in os.environ if k.upper() not in keep_upper]:  # second line of defence
         os.environ.pop(k, None)
     os.environ["OMP_NUM_THREADS"] = "1"
     try:  # not dumpable: no core dump, /proc/<pid>/{environ,mem} unreadable to the same UID
@@ -44,11 +52,12 @@ def _limits() -> None:
         ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE = 4
     except Exception:  # noqa: BLE001, S110 - not Linux: nothing to set
         pass
-    resource.setrlimit(resource.RLIMIT_AS, (AS_LIMIT, AS_LIMIT))
-    resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_S, CPU_LIMIT_S + 5))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (FSIZE_LIMIT, FSIZE_LIMIT))
-    _soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    resource.setrlimit(resource.RLIMIT_NOFILE, (min(NOFILE_LIMIT, hard), hard))
+    if resource is not None:
+        resource.setrlimit(resource.RLIMIT_AS, (AS_LIMIT, AS_LIMIT))
+        resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_S, CPU_LIMIT_S + 5))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (FSIZE_LIMIT, FSIZE_LIMIT))
+        _soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(NOFILE_LIMIT, hard), hard))
 
 
 def _write_json(p: Path, obj: dict) -> None:
