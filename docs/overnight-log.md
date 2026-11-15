@@ -7,10 +7,10 @@ was checked, and what is still open.
 
 ## Result at a glance (written 02:15 UTC, last updated 05:55 UTC)
 
-Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `f5aa2e9`. Not pushed
+Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `61a1f53`. Not pushed
 (no GitHub credentials on the devbox): `git push -u origin overnight-improvements`.
-Suites on the final tree: backend 763 passed / 34 skipped, store 224 passed / 1 skipped,
-frontend 363 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
+Suites on the final tree: backend 767 passed / 35 skipped, store 225 passed / 1 skipped,
+frontend 365 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
 duplicate removal, Italian interface) and the open findings of the closing sweep are described at
 the end of this file.
 
@@ -485,3 +485,36 @@ thumbnails); every caption was re-checked against the live site. Earlier cuts ar
 **Final state at the hard stop:** branch `overnight-improvements`; deployed commit `f5aa2e9`
 (code) — later commits on the branch are documentation only. Suites on the deployed tree: backend
 763 passed / 34 skipped, store 224 passed / 1 skipped, frontend 363 passed. Not pushed.
+
+### After 05:55 UTC — the interrupted fixes reviewed, merged and deployed; two more fixes
+
+The work continued inline (no subagents: the model usage limit was reached).
+
+- `on/s-final` (the four commits of the interrupted agent) was reviewed, its suites run (backend
+  767 passed, store 224, frontend 365) and merged: a source or file-type chip lists only the
+  projects of that source; library card titles and subtitles wrap, so page entries can be told
+  apart; "largest room" over a building names one winner without IFC GUIDs and leaves gross-area
+  spaces out; similar-question reuse ignores answers stored under an older cache key version.
+- Explicit "All N floors" scope: "Which room is the largest / smallest?" abstained; each floor is
+  now ranked and the extreme winner named with its floor ("Boksamling … (1.etg) is the largest
+  room: 459.70 m²"), 0 model calls; test on the hitos bundles.
+- School plan circumference (demo step 2): on the current deploy the answer reads "Circumference of
+  the Multi-Purpose Hall: 208.6 ft (63.57 m). This is the perimeter of one room. It was measured on
+  the room outline traced from the scan, so it is an estimate." with evidence; the internal wording
+  the closing tester saw came from an answer cached before the wording fix (the cache key version
+  was bumped since).
+- Image plans read as a fragment: when the rooms read on a scan cover under 40 % of the area its
+  detected doors, windows and fixtures spread over, the scan stays the plan instead of a rebuilt
+  corner of the building. On the live store this applies to 6 of 315 image plans with rooms,
+  including `st-high-quality-architectural-12166-d232fe37`. The other two reported plans
+  (`st-high-quality-architectural-7838-74949bcd`, `st-colorful-11960-a0cad0a3`) are not caught:
+  their labels were read too sparsely by the label reader; avoid them in a demo.
+
+Deployed `61a1f53`. Suites: backend 767 passed / 35 skipped, store 225 passed / 1 skipped,
+frontend 365 passed. Checked through the public API after the deploy: the walkthrough questions
+answer as stated, all with 0 model calls.
+
+**Still open:** the two sparse CubiCasa plans above; real balconies bounded only by railings are
+dropped by the false-room guard; reasoning-tree node titles and credit lines stay English in
+other interface languages; a DWG site plan answers "1 door, Exact"; the video's cost scene shows
+the running total at recording time.
