@@ -5,12 +5,14 @@ Each work stream runs in its own git worktree and branch, is verified on a priva
 and is then merged here. This file is the running record: what was asked, what was done, how it
 was checked, and what is still open.
 
-## Result at a glance (written 02:15 UTC, updated 02:50 UTC)
+## Result at a glance (written 02:15 UTC, last updated 05:55 UTC)
 
-Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `db77e6b`. Not pushed
+Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `f5aa2e9`. Not pushed
 (no GitHub credentials on the devbox): `git push -u origin overnight-improvements`.
-Suites on the final tree: backend 746 passed / 34 skipped, store 176 passed / 1 skipped,
-frontend 357 passed, typecheck clean.
+Suites on the final tree: backend 763 passed / 34 skipped, store 224 passed / 1 skipped,
+frontend 363 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
+duplicate removal, Italian interface) and the open findings of the closing sweep are described at
+the end of this file.
 
 | Asked | State | Evidence |
 |---|---|---|
@@ -448,3 +450,38 @@ outlines) and for the 189 image drawings with an estimated scale (one model call
   office" 4.90 × 5.11 m, "area of the utility room" 24.90 m², "largest room" UTILITY 24.90 m²;
   everything listed in the walkthroughs above still answers the same, except the living room of
   "High quality 108", which reads ≈ 21 m² under the new scale estimate (was ≈ 22 m²).
+
+### 03:40–05:55 UTC — closing check; final state
+
+**Closing sweep (one tester, live site `f5aa2e9`):** no must-level problem; the five demo
+walkthroughs and the six items give the stated numbers; about 45 drawing loads with 0 console
+errors, 0 failed requests; 200 library entries through the API without failure. Scan areas after
+the new scale estimate are plausible over all 241 CubiCasa documents (bedroom median 11.3 m²,
+living room 19.8 m², toilet 2.2 m²). PDF sheets: 13 questions on 8 drawings answered with no model
+call and the room highlighted at the right place.
+
+**Should-level findings of the closing sweep, NOT fixed in the deployed version:**
+- School plan, "circumference of the Multi-Purpose Hall in feet": the number is right (208.6 ft =
+  63.57 m) but the sentence still shows internal wording ("Rule: the cell perimeter_m = …") and
+  the room is not highlighted on this drawing.
+- With the "CubiCasa" source chip active the IFC project tiles stay on top; "High quality 108" is
+  the 15th card (type "108" in the search box instead).
+- Three CubiCasa plans are rebuilt as fragments with implausible areas: avoid
+  `st-high-quality-architectural-12166-d232fe37`, `st-high-quality-architectural-7838-74949bcd`,
+  `st-colorful-11960-a0cad0a3`.
+- Page entries of one PDF cannot be told apart on library cards (title and subtitle are cut).
+- "Largest room" on an IFC building answers with a long per-storey sentence containing IFC GUIDs.
+
+**Fix pass interrupted:** the agent working on these findings stopped when the account's model
+usage limit was reached. Its partial work is on the local branch `on/s-final` (worktree
+`/root/aura-work/s-final`, 4 commits) and is NOT merged or deployed: it was not reviewed and its
+suites were not re-run, and the hard stop was minutes away. Review before merging.
+
+**Demo video, final cut:** `/root/aura-deploy/demo/aura-demo.mp4` (86.3 s) and
+`aura-demo-720p.mp4`. The library scene was re-recorded (828 drawings, source chips, rebuilt-plan
+thumbnails); every caption was re-checked against the live site. Earlier cuts are kept as
+`aura-demo-v1/v2/v3.mp4`.
+
+**Final state at the hard stop:** branch `overnight-improvements`; deployed commit `f5aa2e9`
+(code) — later commits on the branch are documentation only. Suites on the deployed tree: backend
+763 passed / 34 skipped, store 224 passed / 1 skipped, frontend 363 passed. Not pushed.
