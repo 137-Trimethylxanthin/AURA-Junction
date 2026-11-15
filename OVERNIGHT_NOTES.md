@@ -10,7 +10,7 @@ Branch: `simon/overnight-blueprint-improvements` (pushed). Every fix is its own 
 | 2 | "Compare with original" compared a photo with itself | Image uploads get a vector rebuild (`plan.svg`: walls, windows, doors, room names) traced with OpenCV in the image's own pixel frame, so the swipe/blend is exactly aligned. Compare is hidden when there is no distinct rebuild. | `backend/tests/test_vectorize.py`, `test_rebuild.py` |
 | 3 | 3D of image uploads extruded ink pixels | The 3D view reads the new `plan.svg` like a CAD plan: real walls, room floors with labels. | `frontend/src/features/viewer3d/viewer3d.test.ts` (vector plan case) |
 | 4 | Rooms from images were boxes | Each labelled room takes the drawn region its label sits in (L-shapes etc.); several labels in one open region split it by nearest label. Area = polygon × scale (net, inside the walls); printed areas are never replaced. | `test_rebuild.py` (L-room net area within 5 %) |
-| 5 | Unit conversion | "convert 12 m² to sq ft" → 129.17 sq ft by code (EN/DE/FR/FI/IT, `12'6"`), 0 model calls. "area of bedroom 2 in square feet" answers in m² plus a `converted` value the card shows big, with the metric value beside it. Metric stays the default; "in m²" questions are untouched. | `backend/tests/test_units.py`, `frontend/src/lib/units.test.ts` |
+| 5 | Unit conversion | "convert 12 m² to sq ft" → 129.17 sq ft by code (EN/DE/FR/FI/IT, `12'6"`), 0 model calls. Header menu → "Units in answers": Metric (default) or Imperial; imperial shows every area/length answer in ft / sq ft with the metric value beside it. "area of bedroom 2 in square feet" answers in m² plus a `converted` value the card shows big, with the metric value beside it. Metric stays the default; "in m²" questions are untouched. | `backend/tests/test_units.py`, `frontend/src/lib/units.test.ts` |
 | 6 | Read dimensions/areas from the drawing | Dimension strings (metric and ft-in) are read from the pixels (RapidOCR + one cached Gemini pass, endpoints snapped to the drawn ticks), give the scale when chains agree with the overall, and answer "overall dimensions", "how wide", "length of wall #1" with 0 model calls. For image/PDF uploads the reasoning step now also gets the sheet image and the printed text layer, so it reads printed facts the index lacks. | `store/tests/test_dimensions.py` (43), `backend/tests/test_dimensions_answer.py` |
 
 Other fixes found on the way:
@@ -74,7 +74,7 @@ rendered storey cannot answer; they abstain honestly.
 1. `scripts/dev.sh` (needs docker or podman; Gemini key in `~/.config/junction/env`). Open http://localhost:5173/app.
 2. Upload `b1.jpg` and `b2.jpeg` together on the upload page (one project). Wait for "Indexed" (~2–3 min each).
 3. Open b2: show the plan, toggle **Compare with original** (swipe photo ↔ vector rebuild, aligned), then **3D**.
-4. Ask: "Show all bedrooms" (polygons light up), "What is the area of bedroom 2 in square feet?", "What are the overall dimensions of the building?", "convert 12 m² to sq ft".
+4. Ask: "Show all bedrooms" (polygons light up), "What is the area of bedroom 2 in square feet?", "What are the overall dimensions of the building?", "convert 12 m² to sq ft". Then switch the header menu (EN) → Units → Imperial and ask "How big is bedroom 1?" → 251.77 sq ft = 23.39 m².
 5. Switch on **All 2 floors** and ask "How many bedrooms are there?" → 7, with the per-floor split.
 6. Optional wow: upload the Lagerhalle PDF and ask "What is the gross floor area of the Lagerhalle?" / "How many parking spaces are there?".
 
