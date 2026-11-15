@@ -421,5 +421,10 @@ def apply(resp: dict, unit: Unit | None, lang: str | None = None) -> dict:
         out["explanation"] = f"{display['text']} ({display['metric_text']}). {out['explanation']}"
     elif "text" in display and not out.get("explanation"):
         out["explanation"] = f"{display['text']} ({display['metric_text']})."
+    if "text" in display and measure is not None and unit.dim != measure[1].dim and unit.dim == 1:
+        # asked for a length unit, the answer is an area / a volume: say what was done instead of converting silently
+        what = {2: "An area", 3: "A volume"}[measure[1].dim]
+        note = f"{what} cannot be given in {unit.label} (a length), so it is shown in {display['label']}."
+        out["explanation"] = f"{out['explanation'].rstrip()} {note}"
     out["display"] = display
     return out
