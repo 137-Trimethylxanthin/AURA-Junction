@@ -984,8 +984,9 @@ def interpret(db: DB, f: dict) -> dict:
                    f=f["file_id"])
     toks = _ocr_tokens(words)
     log: dict = {}
+    im.load()  # decode once here: a lazily loaded PIL image must never be decoded by two threads at once
     with cf.ThreadPoolExecutor(1) as ex:                  # the dimensions are read while Gemini reads the labels
-        fut = ex.submit(read_dimension_strings, db, f, im, words, deadline - 30)
+        fut = ex.submit(read_dimension_strings, db, f, im.copy(), words, deadline - 30)  # own copy per thread
         g = read_labels(im, deadline - 25, log)
         dims = fut.result()
     if g is not None and g["kind"] != "floor_plan":

@@ -1328,6 +1328,18 @@ def _totals(d, rooms: list[dict], tb: Toolbox | None) -> dict:
     }
     if tb is not None:
         out["objects"] = {k: len(v) for k, v in tb.boxes.items()}
+    else:  # no rooms indexed (many scans): the detected doors, windows and fixtures still count
+        objs = {}
+        for subj in BOX_SUBJECTS:
+            try:
+                if d.engine.supports(subj) and (tr := tools.count_objects(d, subj)).value is not None:
+                    objs[subj] = int(tr.value)
+            except Exception:  # noqa: BLE001 - a subject the engine cannot count is left out
+                continue
+        if objs:
+            out["objects"] = objs
+            out["objects_note"] = ("objects were detected on the image by a model (estimates); look at the sheet "
+                                   "to apply the question's own rules, e.g. leave out open doorways")
     return out
 
 

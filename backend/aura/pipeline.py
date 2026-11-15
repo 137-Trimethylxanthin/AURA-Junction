@@ -1278,8 +1278,10 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         # 4b. Tool-step answerer: fixed read-only tools over the indexed drawing, a few model calls, no generated code.
         #     Returns None when it cannot answer; only then does the turn go to the sidecar agent.
         # A store-library drawing without rooms (a DWG, an uninterpreted scan) still has the sql tool.
-        if (svc.models_usable() and (d.drawing.get("rooms") or getattr(d, "store_owned", False) is True)
+        if (svc.models_usable() and (d.drawing.get("rooms") or getattr(d, "store_owned", False) is True
+                                     or (dkind == "raster" and d.drawing.get("store")))
                 and not is_project and not is_deictic_region):
+            # (an indexed image without rooms still has its detected items, the sql tool and the sheet itself)
             gate_node = stats.get("decision_node")
             tools_built: A.Built | None = None
             try:
