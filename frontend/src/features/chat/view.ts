@@ -1,7 +1,7 @@
 import { usableDisplay } from '@/api/contract'
 import type { AgentFailure, AskResponse, Box, Drawing, Lang, Method, RoomPoly, Scope } from '@/api/contract'
 import { isBoxRejected, isRoomIncluded, roomEvidenceId, type Derived, type Toggles } from '@/lib/answer'
-import { LOCALE, displayParts, fmtArea, fmtConverted, fmtCount, fmtRoomArea, noun } from '@/lib/format'
+import { LOCALE, displayParts, estimateTag, fmtArea, fmtConverted, fmtCount, fmtRoomArea, noun } from '@/lib/format'
 import { t, type StringKey, type UiKey } from '@/i18n/strings'
 
 /** Pure view-model helpers for the answer card. Every number comes from the response or Derived. */
@@ -87,10 +87,16 @@ export function scopeChipText(scope: Scope | ProjectScopeLike, lang: Lang): stri
 export function metricText(resp: AskResponse, d: Derived, lang: Lang): string | null {
   const display = usableDisplay(resp.display)
   if (!display) return null
-  if (resp.answer.kind === 'area' && d.value !== null && display.factors.m2) return `${fmtArea(d.value, lang)} m²`
+  // measured under an estimated scale: the metric value is as approximate as the converted one beside it
+  if (resp.answer.kind === 'area' && d.value !== null && display.factors.m2)
+    return resp.answer.approximate ? `≈ ${fmtCount(Math.round(d.value), lang)} m²` : `${fmtArea(d.value, lang)} m²`
   if (resp.answer.kind === 'quantity' && d.value !== null && display.factors[resp.answer.unit])
     return `${fmtArea(d.value, lang)} ${{ m: 'm', m2: 'm²', m3: 'm³' }[resp.answer.unit]}`
-  if (resp.answer.kind === 'note' && display.value !== undefined && display.metric_text) return display.metric_text
+  if (resp.answer.kind === 'note' && display.value !== undefined && display.metric_text) {
+    if (resp.answer.approximate && resp.answer.unit === 'm2' && resp.answer.number !== undefined)
+      return `≈ ${fmtCount(Math.round(resp.answer.number), lang)} m²`
+    return display.metric_text
+  }
   return null
 }
 
@@ -103,14 +109,14 @@ export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, 
       // A note's own unit may be anything ("mm"): the server's converted text is the value to show.
       if (display?.text && display.value !== undefined) {
         if (display.style === 'ft_in') return [display.text, '']
-        return [fmtConverted(display.value, lang), display.label]
+        return [`${resp.answer.approximate ? '≈ ' : ''}${fmtConverted(display.value, lang)}`, display.label]
       }
       const rawUnit = resp.answer.unit ?? ''
       const unit = { m2: 'm²', m3: 'm³' }[rawUnit] ?? rawUnit
       const isAreaUnit = unit === 'm²'
       // measured under an estimated scale: the headline says so like the evidence rows, without false decimals
       if (resp.answer.approximate && isAreaUnit)
-        return [`≈ ${fmtCount(Math.round(resp.answer.number), lang)}`, 'm² (estimate)']
+        return [`≈ ${fmtCount(Math.round(resp.answer.number), lang)}`, `m² ${estimateTag(lang)}`]
       const numStr = !isAreaUnit && Number.isInteger(resp.answer.number)
         ? fmtCount(resp.answer.number, lang)
         : fmtArea(resp.answer.number, lang)
@@ -122,9 +128,9 @@ export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, 
   if (resp.answer.kind === 'count') return [fmtCount(d.value, lang), noun(resp.answer.subject, d.value, lang)]
   if (resp.answer.kind === 'area') {
     const shown = displayParts(d.value, 'm2', display, lang)
-    if (shown) return shown
+    if (shown) return resp.answer.approximate ? [`≈ ${shown[0]}`, shown[1]] : shown
     return resp.answer.approximate
-      ? [`≈ ${fmtCount(Math.round(d.value), lang)}`, 'm² (estimate)']
+      ? [`≈ ${fmtCount(Math.round(d.value), lang)}`, `m² ${estimateTag(lang)}`]
       : [fmtArea(d.value, lang), 'm²']
   }
   if (resp.answer.kind === 'quantity')
