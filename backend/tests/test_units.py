@@ -294,3 +294,15 @@ def test_a_length_unit_asked_for_an_area_is_explained_not_silently_squared():
     assert "cannot be given" not in same["explanation"]
     length = U.apply({"answer": {"kind": "quantity", "value": 2.0, "unit": "m"}, "detected_lang": "en"}, U.BY_KEY["in"])
     assert "cannot be given" not in length["explanation"]
+
+
+def test_a_converted_estimate_keeps_the_approximately_sign_and_no_false_decimals():
+    """An area measured under an estimated scale, asked in square feet: "≈ 240 sq ft (≈ 22 m²)", not "22.30 m²"."""
+    resp = {"answer": {"kind": "area", "value": 22.3, "unit": "m2", "approximate": True}, "detected_lang": "en",
+            "explanation": "Net floor area in rooms labelled OH."}
+    out = U.apply(resp, U.BY_KEY["sqft"])
+    assert out["display"]["text"] == "≈ 240 sq ft" and out["display"]["metric_text"] == "≈ 22 m²"
+    assert out["explanation"].startswith("≈ 240 sq ft (≈ 22 m²).") and "22.30" not in out["explanation"]
+    exact = U.apply({**resp, "answer": {"kind": "area", "value": 22.3, "unit": "m2"}}, U.BY_KEY["sqft"])
+    assert exact["display"]["text"] == "240 sq ft" and exact["display"]["metric_text"] == "22.30 m²"
+    assert U.metric_response(out)["explanation"] == resp["explanation"]
