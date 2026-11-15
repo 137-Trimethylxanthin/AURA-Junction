@@ -7,10 +7,10 @@ was checked, and what is still open.
 
 ## Result at a glance (written 02:15 UTC, last updated 05:55 UTC)
 
-Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `61a1f53`. Not pushed
+Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `b9bbd44`. Not pushed
 (no GitHub credentials on the devbox): `git push -u origin overnight-improvements`.
 Suites on the final tree: backend 767 passed / 35 skipped, store 225 passed / 1 skipped,
-frontend 365 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
+frontend 368 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
 duplicate removal, Italian interface) and the open findings of the closing sweep are described at
 the end of this file.
 
@@ -21,7 +21,7 @@ the end of this file.
 | 3. 3D for image imports | Fixed | Walls extruded from the wall polygons on a footprint-shaped floor; wall height follows plan size where the scale is estimated |
 | 4. Rectangular rooms | Fixed | Rooms from images are polygons with and without a stated scale; without one the scale is estimated and areas read "≈ 22 m² (estimate)" |
 | 5. Units | Done | mm to km, in, ft, ft-in, yd, their squares, ha, acre, volumes; five languages; quantities inside a question; follow-ups convert without a model call; metric is the default and always shown |
-| 6. Printed dimensions and areas | Mostly done | Dimensions on 248 drawings of the live store; length questions answer from the printed value ("21' - 0 1/4\" as printed = 6.41 m") with a highlight, else from outlines, never as a count; printed room areas are preferred and labelled "Read from the sheet". Rooms on US sheets without an outline often still abstain, with the reason |
+| 6. Printed dimensions and areas | Done for the sheets in the store | Dimensions on 248 drawings; length questions answer from the printed value ("21' - 0 1/4\" as printed = 6.41 m") with a highlight, else from outlines, never as a count; printed room areas are preferred and labelled "Read from the sheet". Rooms on US sheet PDFs are outlined on the page render: a sweep of 144 room questions on 14 sheet entries answered every area question (72 of 72) and 58 of 72 width questions; after re-reading the 15-page Cannery set with a larger outline budget all 34 of its width questions answer. Rooms still without an outline: 9, on site plans, a schedule sheet and pages without a scale |
 
 Other fixes found on the way: inflated whole-building totals (990 for 198); budget refusals
 cached and replayed; scan answers labelled exact; the landing page's sample button; `/api/api`
@@ -523,3 +523,28 @@ Browser check of the last deploy (`61a1f53`, 06:02 UTC): the library with the "C
 lists CubiCasa cards first with rebuilt-plan thumbnails and no IFC project tiles above them; with
 "US sheets" the cards show wrapped titles and "page N of M"; the school plan opens; 0 console
 errors, 0 failed requests. Screenshots: `/root/aura-deploy/verify/end-*.png` on the devbox.
+
+### After 06:00 UTC — further fixes inline
+
+- Reasoning-tree step titles are shown in the interface language (de/fr/fi/it) for the fixed
+  titles the backend emits (frontend table `features/trace/titles.ts`); step bodies stay as sent.
+- Fragment guard extended: an image plan with at most six outlined rooms that fill under 30 % of
+  their span keeps the scan as its picture. With both rules 8 of 315 image plans with rooms show
+  their scan instead of a rebuilt plan, including all three plans the closing tester reported
+  (`…architectural-12166`, `…architectural-7838`, `colorful-11960`). Re-reading the two sparse
+  plans with the stronger model found the same few labels: the images are low resolution
+  (448 × 1224 and 240 × 161 pixels), so this is a limit of the source, not of the reader.
+- US sheet PDFs, measured: 144 room questions on 14 sheet entries: area 72 of 72 answered; width 58
+  of 72 (the 14 abstentions were rooms without an outline, 11 of them on the Cannery set, whose
+  outline step had run out of its time budget). Re-interpreted that set with
+  `JSTORE_ROOM_OUTLINE_BUDGET_S=330`: 85 of 85 rooms outlined (was 61), and 34 of 34 width
+  questions across its 8 page entries answer. PDF rooms still without an outline in the whole
+  store: 9 (two site plans, a door schedule, name-only tags on pages without a scale).
+- Decided, not done: rescuing unlabelled balconies bounded only by railings. A door-adjacency rule
+  would restore 46 of the 314 dropped spaces, but a sample of them contained doubtful and false
+  spaces; a missing balcony is a smaller fault than a false room.
+- Not a defect on inspection: the DWG site plan that answers "1 door, Exact" holds exactly one door
+  entity in its CAD data.
+
+Deployed `b9bbd44`. Suites: backend 767 passed / 35 skipped, store 225 passed / 1 skipped,
+frontend 368 passed. After the deploy the walkthrough questions answer as stated.
