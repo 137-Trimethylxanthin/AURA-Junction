@@ -33,6 +33,11 @@ from aura.budget import BudgetError
 from aura.contract import CONTRACT_VERSION, AskRequest, ProjectBundle
 from aura.gemini.client import Meter
 from aura.pipeline import PipelineError, ensure_ready, with_unknown_areas
+from aura.units import (
+    apply_target_unit_to_response_dict,
+    extract_target_unit,
+    is_standalone_conversion,
+)
 
 log = logging.getLogger("aura.building")
 
@@ -492,6 +497,9 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
         "route": "agent" if "agent" in routes else (template.get("route") or "template"),
         "breakdown": breakdown,
     }
+    target_unit, _ = extract_target_unit(question)
+    if target_unit is not None:
+        apply_target_unit_to_response_dict(body, target_unit, original_question=question.strip())
     return with_unknown_areas(body)
 
 
@@ -841,7 +849,9 @@ def wrap_project_scope_run(
 def _sub_request(req: AskRequest, sheet: Sheet, plan: Plan) -> AskRequest:
     scope = req.scope if req.scope is not None and req.scope.kind != "project" else None
     own = sheet.id == req.drawing_id
-    return AskRequest(drawing_id=sheet.id, question=req.question, scope=scope,
+    target_u, norm_q = extract_target_unit(req.question)
+    sub_q = norm_q if (len(plan.sheets) >= 2 and target_u is not None) else req.question
+    return AskRequest(drawing_id=sheet.id, question=sub_q, scope=scope,
                       overrides=req.overrides if own else None, lang_hint=req.lang_hint)
 
 
@@ -868,6 +878,13 @@ async def run(svc: Any, req: AskRequest, caller: Any, context: dict | None = Non
     meters = meters if meters is not None else {"answer": Meter(), "check": Meter()}
     capped_svc, _gate = _with_shared_budget(svc, max_calls)
     emitted_understood = False
+
+    if is_standalone_conversion(req.question):
+        async for ev, data in base_run(
+            capped_svc, req, caller, context, history, meters, deadline_s, agent_deadline_s
+        ):
+            yield ev, data
+        return
 
     if len(plan.sheets) == 1:
         only = plan.sheets[0]

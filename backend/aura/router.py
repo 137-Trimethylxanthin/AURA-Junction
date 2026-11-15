@@ -252,6 +252,8 @@ SUBJECTS: list[tuple[str, re.Pattern[str]]] = [
 
 AREA = re.compile(
     r"area|surface|superficie|pinta-?ala|neliö|fläche|flache|quadratmeter|m²|m2\b|square met|"
+    r"square\s+f(?:ee|oo)t|sq\.?\s*ft\b|sqft\b|ft[²2]|square\s+inch\w*|sq\.?\s*in\b|in[²2]|"
+    r"quadratfu(?:ß|ss)|pieds?\s+carr[ée]s?|neliöjalk\w*|square\s+footage|"
     r"how big|how large|wie groß|wie gross|kuinka suuri|nettofläche|nettowohn|nettogeschoss|"
     r"quanto è grand|metri quadr",
     re.IGNORECASE,
@@ -304,10 +306,12 @@ _UNIT_RE = re.compile(
 )
 _UNIT_APOS_RE = re.compile(r"(?:l['’]|dell['’])appartement?o?\s*([A-Z])(?![^\W_])", re.IGNORECASE)
 _UNIT_FI_RE = re.compile(rf"(?<!{_L})([A-Z])-(?:asunno|asunto){_L}*")
-# A room id like 3.05; never a measurement ("0.92 m", "15.5 m²", "2.5 metres").
+# A room id like 3.05; never a measurement ("0.92 m", "15.5 m²", "2.5 metres", "12.5 sq ft").
 _ROOM_ID_RE = re.compile(r"(?<![\w.$€£])([A-Z]{0,2}\d{1,3}\.\d{1,3})(?![\d])"
-                         r"(?!\s*(?:m\b|m²|m2\b|m\^2|cm|mm|sqm|qm|%|met(?:er|re)s?\b|neliö|quadrat"
-                         r"|\$|€|£|chf|eur\w*|usd|dollars?|fr\b|francs?|franken))", re.IGNORECASE)
+                         r"(?!\s*(?:m\b|m²|m2\b|m\^2|m³|m3\b|cm[²³23]?|mm[²³23]?|km\b|sqm|qm|%|met(?:er|re)s?\b|neliö|quadrat"
+                         r"|in\b|in[²³23]|inch\w*|ft\b|ft[²³23]|f(?:ee|oo)t\b|sqft\b|sq\.?\s*(?:ft|in|yd|m|cm|mm)\b"
+                         r"|cu\.?\s*(?:ft|in|yd|m)\b|yd\b|yards?\b|acres?\b|ha\b|hectares?\b|lit(?:er|re)s?\b|gal\w*"
+                         r"|[\"″'′]|\$|€|£|chf|eur\w*|usd|dollars?|fr\b|francs?|franken))", re.IGNORECASE)
 # ... nor a threshold ("larger than 15.5", "over 0.9", ">= 12.5").
 _COMPARE_BEFORE = re.compile(r"(?:than|over|under|above|below|least|most|[<>]=?|≥|≤|als|que|kuin|di)\s*$",
                              re.IGNORECASE)

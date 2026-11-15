@@ -54,6 +54,12 @@ from aura.router import (
 )
 from aura.steps import answer_with_tools
 from aura.store import Store
+from aura.units import (
+    apply_target_unit_to_built,
+    extract_target_unit,
+    try_followup_conversion,
+    try_standalone_conversion,
+)
 from aura.writer import Writer
 
 if TYPE_CHECKING:
@@ -926,6 +932,10 @@ async def _finalize_and_emit(
     if svc.settings.trace_detail == "demo":
         body["trace"] = [{k: v for k, v in n.items() if k != "detail"} for n in body["trace"]
                          if n.get("stage") not in ("resources", "filter")]
+    target_unit, _ = extract_target_unit(req.question)
+    if target_unit is not None:
+        apply_target_unit_to_built(built, target_unit, original_question=req.question.strip())
+
     body["route"] = stats["route"]
     body["answer_id"] = "a-" + uuid.uuid4().hex
     body["latency_ms"] = int((time.perf_counter() - t0) * 1000)
@@ -976,9 +986,11 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     key = (answer_key(d.id, question, scope_dump, ov_dump, req.lang_hint, models_enabled())
            + f"|router:{ROUTER_VERSION}|data:{tools.data_version(d, scope_dump)}")
     prev_resp = last_turn_response(history)
-    r_pre = route(question, d.ctx)
+    target_unit, norm_question = extract_target_unit(question)
+    r_pre = route(norm_question, d.ctx)
     has_followup_semantics = prev_resp is not None and (
         is_followup_message(question, r_pre)
+        or try_followup_conversion(question, r_pre.lang, history) is not None
         or (prev_resp.get("method") == "agent_estimate" and bool(FOLLOW_UP_CUE.search(question)))
     )
     if has_followup_semantics and prev_resp is not None:
@@ -1015,6 +1027,24 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
     stats = {"route": "template", "check_calls": 0, "check_cost_usd": 0.0, "check_tokens": 0,
              "meter": meters["answer"], "check_meter": meters["check"]}
 
+    # 0. Exact `<1ms` standalone or follow-up unit conversions (`0` model calls)
+    conv_lang = r_pre.lang if r_pre.lang_signal else (req.lang_hint or "en")
+    if (unit_built := try_standalone_conversion(question, conv_lang)) is not None:
+        yield "understood", {"detected_lang": unit_built.body["detected_lang"],
+                             "canonical_en": unit_built.body["canonical_en"], "route": "template"}
+        async for ev in _finalize_and_emit(svc, d, req, unit_built, caller, stats, meters, t0, key, allow_cache=True):
+            yield ev
+        return
+    if (fu_built := try_followup_conversion(question, conv_lang, history)) is not None:
+        yield "understood", {"detected_lang": fu_built.body["detected_lang"],
+                             "canonical_en": fu_built.body["canonical_en"], "route": "template"}
+        async for ev in _finalize_and_emit(svc, d, req, fu_built, caller, stats, meters, t0, key, allow_cache=False):
+            yield ev
+        return
+
+    exec_req = req.model_copy(update={"question": norm_question}) if (target_unit is not None and norm_question != question) else req
+    exec_question = exec_req.question.strip()
+
     # ---- Sidecar-enabled `hybrid` / `agent` modes ----
     mode = svc.settings.answerer
     # The single answering path: router -> exact -> gate -> tool steps -> (sidecar, only when one is
@@ -1036,7 +1066,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             return
 
         # Short exact context inheritance (e.g. "how many doors?" -> "and in apartment B?")
-        r = route(question, d.ctx)
+        r = route(exec_question, d.ctx)
         if context and not has_followup_semantics:
             short = len(question.split()) <= 5
             cue = short and bool(FOLLOW_UP_CUE.search(question))
@@ -1247,7 +1277,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             gate_node = stats.get("decision_node")
             tools_built: A.Built | None = None
             try:
-                tools_built = await answer_with_tools(svc, d, question, lang, caller, stats, history, eff_scope)
+                tools_built = await answer_with_tools(svc, d, exec_question, lang, caller, stats, history, eff_scope)
             except Exception:  # the tool path must never take the turn down; the agent still runs
                 log.exception("tool-step answerer failed; escalating to sidecar agent")
             if tools_built is not None:
@@ -1350,7 +1380,7 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
         return
 
     # ---- Legacy / unit-test in-process path (`svc.agent is None` or `answerer == 'exact'`) ----
-    built = await _decide(svc, req, d, caller, stats, context, history)
+    built = await _decide(svc, exec_req, d, caller, stats, context, history)
     yield "understood", {"detected_lang": built.body["detected_lang"],
                          "canonical_en": built.body["canonical_en"], "route": stats["route"]}
     for ev in _tool_events(built):
