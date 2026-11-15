@@ -76,6 +76,7 @@ export default function LandingPage() {
     <MotionConfig reducedMotion="user">
       <PageFrame nav={NAV}>
         <Hero />
+        <Team />
         <HowItWorks />
         <Measured />
         <Use />
@@ -249,6 +250,53 @@ function Section({
         {children}
       </div>
     </section>
+  )
+}
+
+// ---- team ----------------------------------------------------------------------------------------
+
+const TEAM = [
+  { name: "Felix", photo: "/team/felix.jpg", url: "https://www.linkedin.com/in/felixslama/" },
+  { name: "Andi", photo: "/team/andi.jpg", url: "https://www.linkedin.com/in/andreas-stettin/" },
+  { name: "Max", photo: "/team/max.jpg", url: "https://www.linkedin.com/in/max-sitter-5408a3304/" },
+  { name: "Simon", photo: "/team/simon.jpg", url: "https://www.linkedin.com/in/gamersi/" },
+]
+
+function Team() {
+  return (
+    <Section
+      id="team"
+      title="The team"
+      lead="KuK Hofclankerei: four people, built at Junction 2026."
+    >
+      <ul className="grid grid-cols-2 gap-6 sm:grid-cols-4">
+        {TEAM.map((m) => (
+          <li key={m.name}>
+            <a
+              href={m.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group flex flex-col items-center gap-3 rounded-xl p-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <img
+                src={m.photo}
+                alt={`Portrait of ${m.name}`}
+                width={480}
+                height={480}
+                loading="lazy"
+                className="aspect-square w-full max-w-[11rem] rounded-full border object-cover transition-transform group-hover:scale-[1.03]"
+              />
+              <span className="flex flex-col items-center">
+                <span className="text-base font-semibold">{m.name}</span>
+                <span className="text-sm text-muted-foreground group-hover:underline">
+                  LinkedIn
+                </span>
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </Section>
   )
 }
 
