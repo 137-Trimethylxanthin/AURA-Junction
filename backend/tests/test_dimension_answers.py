@@ -58,7 +58,7 @@ def test_a_short_chain_does_not_stand_for_the_plan_when_the_outline_is_measured(
     ext = {"width_m": 11.82, "depth_m": 8.78, "source": "rooms", "estimate": False, "box": {"x": 1, "y": 2, "w": 70, "h": 50}}
     b = da.try_answer("What is the overall width of the building?", "en", _drawing(CHAIN, extent=ext))
     assert b.body["answer"] == {"kind": "quantity", "value": 11.82, "unit": "m"}
-    assert "measured on the plan, not printed" in b.body["explanation"]
+    assert "traced on the scan, not printed: an estimate" in b.body["explanation"] and b.body["basis"] == "estimate"
     assert b.body["evidence"]["boxes"][0]["id"] == "extent"
     est = da.try_answer("overall size of the plan?", "en", _drawing([], extent=ext | {"estimate": True}))
     assert est.body["answer"]["kind"] == "note" and "≈ 11.82 m" in est.body["answer"]["value"]
@@ -244,3 +244,20 @@ def test_every_length_of_a_composite_answer_is_converted_from_its_value():
     assert "16.4 ft (5.00 m)" in out["answer"]["value"] and out["measures"][0]["value"] == 5.0
     from aura.contract import AskResponse
     AskResponse.model_validate(out | {"calls": 0, "cost_usd": 0, "latency_ms": 1, "source": "api"})
+
+
+def test_basis_says_where_the_value_comes_from():
+    from aura import answer as A
+    d = _drawing(SHEET, [_label_room("r1", "BEDROOM", (40, 52), 20.0)])
+    assert da.try_answer("How wide is the bedroom?", "en", d).body["basis"] == "printed"      # read by a model, still printed
+    scan = _drawing([], [_room("r2", "TUPAK", {"length_m": 8.27, "width_m": 4.24, "source": "measured"}, rtype="kitchen")])
+    b = da.try_answer("What are the dimensions of the kitchen?", "en", scan)
+    assert b.body["basis"] == "estimate" and "traced on the scan" in b.body["answer"]["value"]
+    assert da.try_answer("How wide is the Reduit 1.02?", "en", _bundle(BUNDLE_ROOMS)).body["basis"] == "measured"
+    # areas: printed on an upload is printed although its rooms were found by a model; bundles carry no basis
+    rooms = [{"room_id": "a", "area_source": "printed"}, {"room_id": "b", "area_source": "outline"}, {"room_id": "c"}]
+    up = LoadedDrawing(id="u", dir=None, drawing={"rooms": rooms}, engine=None)  # type: ignore[arg-type]
+    assert A.area_basis(up, ["a"], "vision") == {"basis": "printed"}
+    assert A.area_basis(up, ["a", "b"], "vision") == {"basis": "estimate"}
+    assert A.area_basis(up, ["b"], "cad_geometry") == {"basis": "measured"}
+    assert A.area_basis(up, ["c"], "cad_geometry") == {} and A.area_basis(up, [], "vision") == {}

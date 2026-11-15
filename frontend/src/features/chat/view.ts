@@ -189,7 +189,18 @@ const METHOD_KEY: Record<Exclude<Method, 'cad_geometry'>, StringKey> = {
 
 export function chips(resp: AskResponse, d: Derived, lang: Lang): Chip[] {
   const out: Chip[] = []
-  if (resp.method === 'cad_geometry') out.push({ key: 'method', text: t(lang, 'chip_exact'), tone: 'success' })
+  // Where the value comes from wins over who read it: a printed value is quoted as printed (never "model
+  // estimate"), a measure on a scan is an estimate (never "exact"). Exact CAD geometry keeps its own chip.
+  if (resp.basis === 'printed' && resp.answer.kind !== 'abstain')
+    out.push({
+      key: 'method',
+      text: t(lang, 'chip_printed'),
+      tone: 'success',
+      ...(resp.method === 'vision' || resp.method === 'ocr' ? { title: t(lang, 'chip_printed_title') } : {}),
+    })
+  else if (resp.basis === 'estimate' && resp.answer.kind !== 'abstain' && resp.method !== 'agent_estimate')
+    out.push({ key: 'method', text: t(lang, 'chip_scan_estimate'), tone: 'info' })
+  else if (resp.method === 'cad_geometry') out.push({ key: 'method', text: t(lang, 'chip_exact'), tone: 'success' })
   // No model involved: exact-style chip, unless the answer carries an estimate (then it keeps the estimate styling).
   else if ((resp.method === 'pdf_vector' || resp.method === 'store_sql') && !resp.estimate)
     out.push({ key: 'method', text: t(lang, METHOD_KEY[resp.method]), tone: 'success' })
@@ -446,7 +457,7 @@ export function footerParts(resp: AskResponse, lang: Lang): string[] {
       ? t(lang, 'cost_upper_bound', { cost: fmtUsd(resp.cost_usd) })
       : fmtUsd(resp.cost_usd)
   return [
-    `${t(lang, 'footer_answer')}: ${t(lang, METHOD_FOOTER[resp.method])}`,
+    `${t(lang, 'footer_answer')}: ${t(lang, resp.basis === 'printed' ? 'method_printed' : resp.basis === 'estimate' && resp.method !== 'agent_estimate' ? 'method_scan_estimate' : METHOD_FOOTER[resp.method])}`,
     callsText(resp.calls, lang),
     costText,
     ...checkParts(resp, lang),

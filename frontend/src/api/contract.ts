@@ -641,8 +641,26 @@ export interface AskResponse {
   agent_failure?: AgentFailure
   /** 1.2: per-sheet shares of a whole-building answer (`scope` is then the project scope of the sheets asked). */
   breakdown?: BreakdownItem[]
+  /**
+   * 1.2 additive: where the stated value comes from, when the answer knows. `printed`: on the sheet, quoted as
+   * printed (whoever read it); `measured`: on exact geometry; `estimate`: measured on a scan or under an estimated scale.
+   */
+  basis?: 'printed' | 'measured' | 'estimate'
+  /** 1.2 additive: every length a dimension answer states, in metres. */
+  measures?: Measure[]
   /** 1.2: set only when the question asked for a non-default unit ("in square feet"); `answer` stays metric. */
   display?: Display
+}
+
+export interface Measure {
+  label: string
+  value: number
+  unit?: string
+  source?: 'printed' | 'measured' | 'estimate'
+  /** The text on the sheet, e.g. 12' - 6". */
+  printed?: string
+  /** In the unit asked for (inside `display` only). */
+  text?: string
 }
 
 /** The answer in the unit the question asked for; `factors` are display units per m / m2 / m3. */
@@ -659,6 +677,7 @@ export interface Display {
   metric_text?: string
   metric_explanation?: string
   metric_note?: string
+  measures?: Measure[]
 }
 
 /** Guard: a malformed `display` is ignored (the metric answer is shown), never a failed response. */

@@ -422,6 +422,9 @@ class AskResponse(_M):
     # 1.2 additive: per-sheet shares of a whole-building answer; evidence items carry their sheet's
     # `drawing_id`, `scope` is the project scope of the sheets that were asked.
     breakdown: list[BreakdownItem] | None = None
+    # 1.2 additive: where the stated value comes from, when the answer knows: printed on the sheet (quoted as
+    # printed, whoever read it), measured on exact geometry, or an estimate (measured on a scan / estimated scale)
+    basis: Literal["printed", "measured", "estimate"] | None = None
     measures: list[Measure] | None = None  # 1.2 additive: the lengths a dimension answer states, in metres
     display: Display | None = None  # 1.2 additive: only when the question asked for a non-default unit
 

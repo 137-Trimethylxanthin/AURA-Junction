@@ -225,11 +225,13 @@ def _body(question: str, lang: str, d: LoadedDrawing, scope: dict, tr: ToolResul
         "method": tr.method,
         **({"explanation": text} if value is not None else {}),  # a note is its own explanation
         **({"measures": measures} if measures else {}),
+        # printed values are quoted as printed whoever read them; a measure on a scan's outlines is an estimate
+        "basis": ("printed" if printed else "estimate" if estimate or tr.method in ("vision", "ocr") else "measured"),
         "trace": [
             A.question_node(question, lang),
             A.intent_node(f"length · {A.scope_text(scope)}", "router · length"),
             {"id": "read", "parent": "q",
-             "title": "Read the printed dimensions" if printed else "Measured the outline",
+             "title": "Read the printed dimensions" if printed else "Measured the outline (estimate)" if kind == "model" else "Measured the outline",
              "tag": "Drawing store · dimensions" if printed else "Drawing store · geometry",
              "body": text, "kind": kind, **({"evidence_ids": ids} if ids else {}), "tool": A.tool_meta(tr)},
             {"id": "answer", "parent": "q", "title": "Answer", "tag": tag, "body": text, "kind": kind,
@@ -253,7 +255,10 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
     ext = d.drawing.get("extent_m") or {}
     measured = {"width": ext.get("width_m"), "length": ext.get("depth_m")}
     est = bool(ext.get("estimate"))
-    label = "an estimate: the sheet states no scale" if est else "measured on the plan, not printed"
+    scan = (d.drawing.get("evidence_method") or {}).get("room") in ("vision", "ocr")
+    label = ("an estimate: the sheet states no scale" if est else
+             "measured on the outlines traced on the scan, not printed: an estimate" if scan else
+             "measured on the plan, not printed")
     parts, used, values, printed_any, lower_bound = [], [], [], False, False
     measures: list[dict] = []
     mname = {"width": "width", "length": "depth"}
@@ -304,13 +309,13 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
         eb = ext["box"]  # what was measured: the extent of the plan, drawn as one box
         boxes.append(Box(id="extent", x=eb["x"], y=eb["y"], w=eb["w"], h=eb["h"], subject="label",
                          note=f"{_m(ext['width_m'])} × {_m(ext['depth_m'])} measured"))
-    method = _weakest(used) if used else "cad_geometry"
+    method = _weakest(used) if used else (d.drawing.get("evidence_method") or {}).get("room") or "cad_geometry"
     value = values[0] if len(values) == 1 and not lower_bound else None
     tr = _result(d, {"ask": "overall", "axis": axis}, "quantity" if value is not None else "note", value, text, boxes, [],
                  method)
     what = {"width": "overall width", "length": "overall depth", "size": "overall size"}[axis]
     return _body(question, lang, d, scope, tr, f"What is the {what} of the plan", value=value, text=text,
-                 printed=printed_any or lower_bound, estimate=est and not printed_any, measures=measures)
+                 printed=printed_any or lower_bound, estimate=(est or scan) and not printed_any, measures=measures)
 
 
 RULE = "Width is the side across the page, depth the side up the page"
@@ -426,6 +431,7 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         if x.get("kind") == "room_size" and x.get("room_id") and "x" in x:
             by_room.setdefault(x["room_id"], []).append(x)
     lines, boxes, ev_rooms, used, measures = [], [], [], [], []
+    scan = (d.drawing.get("evidence_method") or {}).get("room") in ("vision", "ocr")
     value, printed_all, est_any, turned = None, True, False, False
     many = len(sized) > 1
     for r in sized:
@@ -473,6 +479,7 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         est_any |= src == "estimate"
         how = (f"as printed ({s['text']})" if printed and s.get("text") else "as printed" if printed else
                "an estimate from the room outline: the sheet states no scale" if src == "estimate" else
+               "measured on the outline traced on the scan, not printed: an estimate" if scan else
                "measured on the room outline, not printed")
         approx = "≈ " if src == "estimate" else ""
         if printed and s.get("text") and ("'" in s["text"] or '"' in s["text"]):

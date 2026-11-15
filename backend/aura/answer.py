@@ -178,6 +178,22 @@ def _base(question: str, lang: str, scope: dict) -> dict:
     }
 
 
+def area_basis(d: Any, room_ids: list[str], method: str | None) -> dict:
+    """{"basis": ...} for an area built from these rooms, when their drawing says where each area comes from
+    (`area_source`): all printed on the sheet -> printed (whoever read it); any measured under an estimated scale,
+    or measured on outlines a model found on a scan -> estimate; measured on exact geometry -> measured.
+    Rooms without `area_source` (the bundled library) leave the answer as it was."""
+    src = {r.get("room_id"): r.get("area_source") for r in d.drawing.get("rooms", [])}
+    got = [src.get(i) for i in room_ids]
+    if not got or any(g is None for g in got):
+        return {}
+    if all(g == "printed" for g in got):
+        return {"basis": "printed"}
+    if "estimate" in got or method in ("vision", "ocr", "detector", "agent_estimate"):
+        return {"basis": "estimate"}
+    return {"basis": "measured"}
+
+
 def abstain(question: str, lang: str, scope: dict, reason: str, canonical: str, look: str,
             where_to_find: str | None = None, intent_body: str | None = None,
             intent_tag: str = "router", results: list[ToolResult] | None = None) -> Built:
@@ -376,6 +392,7 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
         "canonical_en": canonical,
         "method": tr.method,
         "trace": trace,
+        **area_basis(d, [r.room_id for r in included if not getattr(r, "edited", False)] if not used else [], tr.method),
     }
     if gold:
         body["gold"] = gold
@@ -550,6 +567,7 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
                   | ({"approximate": True} if approx else {}),
         "evidence": {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]},
         "canonical_en": f"Which is the {word} {what} {where_en(scope)}",
+        **area_basis(d, [win["id"]], tr.method),
         "method": "cad_geometry",
         "trace": trace,
     }
