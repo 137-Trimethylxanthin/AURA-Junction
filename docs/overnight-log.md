@@ -182,3 +182,32 @@ Still open after this round: unlabelled spaces vanish from the vector plan (balc
 on one CubiCasa plan); the estimated scale is badly off on some plans; room widths on US PDFs
 abstain; method labels and wording for printed against measured values; "Model estimate" badge on
 printed areas of uploads.
+
+### 00:25–00:50 UTC — wave 3 merged, third deploy
+
+**Stream H — scan model quality (`on/h-scan-quality`)**
+- Enclosed spaces without a label become rooms (classical free-space analysis, no model calls):
+  on the CubiCasa plan "High quality 108" the balcony and the upper bathroom now show in plan and
+  3D. One WC there stays a void; outlines are ragged around fixtures; false extra rooms are
+  possible on dense or historic sheets (12 drawings were checked). Switch: `JSTORE_UNLABELLED_SPACES=0`.
+- The estimated scale now combines printed areas, printed dimensions, door width, toilet,
+  washbasin and bathtub sizes and room size by type (weighted median, outliers dropped); every
+  estimator and the chosen value are recorded in the definition row. "Colorful 2002": living room
+  11.95 → 17.8 m². On 104 live scans with a known scale the error barely moves (median 6.0 → 5.9 %,
+  90th percentile 60.5 → 53.6 %): the gain is on outliers and on sheets that print one or two areas.
+- Not done: wall stubs, walls across doors, duplicate door detections, label collisions, 3D slab.
+
+**Stream I — answers and library (`on/i-answers-polish`)**
+- A room with a label but no outline takes the dimension lines printed beside its label, quoted as
+  printed (Cherokee utility room: 21' - 0 1/4" = 6.41 m); width is across the page, depth up the page.
+  1810 S Park still abstains: its rooms are on another page than the one shown.
+- New response field `basis` (printed / measured / estimate): printed values show "Read from the
+  sheet · as printed", never "Model estimate".
+- "convert that to inches" after an area explains that it converted to square inches.
+- Library: source chips (Swiss Dwellings 65, IFC models 40, CubiCasa 241, US sheets 74, Historic
+  scans 374, Other 1) beside the type chips; the 276 sheets without rooms or doors come after the plans.
+- Not done: "0 rooms" for IFC models without spaces; a sweep of the suggested-question chips.
+
+Merged and deployed as `0e056d9`. Suites: backend 716 passed / 34 skipped, store 160 passed /
+1 skipped, frontend 351 passed. The live store's image drawings are re-interpreted with these
+readers once the running dimensions pass ends.
