@@ -15,6 +15,8 @@ metric; `units.apply` converts it when the question asks for another unit.
 """
 from __future__ import annotations
 
+import dataclasses
+import math
 import re
 from typing import Any
 
@@ -49,6 +51,9 @@ OTHER = _rx(r"doors?|windows?|walls?|stairs?|staircases?|steps?|ceiling|türe?n?
             r"haut|korkeus|altezza|alto|between|distance|far|zwischen|entre|väli\w*|thick\w*|dick\w*|épais\w*")
 FILTER = _rx(r"which|how many|wie viele|combien|kuinka monta|quant[ie]|more than|less than|at least|at most|wider than|"
              r"longer than|narrower than|shorter than|larger than|smaller than|mehr als|plus de|enemmän kuin")
+
+#: "the largest room", "das grösste Zimmer": the room is picked by its area, then its sides are given
+RANK_ROOM = _rx(r"rooms?|space|zimmer|raum|pièce|chambre|huone|stanza|camera|locale")
 
 IMPERIAL = ("ft-in", "ft", "in")
 
@@ -150,9 +155,11 @@ def classify(question: str, d: LoadedDrawing) -> dict | None:
     sup = "max" if SUPER_MAX.search(q) else "min" if SUPER_MIN.search(q) else None
     if sup and DIM_WORD.search(q) and not OTHER.search(q):
         return {"ask": "extreme", "which": sup}
+    axis = "size" if wants_s or (wants_w and wants_l) else "width" if wants_w else "length"
+    if sup and RANK_ROOM.search(q) and not (OTHER.search(q) or FILTER.search(q) or ROOMS_WITH.search(q)):
+        return {"ask": "room", "axis": axis, "scope": {"kind": "floor"}, "rank": sup}  # "how wide is the largest room"
     if OTHER.search(q) or FILTER.search(q) or sup or ROOMS_WITH.search(q):
         return None
-    axis = "size" if wants_s or (wants_w and wants_l) else "width" if wants_w else "length"
     scope = _scope(q, d.ctx)
     if scope and scope.get("kind") in ("room", "label"):
         return {"ask": "room", "axis": axis, "scope": scope}
@@ -290,11 +297,17 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
                  printed=printed_any or lower_bound, estimate=est and not printed_any)
 
 
-def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, types: set[str] | None = None) -> A.Built | None:
-    rooms = [r for r in d.drawing.get("rooms") or []
-             if (r.get("room_type") in types if types else
-                 r["room_id"] == scope.get("room_id") if scope["kind"] == "room" else r.get("name") == scope.get("label"))]
-    if types and len(rooms) == 1:
+def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, types: set[str] | None = None,
+          rank: str | None = None) -> A.Built | None:
+    if rank:
+        cands = [r for r in d.drawing.get("rooms") or []
+                 if isinstance(r.get("area_m2"), (int, float)) and r["area_m2"] > 0 and not r.get("outdoor")]
+        rooms = [(max if rank == "max" else min)(cands, key=lambda r: r["area_m2"])] if cands else []
+    else:
+        rooms = [r for r in d.drawing.get("rooms") or []
+                 if (r.get("room_type") in types if types else
+                     r["room_id"] == scope.get("room_id") if scope["kind"] == "room" else r.get("name") == scope.get("label"))]
+    if (types or rank) and len(rooms) == 1:
         scope = {"kind": "room", "room_id": rooms[0]["room_id"]}
     sized = [r for r in rooms if isinstance(r.get("size"), dict)]
     if not rooms:
@@ -325,7 +338,9 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         approx = "≈ " if src == "estimate" else ""
         if printed and s.get("text") and ("'" in s["text"] or '"' in s["text"]):
             how = f"{s['text']} as printed"
-        name = f"{r.get('name') or 'Room'}{' ' + r['num'] if r.get('num') and len(sized) > 1 else ''}"
+        name = f"{r.get('name') or 'Room'}{' ' + r['num'] if r.get('num') and (len(sized) > 1 or rank) else ''}"
+        if rank and isinstance(r.get("area_m2"), (int, float)):
+            name = f"The {'largest' if rank == 'max' else 'smallest'} room by area, {name} ({r['area_m2']:.2f} m²)"
         if axis == "width":
             lines.append(f"{name}: {approx}{_m(width)} wide (the shorter side; {how})")
             value = width
@@ -352,10 +367,24 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
 
 def _extreme(question: str, lang: str, d: LoadedDrawing, which: str) -> A.Built | None:
     dims = _usable(d)
-    if not dims:
-        return None
-    x = (max if which == "max" else min)(dims, key=lambda x: x["value_m"])
     word = "longest" if which == "max" else "shortest"
+    if not dims:
+        # never a row count for a length: say that no dimension line is stored, and what the plan measures instead
+        scope = {"kind": "floor"}
+        areas = sum(1 for x in d.drawing.get("dimensions") or [] if x.get("kind") == "area")
+        ext = d.drawing.get("extent_m") or {}
+        why = "No dimension line with a length is printed on this sheet (none was read)"
+        if areas:
+            why += f"; its {areas} printed values are room areas"
+        why += "."
+        if ext.get("width_m") and ext.get("depth_m"):
+            why += (f" The plan itself measures {'≈ ' if ext.get('estimate') else ''}{_m(ext['width_m'])} × "
+                    f"{_m(ext['depth_m'])} ({'an estimate: the sheet states no scale' if ext.get('estimate') else 'measured on the outline, not printed'}).")
+        built = A.abstain(question, lang, scope, "not_answerable", f"What is the {word} dimension printed on the sheet",
+                          why, intent_tag="router · length")
+        built.body["explanation"] = why
+        return built
+    x = (max if which == "max" else min)(dims, key=lambda x: x["value_m"])
     text = (f"The {word} dimension printed on the sheet: {_printed(x.get('text'), x['value_m'], x.get('unit'))} "
             f"({x.get('orientation') or x.get('kind')}; of {len(dims)} printed dimensions).")
     b = _box(x)
@@ -367,17 +396,64 @@ def _extreme(question: str, lang: str, d: LoadedDrawing, which: str) -> A.Built 
                  value=float(x["value_m"]), text=text, printed=True, estimate=False)
 
 
+def _rect_sides(pts: list[tuple[float, float]]) -> tuple[float, float] | None:
+    """(longer, shorter) side in metres of the smallest rotated rectangle around a room outline."""
+    try:
+        import shapely
+        rect = shapely.Polygon(pts).minimum_rotated_rectangle
+        c = list(rect.exterior.coords)
+        a, b = math.dist(c[0], c[1]), math.dist(c[1], c[2])
+    except Exception:  # noqa: BLE001  a degenerate outline: no size
+        return None
+    return (max(a, b), min(a, b)) if a > 0 and b > 0 else None
+
+
+def with_measured(d: LoadedDrawing) -> LoadedDrawing:
+    """The drawing with its measurable sizes filled in when its document does not carry them.
+
+    A drawing built from a CAD / model file outside the drawing store (the bundled library) has room outlines in
+    page percent and metres per percent, but no `extent_m` and no `rooms[].size`. Both follow from the outlines, so
+    a length question gets the same answer as on a store drawing: measured on the outline, not printed."""
+    doc = d.drawing
+    mx, my = doc.get("m_per_pct_x") or 0, doc.get("m_per_pct_y") or 0
+    rooms = doc.get("rooms") or []
+    if (doc.get("extent_m") or doc.get("kind") not in ("cad_dxf", "ifc") or doc.get("evidence_method")
+            or not (mx > 0 and my > 0) or any(isinstance(r.get("size"), dict) for r in rooms)):
+        return d
+    out_rooms, xs, ys = [], [], []
+    for r in rooms:
+        pts = [(float(p[0]), float(p[1])) for p in r.get("points") or [] if len(p) >= 2]
+        row = r
+        if len(pts) >= 3:
+            sides = _rect_sides([(x * mx, y * my) for x, y in pts])
+            if sides:
+                row = dict(r) | {"size": {"length_m": round(sides[0], 2), "width_m": round(sides[1], 2),
+                                          "source": "measured"}}
+            if not r.get("outdoor"):
+                xs += [p[0] for p in pts]
+                ys += [p[1] for p in pts]
+        out_rooms.append(row)
+    new = dict(doc) | {"rooms": out_rooms}
+    if xs and max(xs) > min(xs) and max(ys) > min(ys):
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        new["extent_m"] = {"width_m": round((x1 - x0) * mx, 2), "depth_m": round((y1 - y0) * my, 2), "source": "rooms",
+                           "estimate": False, "box": {"x": round(x0, 2), "y": round(y0, 2), "w": round(x1 - x0, 2),
+                                                      "h": round(y1 - y0, 2)}}
+    return dataclasses.replace(d, drawing=new)
+
+
 def try_answer(question: str, lang: str, d: LoadedDrawing) -> A.Built | None:
     """A built answer for a plain length question the drawing's own data answers, else None (the usual path runs)."""
-    doc = d.drawing
-    if not (doc.get("dimensions") or doc.get("extent_m") or any(isinstance(r.get("size"), dict)
-                                                                 for r in doc.get("rooms") or [])):
-        return None
     c = classify(question, d)
     if c is None:
+        return None
+    d = with_measured(d)
+    doc = d.drawing
+    if c["ask"] != "extreme" and not (doc.get("dimensions") or doc.get("extent_m")
+                                      or any(isinstance(r.get("size"), dict) for r in doc.get("rooms") or [])):
         return None
     if c["ask"] == "overall":
         return _overall(question, lang, d, c["axis"])
     if c["ask"] == "room":
-        return _room(question, lang, d, c["axis"], c["scope"], c.get("types"))
+        return _room(question, lang, d, c["axis"], c["scope"], c.get("types"), c.get("rank"))
     return _extreme(question, lang, d, c["which"])

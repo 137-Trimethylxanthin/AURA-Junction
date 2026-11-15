@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 11  # 11: plain length questions answered from printed dimensions / outline;  8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools
+ROUTER_VERSION = 12  # 12: length answers on bundled CAD drawings, no-dimension sheets, all-floors areas; 11: plain length questions answered from printed dimensions / outline;  8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent"})
 
 Intent = Literal["count", "area", "quantity", "find_text", "abstain", "unknown",

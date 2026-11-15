@@ -131,3 +131,56 @@ def test_normalise_passes_dimensions_sizes_and_types_through():
     assert out["dimensions"][0]["method"] == "vision" and out["printed_dimensions"] == 1
     assert out["rooms"][0]["room_type"] == "bedroom" and out["rooms"][0]["size"]["width_m"] == 3.0
     assert out["extent_m"]["width_m"] == 10.0
+
+
+# ---- a CAD drawing outside the store (the bundled library): sizes follow from the room outlines ----
+
+def _bundle(rooms) -> LoadedDrawing:
+    doc = {"id": "lib-x", "kind": "cad_dxf", "rooms": rooms, "units": [], "m_per_pct_x": 0.2, "m_per_pct_y": 0.4}
+    return LoadedDrawing(id="lib-x", dir=None, drawing=doc, engine=None)  # type: ignore[arg-type]
+
+
+def _outline(rid, name, x0, y0, x1, y1, area, outdoor=False):
+    return {"room_id": rid, "num": rid, "name": name, "area_m2": area, "outdoor": outdoor,
+            "points": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "label_at": [(x0 + x1) / 2, (y0 + y1) / 2]}
+
+
+BUNDLE_ROOMS = [_outline("1.01", "Küche", 10, 10, 30, 20, 16.0),      # 4.0 m x 4.0 m
+                _outline("1.02", "Reduit", 30, 10, 60, 30, 48.0),     # 6.0 m x 8.0 m
+                _outline("1.03", "Balkon", 60, 10, 90, 20, 24.0, outdoor=True)]
+
+
+def test_bundled_cad_drawing_answers_overall_size_from_its_outlines():
+    d = _bundle(BUNDLE_ROOMS)
+    b = da.try_answer("What is the overall width of the building?", "en", d)
+    assert b.body["answer"] == {"kind": "quantity", "value": 10.0, "unit": "m"}   # indoor rooms: x 10..60 at 0.2 m
+    assert "measured on the plan, not printed" in b.body["explanation"]
+    b = da.try_answer("How long is the building?", "en", d)
+    assert b.body["answer"] == {"kind": "quantity", "value": 8.0, "unit": "m"}
+    assert "extent_m" not in d.drawing and "size" not in d.drawing["rooms"][0]   # the served document is untouched
+
+
+def test_bundled_cad_drawing_answers_room_sizes_never_a_count():
+    d = _bundle(BUNDLE_ROOMS)
+    b = da.try_answer("How wide is the Reduit 1.02?", "en", d)
+    assert b.body["answer"] == {"kind": "quantity", "value": 6.0, "unit": "m"}
+    b = da.try_answer("What are the dimensions of the Küche?", "en", d)
+    assert b.body["answer"]["kind"] == "note" and "4.00 m × 4.00 m" in b.body["answer"]["value"]
+
+
+def test_width_of_the_largest_room_picks_the_room_by_area():
+    b = da.try_answer("How wide is the largest room?", "en", _bundle(BUNDLE_ROOMS))
+    assert b.body["answer"] == {"kind": "quantity", "value": 6.0, "unit": "m"}
+    assert "largest room by area, Reduit 1.02 (48.00 m²)" in b.body["explanation"]
+
+
+def test_longest_printed_dimension_without_dimension_lines_says_so_and_never_counts():
+    area = {"id": "dim-01", "kind": "area", "text": "12.5", "value_m": None, "method": "cad_geometry"}
+    for d in (_drawing([area]), _drawing([]), _bundle(BUNDLE_ROOMS)):
+        b = da.try_answer("What is the longest dimension printed on this sheet?", "en", d)
+        assert b.body["answer"] == {"kind": "abstain", "reason": "not_answerable"}
+        assert "No dimension line" in b.body["explanation"]
+    assert "printed values are room areas" in da.try_answer(
+        "What is the longest dimension printed on this sheet?", "en", _drawing([area])).body["explanation"]
+    assert "10.00 m × 8.00 m" in da.try_answer(
+        "What is the longest dimension printed on this sheet?", "en", _bundle(BUNDLE_ROOMS)).body["explanation"]
