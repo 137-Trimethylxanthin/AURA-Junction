@@ -269,6 +269,8 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                        "found, check the boxes." if vision else
                        f"{value} {noun(subject, value)}. Each one is drawn on the plan for you to "
                        "check.")
+        if value == 0 and tr.meta.get("none_in_model"):
+            answer_body = tr.summary  # a model file without elements of this class: a real zero, said as such
         canonical = f"How many {plural} are drawn {where_en(scope)}"
     else:
         all_ids = [room_eid(r.room_id) for r in tr.rooms]
@@ -306,6 +308,8 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
     }
     if gold:
         body["gold"] = gold
+    if value == 0 and tr.meta.get("none_in_model"):
+        body["explanation"] = tr.summary
     return Built(body, [tr], check_ids, subject)
 
 
@@ -325,7 +329,9 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     k = scope.get("kind", "floor")
     # areas measured under an estimated scale (a scan that states none) make the answer approximate
     estimates = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
-    approx = any(r.room_id in estimates and not getattr(r, "edited", False) for r in included)
+    approx = (any(r.room_id in estimates and not getattr(r, "edited", False) for r in included)
+              or bool(tr.meta.get("approximate")))
+    floors = tr.meta.get("floor_sums") or []   # an all-floors sum: one line per floor
     canonical = ("What is the net floor area of all numbered indoor rooms" if k == "floor" else
                  f"What is the total area of rooms labelled {scope['label']}" if k == "label" else
                  f"What is the net floor area inside {scope.get('label')}" if k == "region" else
@@ -354,6 +360,8 @@ def area(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict
     trace.append(check_placeholder(inc_ids))
     trace.append({"id": "answer", "parent": "q", "title": "Answer", "tag": "sum",
                   "body": (f"{value:.2f} m², shown on the plan." if len(included) == 1 else
+                           f"Sum of {len(included)} net room areas on {len(floors)} floors = {value:.2f} m² "
+                           f"({'; '.join(floors)})." if len(floors) > 1 else
                            f"Sum of {len(included)} net room areas = {value:.2f} m², shown room by room."),
                   "kind": "exact", "evidence_ids": inc_ids})
     gold = None if overrides or k == "region" else gold_for(d, lang, "area", None, scope, value)
@@ -497,8 +505,15 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
     win, ru = m["winner"], m.get("runner_up")
     word = "largest" if m["order"] == "max" else "smallest"
     what = m.get("concept") or "room"
-    value = (f"{win['name'] or 'Room'} ({win['id']}) is the {word} {what}: {win['area_m2']:.2f} m²"
-             + (f"; next is {ru['name'] or 'room'} ({ru['id']}) at {ru['area_m2']:.2f} m²" if ru else "")
+    # areas measured under an estimated scale (a scan that states none) are approximate: no decimals they do not have
+    estimates = {r.get("room_id") for r in d.drawing.get("rooms", []) if r.get("area_source") == "estimate"}
+    approx = win["id"] in estimates
+
+    def _a(room: dict) -> str:
+        return f"≈ {round(room['area_m2'])} m² (estimate)" if room["id"] in estimates else f"{room['area_m2']:.2f} m²"
+
+    value = (f"{win['name'] or 'Room'} ({win['id']}) is the {word} {what}: {_a(win)}"
+             + (f"; next is {ru['name'] or 'room'} ({ru['id']}) at {_a(ru)}" if ru else "")
              + (" (tied)" if m.get("tie") else "") + ".")
     all_ids = [room_eid(r.room_id) for r in tr.rooms]
     win_ids = [room_eid(win["id"])]
@@ -531,7 +546,8 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
                    evidence_ids=win_ids),
     ]
     body = _base(question, lang, scope) | {
-        "answer": {"kind": "note", "value": value, "number": round(float(win["area_m2"]), 2), "unit": "m2"},
+        "answer": {"kind": "note", "value": value, "number": round(float(win["area_m2"]), 2), "unit": "m2"}
+                  | ({"approximate": True} if approx else {}),
         "evidence": {"boxes": [], "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]},
         "canonical_en": f"Which is the {word} {what} {where_en(scope)}",
         "method": "cad_geometry",

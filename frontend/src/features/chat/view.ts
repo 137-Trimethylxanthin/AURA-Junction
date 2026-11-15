@@ -105,8 +105,12 @@ export function valueParts(resp: AskResponse, d: Derived, lang: Lang): [string, 
         if (display.style === 'ft_in') return [display.text, '']
         return [fmtConverted(display.value, lang), display.label]
       }
-      const unit = resp.answer.unit ?? ''
-      const isAreaUnit = unit === 'm²' || unit === 'm2'
+      const rawUnit = resp.answer.unit ?? ''
+      const unit = { m2: 'm²', m3: 'm³' }[rawUnit] ?? rawUnit
+      const isAreaUnit = unit === 'm²'
+      // measured under an estimated scale: the headline says so like the evidence rows, without false decimals
+      if (resp.answer.approximate && isAreaUnit)
+        return [`≈ ${fmtCount(Math.round(resp.answer.number), lang)}`, 'm² (estimate)']
       const numStr = !isAreaUnit && Number.isInteger(resp.answer.number)
         ? fmtCount(resp.answer.number, lang)
         : fmtArea(resp.answer.number, lang)
@@ -142,6 +146,7 @@ export function sentence(resp: AskResponse, d: Derived, drawing: Drawing, lang: 
   if (resp.answer.kind === 'quantity') return t(lang, 'measured_where', { where })
   if (resp.answer.kind === 'text') return t(lang, 'text_found')
   // A note is only an agent estimate when its method says so; exact notes (e.g. "largest room") come from CAD.
+  if (resp.answer.kind === 'note' && resp.answer.approximate) return t(lang, 'area_estimate_note')
   if (resp.answer.kind === 'note')
     return t(lang, resp.method === 'agent_estimate' ? 'agent_note_found' : resp.method === 'cad_geometry' ? 'note_exact' : 'note_read')
   if (resp.answer.kind !== 'area') return ''
@@ -653,7 +658,8 @@ export function agentFailure(resp: AskResponse): AgentFailure | null {
 /** What the exact router, tools and SQL tried, from the trace's `look` node (English, from the server); null when absent. */
 export function triedText(resp: AskResponse): string | null {
   const look = resp.trace.find((n) => n.id === 'look')
-  const text = look?.body.replace(/^I cannot answer this from the drawing.s data:?\s*/i, '').trim()
+  // an all-floors abstention has no single look step: the reason travels as the response's explanation
+  const text = (look?.body.replace(/^I cannot answer this from the drawing.s data:?\s*/i, '').trim()) || resp.explanation?.trim()
   if (!text) return null
   return text.length > 240 ? `${text.slice(0, 237)}…` : text
 }

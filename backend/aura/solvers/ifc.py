@@ -430,6 +430,12 @@ def answer(model: IfcModel, family: str, scope: dict | None = None) -> dict:
         if k != 'floor':
             return _abstain(rid, family, scope, 'not_supported_yet', 'Wall and slab totals are per storey.')
         els = [e for e in model.elements[family] if e['storey'] == st]
+        if els and all(e['qto'] is None for e in els):
+            # elements without the quantity are not a total of 0: say what the model file lacks
+            cls, q = TOTAL_FAMILIES[family]
+            return _abstain(rid, family, scope, 'not_answerable',
+                            f"The model file gives no {q} quantity for its {len(els)} {cls} elements on '{st}', "
+                            f"so there is no {family.replace('_', ' ')} to sum.")
         tot = sum(e['qto'] or 0 for e in els)
         if family == 'wall_length':
             tot *= model.unit_scale  # probe: Qto Length is in model units (molio: mm)

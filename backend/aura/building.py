@@ -493,6 +493,11 @@ def combine(plan: Plan, question: str, results: list[tuple[Sheet, dict | BaseExc
         "route": "agent" if "agent" in routes else (template.get("route") or "template"),
         "breakdown": breakdown,
     }
+    if not oks:
+        # every sheet abstained: the reason of the sheet asked from (else the first that gave one) is the reason shown
+        whys = [(sh.id, r["explanation"]) for _, sh, r in others if isinstance(r, dict) and r.get("explanation")]
+        if whys:
+            body["explanation"] = next((w for i, w in whys if i == plan.active), whys[0][1])
     return with_unknown_areas(body)
 
 

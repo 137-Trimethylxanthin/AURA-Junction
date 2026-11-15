@@ -536,6 +536,13 @@ async def _execute_exact_intent(
 
     if intent == "quantity":
         tr = await asyncio.to_thread(tools.measure, d, subject or "", scope)
+        if tr.kind == "none" and tr.supported and tr.meta.get("abstain") == "not_answerable":
+            # the model file has the elements but not this quantity on them: final, nothing to estimate from
+            built = A.abstain(question, lang, tr.args["scope"], "not_answerable",
+                              f"What is the {A.QUANTITY_EN.get(subject or '', 'quantity')}", tr.summary,
+                              intent_tag=tag, results=[tr])
+            built.body["explanation"] = tr.summary
+            return built, True
         if not tr.supported or tr.kind == "none":
             return A.abstain(question, lang, tr.args["scope"], "not_supported_yet",
                              "(an IFC quantity)", tr.summary, intent_tag=tag, results=[tr]), False
@@ -1075,7 +1082,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
 
         # 2. Hybrid mode exact fast-path (`<2ms`, `0` model calls) when router matches cleanly
         # A count across a building's floors is exact too (each floor counted, then summed): no model needed.
-        exact_project = is_project and r.intent == "count"
+        # ... and so is the net floor area across them (each floor summed by the one-floor rule, then added).
+        exact_project = is_project and (r.intent == "count" or (
+            r.intent == "area" and (r.scope or {}).get("kind") in (None, "floor", "model")))
         if mode == "hybrid" and (not is_project or exact_project) and not has_followup_semantics:
             if (indexed and r.intent in (
                     "count", "area", "quantity", "find_text", "room_rank", "adjacent")) or (

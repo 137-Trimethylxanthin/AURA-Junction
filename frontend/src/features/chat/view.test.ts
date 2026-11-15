@@ -190,6 +190,20 @@ describe('rooms with no printed area', () => {
   })
 })
 
+describe('a note whose number is an area', () => {
+  const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'How many windows are drawn on this floor plan?' })
+  it('writes m², and an estimated area without false decimals, like its evidence row', () => {
+    const exact = { ...base, method: 'cad_geometry' as const, answer: { kind: 'note' as const, value: 'OH is the largest room: 11.95 m².', number: 11.95, unit: 'm2' } }
+    expect(valueParts(exact, deriveAnswer(exact, emptyToggles()), 'en')).toEqual(['11.95', 'm²'])
+    const est = { ...base, method: 'vision' as const, answer: { ...exact.answer, approximate: true } }
+    expect(isAskResponse(est)).toBe(true)
+    const d = deriveAnswer(est, emptyToggles())
+    expect(valueParts(est, d, 'en')).toEqual(['≈ 12', 'm² (estimate)'])
+    expect(sentence(est, d, bundledDrawing, 'en')).toContain('Estimate')
+    expect(sentence(est, d, bundledDrawing, 'en')).not.toContain('Read from the drawing')
+  })
+})
+
 describe('room rows of a drawing with an estimated scale', () => {
   it('mark each area approximate, as the headline does', () => {
     const base = askLocalForFooter({ drawing_id: 'swiss-46639', question: 'Net floor area of apartment A' })
