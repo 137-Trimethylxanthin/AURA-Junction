@@ -736,7 +736,7 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
                     entity_id=r["entity_id"], room_type=r["room_type"], storey=r["storey"], area_method=r["area_source"],
                     n_sources=r["n_sources"], agreement=r["agreement"], is_duplicate=r["is_duplicate"],
                     sources=values.get(r["entity_id"], []), evidence_id=f"room-{rid}", kind="room",
-                    size=_room_size(sizes.get(r["entity_id"]), base), unlabelled=not (r["label"] or "").strip())
+                    size=_room_size(sizes.get(r["entity_id"]), base))
         m.rooms.append(room)
         m.by_entity[r["entity_id"]] = room
     room_ids = {r["num"]: r["room_id"] for r in m.rooms if r["num"]}
