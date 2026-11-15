@@ -206,3 +206,16 @@ describe('base board', () => {
     m.dispose()
   })
 })
+
+describe('has3dModel', () => {
+  it('is offered for a vector plan (scan with a wall model, CAD bundle, IFC storey), not for a page image', async () => {
+    const { has3dModel } = await import('./available')
+    const img = (rebuilt: string) => ({ rebuilt })
+    // a PDF sheet shown as its page render, a scan without rooms or walls
+    expect(has3dModel({ kind: 'raster', images: img('/drawings/st-x/original.png?v=1') })).toBe(false)
+    // a scan with a wall model: the plan drawn from it
+    expect(has3dModel({ kind: 'raster', images: img('/drawings/st-x/plan.svg?v=1') })).toBe(true)
+    expect(has3dModel({ kind: 'cad_dxf', images: img('/drawings/swiss-46639/plan.svg') })).toBe(true)
+    expect(has3dModel({ kind: 'ifc', images: img('/drawings/st-b--eg/plan.svg') })).toBe(true)
+  })
+})
