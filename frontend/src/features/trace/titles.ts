@@ -150,3 +150,44 @@ export function traceBody(body: string, lang: Lang): string {
   }
   return body
 }
+
+/** The line under the reasoning tree. */
+const HINT: Record<Lang, string> = {
+  en: 'Point at a step to light what it used on the plan. Geometry steps are exact; the Gemini check covers the drawn boxes only.',
+  de: 'Zeigen Sie auf einen Schritt, um im Plan hervorzuheben, was er verwendet hat. Geometrieschritte sind exakt; die Gemini-Prüfung betrifft nur die eingezeichneten Rahmen.',
+  fr: 'Pointez une étape pour éclairer sur le plan ce qu’elle a utilisé. Les étapes géométriques sont exactes ; la vérification Gemini ne porte que sur les cadres tracés.',
+  fi: 'Osoita vaihetta, niin pohjassa korostuu, mitä se käytti. Geometriavaiheet ovat tarkkoja; Gemini-tarkistus kattaa vain piirretyt kehykset.',
+  it: 'Passa su un passaggio per evidenziare sulla pianta ciò che ha usato. I passaggi geometrici sono esatti; il controllo di Gemini riguarda solo i riquadri disegnati.',
+}
+export const traceHint = (lang: Lang): string => HINT[lang] ?? HINT.en
+
+/** Short step tags that are fixed words. */
+const TAGS: Record<string, Tr> = {
+  count: { de: 'Anzahl', fr: 'comptage', fi: 'lukumäärä', it: 'conteggio' },
+  sum: { de: 'Summe', fr: 'somme', fi: 'summa', it: 'somma' },
+  estimate: { de: 'Schätzung', fr: 'estimation', fi: 'arvio', it: 'stima' },
+  abstain: { de: 'keine Antwort', fr: 'abstention', fi: 'ei vastausta', it: 'nessuna risposta' },
+  'room labels': { de: 'Raumbeschriftungen', fr: 'étiquettes des pièces', fi: 'huonemerkinnät', it: 'etichette dei locali' },
+  'room labels · printed areas': {
+    de: 'Raumbeschriftungen · gedruckte Flächen', fr: 'étiquettes des pièces · surfaces imprimées',
+    fi: 'huonemerkinnät · painetut pinta-alat', it: 'etichette dei locali · superfici stampate',
+  },
+}
+const DETECTED: Tr = { de: 'erkannt', fr: 'détecté', fi: 'tunnistettu', it: 'rilevato' }
+const LANG_NAMES: Record<string, Tr> = {
+  English: { de: 'Englisch', fr: 'Anglais', fi: 'Englanti', it: 'Inglese' },
+  German: { de: 'Deutsch', fr: 'Allemand', fi: 'Saksa', it: 'Tedesco' },
+  French: { de: 'Französisch', fr: 'Français', fi: 'Ranska', it: 'Francese' },
+  Finnish: { de: 'Finnisch', fr: 'Finnois', fi: 'Suomi', it: 'Finlandese' },
+  Italian: { de: 'Italienisch', fr: 'Italien', fi: 'Italia', it: 'Italiano' },
+}
+
+/** A step's tag in the interface language when it is one of the fixed words; else as sent. */
+export function traceTag(tag: string, lang: Lang): string {
+  if (lang === 'en' || !tag) return tag
+  const fixed = TAGS[tag]?.[lang]
+  if (fixed) return fixed
+  const m = tag.match(/^([A-Z][a-z]+) · detected$/)
+  if (m && DETECTED[lang]) return `${LANG_NAMES[m[1]]?.[lang] ?? m[1]} · ${DETECTED[lang]}`
+  return tag
+}

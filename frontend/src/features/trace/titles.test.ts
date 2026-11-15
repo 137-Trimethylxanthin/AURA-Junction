@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { traceBody, traceTitle } from './titles'
+import { traceBody, traceHint, traceTag, traceTitle } from './titles'
 
 describe('traceTitle', () => {
   it('keeps English and unknown titles as sent', () => {
@@ -37,5 +37,17 @@ describe('traceBody', () => {
     expect(traceBody('5 stairs. Each one is drawn on the plan for you to check.', 'de')).toBe(
       '5 stairs. Each one is drawn on the plan for you to check.',
     )
+  })
+})
+
+describe('traceTag and traceHint', () => {
+  it('translates fixed tags and the detected-language tag', () => {
+    expect(traceTag('count', 'de')).toBe('Anzahl')
+    expect(traceTag('German · detected', 'de')).toBe('Deutsch · erkannt')
+    expect(traceTag('DXF · door layer', 'de')).toBe('DXF · door layer')
+    expect(traceTag('count', 'en')).toBe('count')
+  })
+  it('has a hint for every language', () => {
+    for (const l of ['en', 'de', 'fr', 'fi', 'it'] as const) expect(traceHint(l).length).toBeGreaterThan(20)
   })
 })
