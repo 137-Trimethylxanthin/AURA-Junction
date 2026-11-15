@@ -15,7 +15,7 @@ from aura.writer import Writer
 
 # Bumped when stored answers would be wrong under the current code (2: replayed budget refusals and
 # scan answers stored as exact); older entries are then never hit and expire with their TTL.
-KEY_VERSION = 5
+KEY_VERSION = 6  # 6: room-rank answers without IFC GUIDs or gross-area spaces
 
 
 def answer_key(drawing_id: str, question: str, scope: dict | None, overrides: list | None,
