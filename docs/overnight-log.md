@@ -518,3 +518,8 @@ answer as stated, all with 0 model calls.
 dropped by the false-room guard; reasoning-tree node titles and credit lines stay English in
 other interface languages; a DWG site plan answers "1 door, Exact"; the video's cost scene shows
 the running total at recording time.
+
+Browser check of the last deploy (`61a1f53`, 06:02 UTC): the library with the "CubiCasa" chip
+lists CubiCasa cards first with rebuilt-plan thumbnails and no IFC project tiles above them; with
+"US sheets" the cards show wrapped titles and "page N of M"; the school plan opens; 0 console
+errors, 0 failed requests. Screenshots: `/root/aura-deploy/verify/end-*.png` on the devbox.
