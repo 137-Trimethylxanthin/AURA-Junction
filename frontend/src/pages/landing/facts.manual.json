@@ -36,6 +36,18 @@
       "method": "A vision model outlines each labelled room on the image, the outline is snapped to the drawn lines, and its perimeter is compared with the CAD original of the same floor",
       "measured": "2026-11-14",
       "caveat": "Scans only, no CAD or BIM file. Plans without a stated scale are not included: there the scale is estimated and areas are shown as estimates."
+    },
+    {
+      "id": "scan-area-median",
+      "kind": "result",
+      "label": "Scans: median room-area error against the CAD original",
+      "value": "0.5 %",
+      "n": 909,
+      "n_unit": "rooms",
+      "scope": "909 rooms on 32 held-back Swiss Dwellings floor plans, read as PNG images without their CAD file; plans that state their scale",
+      "method": "A vision model outlines each labelled room on the image, the outline is snapped to the drawn lines, and its area is compared with the CAD original of the same floor",
+      "measured": "2026-11-14",
+      "caveat": "Scans only, no CAD or BIM file. Plans without a stated scale are not included: there the scale is estimated and areas are shown as estimates."
     }
   ]
 }
