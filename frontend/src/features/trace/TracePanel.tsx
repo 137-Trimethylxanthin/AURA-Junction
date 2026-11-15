@@ -9,7 +9,7 @@ import { useUi } from '@/i18n/uiLang'
 import { cn } from '@/lib/utils'
 import { callsText, fmtUsd } from '@/features/chat/view'
 import { traceDetail } from './detail'
-import { traceTitle } from './titles'
+import { traceBody, traceTitle } from './titles'
 
 const ROUTE_KEY: Record<string, 'tr_route_exact' | 'tr_route_cache' | 'tr_route_agent'> = {
   exact: 'tr_route_exact',
@@ -219,7 +219,7 @@ export function TracePanel() {
                   <span className="flex-1" />
                   {conf ? <span className={cn('num text-xs font-semibold', k.conf)}>{conf}</span> : null}
                 </div>
-                <p className="text-[13px] text-foreground/85">{node.body}</p>
+                <p className="text-[13px] text-foreground/85">{traceBody(node.body, lang)}</p>
                 {detail.decision ? (
                   <div className="flex flex-wrap items-center gap-1.5" data-decision>
                     {detail.decision.decider === 'gemini-decision-1' ? (
