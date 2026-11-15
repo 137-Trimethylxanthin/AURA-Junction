@@ -690,6 +690,11 @@ def measure(d: LoadedDrawing, family: str, scope: dict | None = None) -> ToolRes
     return tr.model_copy(update={"meta": tr.meta | ({"unit": unit} if unit else {})})
 
 
+def _element_name(subject: str) -> str:
+    """What a model file calls the elements of a subject (its rooms are "space" elements)."""
+    return "room (space)" if subject == "room" else subject
+
+
 def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> ToolResult:
     scope = scope or {"kind": "floor"}
     args = {"subject": subject, "scope": scope}
@@ -698,13 +703,13 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
     if (bad := _model_scope_unsupported(d, "count_objects", args)) is not None:
         return bad
     t0 = time.perf_counter()
-    if (not d.engine.supports(subject) and d.drawing.get("kind") == "ifc" and subject in ("door", "window")
+    if (not d.engine.supports(subject) and d.drawing.get("kind") == "ifc" and subject in ("door", "window", "room")
             and scope.get("kind") in ("floor", "model")):
         # A model file lists its elements: when it has none of this class, the count is 0, not unknown.
         where = "this storey of the model file" if scope.get("kind") == "floor" else "the model file"
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
                           kind="count", subject=subject, value=0.0, numbers=[0.0], ms=_ms(t0),
-                          summary=f"0 {noun(subject, 2)}: {where} contains no {subject} elements.",
+                          summary=f"0 {noun(subject, 2)}: {where} contains no {_element_name(subject)} elements.",
                           meta={"none_in_model": True})
     if not d.engine.supports(subject):
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects",
@@ -755,7 +760,7 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
     if missing:
         summary += f" Not counted: {', '.join(missing)}."
     if none_in_model and total == 0:
-        summary = (f"0 {noun(subject, 2)}: the model file contains no {subject} elements on "
+        summary = (f"0 {noun(subject, 2)}: the model file contains no {_element_name(subject)} elements on "
                    f"{'these ' + str(counted) + ' floors' if counted > 1 else 'this floor'}.")
     return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
                       kind="count", subject=subject, value=float(total), numbers=[float(total)],
