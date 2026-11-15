@@ -1281,7 +1281,7 @@ def _scan_data_uri(base: Base, max_side: int = 2400) -> str | None:
 # The layers of an image plan's vector drawing.  The 3D view reads them by these exact styles (the same ones as the
 # plan.svg of a CAD bundle): walls by their fill, windows by fill + stroke, doors and fixtures by their stroke.
 WALL_FILL, WINDOW_STROKE, DOOR_STROKE, FIXTURE_STROKE = "#2f343c", "#374151", "#4b5563", "#6b7280"
-ESTIMATE_NOTE = "Scale estimated from door and fixture sizes: lengths and areas are approximate"
+ESTIMATE_NOTE = "Scale estimated from the sizes of drawn objects (doors, fixtures, rooms): lengths and areas are approximate"
 
 
 def area_text(r: dict) -> str | None:
