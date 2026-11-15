@@ -95,6 +95,15 @@ describe('1.1 answer kinds', () => {
     const d = deriveAnswer(area, emptyToggles())
     expect(valueParts(area, d, 'en')).toEqual(['3,675', 'sq ft'])
     expect(metricText(area, d, 'en')).toBe('341.42 m²')
+    // measured under an estimated scale: both values say so, and the metric one has no false decimals
+    const est = { ...area, answer: { ...area.answer, approximate: true } }
+    expect(valueParts(est, d, 'en')).toEqual(['≈ 3,675', 'sq ft'])
+    expect(metricText(est, d, 'en')).toBe('≈ 341 m²')
+    const estNote = { ...base, answer: { kind: 'note' as const, value: 'OH: 22.30 m².', number: 22.3, unit: 'm2', approximate: true }, display: { ...display, value: 240.04, text: '240 sq ft', metric_text: '22.30 m²' } }
+    const dn = deriveAnswer(estNote, emptyToggles())
+    expect(valueParts(estNote, dn, 'en')).toEqual(['≈ 240', 'sq ft'])
+    expect(metricText(estNote, dn, 'en')).toBe('≈ 22 m²')
+    expect(valueParts({ ...estNote, display: undefined }, dn, 'de')).toEqual(['≈ 22', 'm² (Schätzung)'])
     const len = { ...base, answer: { kind: 'quantity' as const, value: 3.81, unit: 'm' as const }, display: { ...display, unit: 'ftin', label: 'ft-in', style: 'ft_in' as const } }
     expect(valueParts(len, deriveAnswer(len, emptyToggles()), 'en')).toEqual(["12' 6\"", ''])
     const note = { ...base, answer: { kind: 'note' as const, value: 'Wall 2400 mm.', number: 2400, unit: 'mm' }, display: { ...display, unit: 'ft', label: 'ft', value: 7.874, text: '7.87 ft', metric_text: '2,400 mm' } }
@@ -970,5 +979,7 @@ describe('not_answerable abstain', () => {
     expect(announce(r, deriveAnswer(r, emptyToggles()))).toBe('Not in this drawing’s data. Nothing guessed.')
     expect(triedText(r)).toBe('the tools found no answer within their limits.')
     expect(triedText({ ...r, trace: [] })).toBeNull()
+    // the card writes "Tried:" itself: a reason that starts with it is not doubled
+    expect(triedText({ ...r, trace: [], explanation: 'Tried: the exact templates. None gives this answer.' })).toBe('the exact templates. None gives this answer.')
   })
 })

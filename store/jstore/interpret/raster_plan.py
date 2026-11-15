@@ -743,8 +743,16 @@ def interpret(db: DB, f: dict) -> dict:
         recs.append(dict(kind="wall", ifc_class="IfcWall", number=None, label=None, geom=_apply(m, p), attrs=attrs,
                          sources=[("raster_detection", str(did), "outline", [round(v, 1) for v in b], d_wall)], claims=[]))
     out = merge(db, f, recs, registered=False) if recs else dict(new=0)
+    pruned = {}
+    if os.environ.get("JSTORE_SPACE_GUARD", "1") != "0":
+        try:                                             # spaces that walls do not bound are not rooms (space_guard)
+            from .. import space_guard
+            pruned = space_guard.prune(db, f["drawing_key"])
+        except Exception:  # noqa: BLE001 - the guard never fails an interpretation
+            pruned = {}
+    gone = sum(1 for why in pruned.values() if not why.endswith("not a balcony"))
     return dict(walls=out["new"], method=plan_["method"], coverage=plan_["coverage"], rooms_placed=placed,
-                unlabelled_spaces=len(rooms) - labelled,
+                unlabelled_spaces=len(rooms) - labelled - gone, spaces_not_rooms=gone,
                 nominal_scale=round(mpp, 6) if nominal else None, scale_from=nominal["source"] if nominal else None,
                 seconds=round(time.time() - t0, 1))
 

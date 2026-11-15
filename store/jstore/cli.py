@@ -46,6 +46,10 @@ def main() -> None:
     t.add_argument("--drawing")
     t.add_argument("--workers", type=int, default=4)
     t.add_argument("--all", action="store_true", help="also drawings that are already interpreted")
+    g = sub.add_parser("prune-spaces", help="take enclosed spaces without a label that are not rooms out of the views")
+    g.add_argument("--drawing")
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--restore", action="store_true", help="put them back")
     a = ap.parse_args()
 
     if a.cmd == "init":
@@ -59,6 +63,17 @@ def main() -> None:
                               set(a.only.split(",")) if a.only else None, a.limit, a.workers,
                               not a.no_interpret, a.redo)
         print(json.dumps(out, indent=1))
+    elif a.cmd == "prune-spaces":
+        from . import space_guard
+        with DB() as db:
+            if a.restore:
+                print(json.dumps(dict(restored=space_guard.restore(db, a.drawing))))
+                return
+            keys = [a.drawing] if a.drawing else [r["k"] for r in db.run(
+                """select distinct drawing_key as k from jstore.entity where kind = 'room' and status = 'active'
+                   and attrs->>'by' = 'jstore.interpret.raster_plan' order by 1""")]
+            out = {k: n for k in keys if (n := len(space_guard.prune(db, k, a.dry_run)))}
+        print(json.dumps(dict(drawings=len(out), spaces=sum(out.values()), dry_run=a.dry_run, by_drawing=out), indent=1))
     elif a.cmd == "interpret":
         with DB() as db:
             keys = [a.drawing] if a.drawing else [r["drawing_key"] for r in db.run(

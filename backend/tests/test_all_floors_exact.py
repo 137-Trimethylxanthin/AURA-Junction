@@ -143,6 +143,11 @@ def test_room_count_says_how_many_rooms_have_no_label():
     body = A.count("How many rooms are there?", "en", d, tr, {"kind": "floor"}, None).body
     assert body["answer"] == {"kind": "count", "value": 3, "subject": "room"}
     assert body["explanation"].startswith("3 rooms (2 labelled, 1 without a label).")
+    # asked in Finnish or German, the sentence is in that language (it was English in every interface)
+    fi = A.count("Montako huonetta tässä pohjapiirroksessa näkyy?", "fi", d, tr, {"kind": "floor"}, None).body
+    assert fi["explanation"].startswith("3 huonetta (2 nimettyä, 1 ilman nimeä).") and fi["answer"] == body["answer"]
+    de = A.count("Wie viele Räume?", "de", d, tr, {"kind": "floor"}, None).body
+    assert de["explanation"].startswith("3 Räume (2 beschriftet, 1 ohne Beschriftung).")
     plain = _floor("cad", rooms[:2])
     body = A.count("How many rooms are there?", "en", plain, tools.count_objects(plain, "room"), {"kind": "floor"}, None).body
     assert "explanation" not in body

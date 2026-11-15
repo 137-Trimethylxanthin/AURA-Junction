@@ -59,7 +59,12 @@ export function displayParts(
  */
 export function fmtRoomArea(area: number, source: string | undefined, lang: Lang): string {
   if (source !== 'estimate') return `${fmtArea(area, lang)} m²`
-  return `≈ ${fmtCount(Math.round(area), lang)} m² (estimate)`
+  return `≈ ${fmtCount(Math.round(area), lang)} m² ${estimateTag(lang)}`
+}
+
+/** "(estimate)" in the language of the interface. */
+export function estimateTag(lang: Lang): string {
+  return ({ en: '(estimate)', fr: '(estimation)', fi: '(arvio)', de: '(Schätzung)' } as Record<string, string>)[lang] ?? '(estimate)'
 }
 
 export function fmtCount(n: number, lang: Lang): string {

@@ -7,6 +7,7 @@ reported with the dataset line for the question's language.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from aura.contract import CONTRACT_VERSION, ToolResult
@@ -301,9 +302,11 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
         n_bare = sum(1 for r in tr.rooms if r.included and r.room_id in bare and not getattr(r, "drawing_id", None))
         if subject == "room" and n_bare and scope.get("kind", "floor") == "floor":
             # spaces the sheet prints no label for are rooms too: the count says how many of each
-            unlabelled_note = (f"{value} {noun(subject, value)} ({value - n_bare} labelled, {n_bare} without a label). "
-                               "Each room is lit on the plan for you to check.")
-            answer_body = unlabelled_note
+            answer_body = (f"{value} {noun(subject, value)} ({value - n_bare} labelled, {n_bare} without a label). "
+                           "Each room is lit on the plan for you to check.")
+            # the sentence people read, in the language they asked in (the trace stays English)
+            said = UNLABELLED_NOTE.get(contract_lang(lang)) if value > 1 else None
+            unlabelled_note = said.format(n=value, a=value - n_bare, b=n_bare) if said else answer_body
         if subject == "apartment":
             canonical = ("How many apartments are on this floor plan" if scope.get("kind") == "floor"
                          else f"How many apartments are {where_en(scope)}")
@@ -457,10 +460,32 @@ def quantity(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: 
     return Built(body, [tr], ids if is_agent else [], tr.subject)
 
 
+#: "10 rooms (8 labelled, 2 without a label)" in the other interface languages
+UNLABELLED_NOTE = {
+    "de": "{n} Räume ({a} beschriftet, {b} ohne Beschriftung). Jeder Raum ist im Plan markiert, zum Nachprüfen.",
+    "fr": "{n} pièces ({a} avec libellé, {b} sans libellé). Chaque pièce est mise en évidence sur le plan pour vérification.",
+    "fi": "{n} huonetta ({a} nimettyä, {b} ilman nimeä). Jokainen huone on korostettu pohjapiirroksessa tarkistusta varten.",
+}
+
+#: an id the store gives a room or thing that carries no number on the sheet ("e143313"): never shown to people
+INTERNAL_ID = re.compile(r"e\d{3,}")
+
+
+def plain_ids(text: str, drawing: dict) -> str:
+    """Prose without the store's internal ids: "Hall (e143313)" -> "Hall", "with ID e143299" -> "",
+    "room e143304" -> "room Enclosed Walkway" (the room's name when the drawing has it; else the id stays)."""
+    if not text or "e" not in text:
+        return text
+    names = {str(r.get("room_id")): str(r.get("name") or "").strip() for r in drawing.get("rooms", [])}
+    text = re.sub(r"\s*\((?:(?:entity[ _]?)?id[:= ]*)?e\d{3,}\)", "", text, flags=re.I)
+    text = re.sub(r",?\s*\b(?:with|having)\s+(?:the\s+)?(?:entity[ _]?)?id[:= ]*e\d{3,}\b", "", text, flags=re.I)
+    return re.sub(r"\be\d{3,}\b", lambda m: names.get(m.group(0)) or m.group(0), text)
+
+
 def note(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dict,
          intent_tag: str = "router") -> Built:
     """Open-ended answer from the deep agent (`AnswerNote`, contract 1.2)."""
-    value = tr.text or tr.summary or ""
+    value = plain_ids(tr.text or tr.summary or "", d.drawing)
     ans: dict[str, Any] = {"kind": "note", "value": value}
     if tr.value is not None:
         ans["number"] = float(tr.value)
@@ -539,8 +564,13 @@ def room_rank(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope:
     def _a(room: dict) -> str:
         return f"≈ {round(room['area_m2'])} m² (estimate)" if room["id"] in estimates else f"{room['area_m2']:.2f} m²"
 
-    value = (f"{win['name'] or 'Room'} ({win['id']}) is the {word} {what}: {_a(win)}"
-             + (f"; next is {ru['name'] or 'room'} ({ru['id']}) at {_a(ru)}" if ru else "")
+    def _n(room: dict, default: str) -> str:
+        # a room number the sheet prints ("1.03") tells rooms of one name apart; a store id ("e143313") tells nobody anything
+        shown = "" if INTERNAL_ID.fullmatch(str(room["id"])) else f" ({room['id']})"
+        return f"{room['name'] or default}{shown}"
+
+    value = (f"{_n(win, 'Room')} is the {word} {what}: {_a(win)}"
+             + (f"; next is {_n(ru, 'room')} at {_a(ru)}" if ru else "")
              + (" (tied)" if m.get("tie") else "") + ".")
     all_ids = [room_eid(r.room_id) for r in tr.rooms]
     win_ids = [room_eid(win["id"])]

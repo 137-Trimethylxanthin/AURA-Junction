@@ -118,7 +118,9 @@ export function suggestionFits(s: Suggestion, drawing?: Drawing): boolean {
   const t = s.text
   if (/window|fenêtre|fenster|ikkun/i.test(t) && !caps.has('window')) return false
   if (/\bdoors?\b|\bove[an]\b|\bportes?\b|\btüre?n?\b/i.test(t) && !/fire rating/i.test(t) && !caps.has('door')) return false
-  if (/stairs?|shafts?/i.test(t)) return hasStairs(drawing)
+  // the stair questions follow rooms and the doors between them; a model's stairs are elements without either
+  // (on an IFC building both questions abstained or listed storeys), so a model is not offered them
+  if (/stairs?|shafts?/i.test(t)) return drawing.kind !== 'ifc' && hasStairs(drawing)
   if (/apartments?|appartement/i.test(t)) return drawing.units.length > 0
   if (/rooms?\b|räume|raum\b|huone|surface|\barea\b|fläche/i.test(t)) return drawing.rooms.length > 0
   return true

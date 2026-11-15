@@ -907,7 +907,7 @@ export const AgentCard = memo(function AgentCard({ turn, lang: userLang }: { tur
         ) : null}
         {parts && derived && metricText(resp, derived, lang) ? (
           <p className="text-sm font-medium tabular-nums text-muted-foreground" data-answer-metric>
-            = {metricText(resp, derived, lang)}
+            {metricText(resp, derived, lang)?.startsWith('≈') ? '' : '= '}{metricText(resp, derived, lang)}
           </p>
         ) : null}
         {numericNoteProse ? <ClampedProse text={numericNoteProse} lang={lang} kind="note" /> : null}

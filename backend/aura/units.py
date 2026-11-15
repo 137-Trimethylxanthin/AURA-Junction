@@ -442,6 +442,10 @@ def apply(resp: dict, unit: Unit | None, lang: str | None = None) -> dict:
             display |= {"unit": dst.key, "label": dst.label, "value": round(dv, 6),
                         "text": fmt_value(dv, dst, lang), "metric_text": fmt_value(v, src, lang),
                         "style": "ft_in" if dst.key == "ftin" else "decimal"}
+            if (resp.get("answer") or {}).get("approximate"):
+                # measured under an estimated scale: both values say so, the metric one without decimals it has not
+                display["text"] = "≈ " + display["text"]
+                display["metric_text"] = f"≈ {fmt_number(round(v), lang, 0)} {src.label}"
     ms = resp.get("measures")
     if isinstance(ms, list) and (lu := coerce(unit, 1)) is not None and lu.key != "m":
         # every length a composite answer states, converted from its value (not from the prose)
