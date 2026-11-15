@@ -209,7 +209,18 @@ export function buildPlanModel(drawing: Drawing, plan: SvgPlan): PlanModel {
     const baseColor = new THREE.Color(
       room.outdoor ? COLORS.outdoor : COLORS.floor[Math.max(0, unitIds.indexOf(room.unit ?? '')) % COLORS.floor.length],
     )
-    const mat = track(new THREE.MeshStandardMaterial({ color: baseColor.clone(), roughness: 0.85 }))
+    // The floor sits millimetres above the board's top. On a large building the camera is far away and the depth
+    // buffer cannot tell those apart, so the floor and the white board flicker through each other (z-fighting).
+    // A polygon offset wins the depth test at any distance; indoor floors also win over an overlapping outdoor one.
+    const mat = track(
+      new THREE.MeshStandardMaterial({
+        color: baseColor.clone(),
+        roughness: 0.85,
+        polygonOffset: true,
+        polygonOffsetFactor: room.outdoor ? -1 : -2,
+        polygonOffsetUnits: room.outdoor ? -2 : -4,
+      }),
+    )
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.y = room.outdoor ? 0.004 : 0.008
     mesh.receiveShadow = true

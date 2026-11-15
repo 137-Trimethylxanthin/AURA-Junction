@@ -248,7 +248,17 @@ export function buildImageModel(img: HTMLImageElement | ImageBitmap, opts: Image
     const py = Math.min(r.h - 1, Math.round(v * (r.h - 1)))
     inkAt[i] = ink[py * r.w + px]
   }
-  const mat = track(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, side: THREE.DoubleSide }))
+  // polygonOffset: the sheet sits 5 mm above the board; seen from far away the two would z-fight without it.
+  const mat = track(
+    new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.9,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -4,
+    }),
+  )
   const sheet = new THREE.Mesh(geo, mat)
   sheet.receiveShadow = true
   sheet.castShadow = true
