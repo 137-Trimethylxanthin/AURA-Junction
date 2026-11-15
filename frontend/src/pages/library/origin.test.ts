@@ -32,6 +32,9 @@ describe("library source filter", () => {
     expect(isSheetWithoutPlan(list[0])).toBe(true)
     expect(isSheetWithoutPlan(list[1])).toBe(false) // a bundle states no count: it is a plan
     expect(plansFirst(list).map((d) => d.id)).toEqual(["bundle", "plan", "doors", "letter"])
+    // a site plan with one door symbol does not open a source: plans with rooms come before it (US sheets chip)
+    const us = [s("site", { n_rooms: 0, n_doors: 1 }), s("blank", { n_rooms: 0, n_doors: 0 }), s("cherokee", { n_rooms: 9, n_doors: 12 })]
+    expect(plansFirst(us).map((d) => d.id)).toEqual(["cherokee", "site", "blank"])
     const many = Array.from({ length: 800 }, (_, i) => s(`d${i}`, { n_rooms: i % 3 }))
     expect(plansFirst(many)).toHaveLength(800)
   })

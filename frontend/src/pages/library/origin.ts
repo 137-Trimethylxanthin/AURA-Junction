@@ -41,8 +41,10 @@ export function isSheetWithoutPlan(d: DrawingSummary): boolean {
 
 /**
  * Demo order without hiding anything: the given order is kept (own uploads, then the library as served), except
- * that sheets without a plan move behind the plans. Stable, so the order inside each part is unchanged.
+ * that plans with rooms come first, then sheets the store read only doors on (a site plan, a detail sheet with
+ * one door symbol), then sheets without a plan. Stable, so the order inside each part is unchanged.
  */
 export function plansFirst<T extends DrawingSummary>(drawings: T[]): T[] {
-  return [...drawings.filter((d) => !isSheetWithoutPlan(d)), ...drawings.filter(isSheetWithoutPlan)]
+  const tier = (d: T) => (isSheetWithoutPlan(d) ? 2 : d.n_rooms === 0 ? 1 : 0)
+  return [0, 1, 2].flatMap((t) => drawings.filter((d) => tier(d) === t))
 }
