@@ -39,6 +39,12 @@ describe('draft capability helpers', () => {
     expect(sugg.some((s) => /appartement|apartment/i.test(s.text))).toBe(false)
     expect(sugg.some((s) => /fire rating/i.test(s.text))).toBe(false)
 
+    // a model with a staircase among its spaces is still not asked the stair questions (they abstained on hitos)
+    const withStair = { ...ifcDrawing, rooms: [...ifcDrawing.rooms, { ...ifcDrawing.rooms[0], room_id: 'st', name: 'Trapp' }] }
+    expect(suggestionFits({ lang: 'EN', text: 'Show all stairs and where they lead to', short: '' }, withStair)).toBe(false)
+    expect(suggestionFits({ lang: 'EN', text: 'Match stairs and shafts across all floors', short: '' }, withStair)).toBe(false)
+    expect(suggestionFits({ lang: 'EN', text: 'Show all stairs and where they lead to', short: '' }, { ...withStair, kind: 'raster' })).toBe(true)
+
     const blocks = promptBlocksFor(ifcDrawing)
     expect(blocks).toHaveLength(5)
     for (const b of blocks) {

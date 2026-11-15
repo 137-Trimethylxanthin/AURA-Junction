@@ -676,7 +676,8 @@ export function agentFailure(resp: AskResponse): AgentFailure | null {
 export function triedText(resp: AskResponse): string | null {
   const look = resp.trace.find((n) => n.id === 'look')
   // an all-floors abstention has no single look step: the reason travels as the response's explanation
-  const text = (look?.body.replace(/^I cannot answer this from the drawing.s data:?\s*/i, '').trim()) || resp.explanation?.trim()
+  let text = (look?.body.replace(/^I cannot answer this from the drawing.s data:?\s*/i, '').trim()) || resp.explanation?.trim()
   if (!text) return null
+  text = text.replace(/^Tried:\s*/i, '')            // the card writes "Tried:" itself
   return text.length > 240 ? `${text.slice(0, 237)}…` : text
 }

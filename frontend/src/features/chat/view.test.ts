@@ -979,5 +979,7 @@ describe('not_answerable abstain', () => {
     expect(announce(r, deriveAnswer(r, emptyToggles()))).toBe('Not in this drawing’s data. Nothing guessed.')
     expect(triedText(r)).toBe('the tools found no answer within their limits.')
     expect(triedText({ ...r, trace: [] })).toBeNull()
+    // the card writes "Tried:" itself: a reason that starts with it is not doubled
+    expect(triedText({ ...r, trace: [], explanation: 'Tried: the exact templates. None gives this answer.' })).toBe('the exact templates. None gives this answer.')
   })
 })
