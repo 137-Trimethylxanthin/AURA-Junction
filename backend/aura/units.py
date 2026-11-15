@@ -380,6 +380,38 @@ def metric_turns(history: list[dict] | None) -> list[dict] | None:
     return out
 
 
+_UNIT_WORDS = {
+    "en": {"in": "inches", "ft": "feet", "ftin": "feet and inches", "yd": "yards", "m": "metres", "cm": "centimetres",
+           "mm": "millimetres"},
+    "de": {"in": "Zoll", "ft": "Fuss", "ftin": "Fuss und Zoll", "yd": "Yards", "m": "Metern", "cm": "Zentimetern",
+           "mm": "Millimetern"},
+    "fr": {"in": "pouces", "ft": "pieds", "ftin": "pieds et pouces", "yd": "yards", "m": "mètres", "cm": "centimètres",
+           "mm": "millimètres"},
+    "it": {"in": "pollici", "ft": "piedi", "ftin": "piedi e pollici", "yd": "iarde", "m": "metri", "cm": "centimetri",
+           "mm": "millimetri"},
+    "fi": {"in": "tuumina", "ft": "jalkoina", "ftin": "jalkoina ja tuumina", "yd": "jaardeina", "m": "metreinä",
+           "cm": "senttimetreinä", "mm": "millimetreinä"},
+}
+_DIM_NOTE = {
+    "en": ({2: "An area", 3: "A volume"}, "{what} cannot be given in {word} (a length), so it was converted to {label}."),
+    "de": ({2: "Eine Fläche", 3: "Ein Volumen"},
+           "{what} lässt sich nicht in {word} (einer Länge) angeben; sie wurde deshalb in {label} umgerechnet."),
+    "fr": ({2: "Une surface", 3: "Un volume"},
+           "{what} ne peut pas être donné(e) en {word} (une longueur) ; la valeur a donc été convertie en {label}."),
+    "it": ({2: "Un'area", 3: "Un volume"},
+           "{what} non si può esprimere in {word} (una lunghezza); il valore è stato quindi convertito in {label}."),
+    "fi": ({2: "Pinta-alaa", 3: "Tilavuutta"},
+           "{what} ei voi ilmoittaa {word} (pituuden yksikkö), joten arvo muunnettiin yksikköön {label}."),
+}
+
+
+def _dim_note(lang: str, dim: int, unit: Unit, label: str) -> str:
+    """Asked for a length unit, the answer is an area / a volume: what was done, in the answer's language."""
+    lang = lang if lang in _DIM_NOTE else "en"
+    whats, text = _DIM_NOTE[lang]
+    return text.format(what=whats[dim], word=_UNIT_WORDS[lang].get(unit.key, unit.label), label=label)
+
+
 def apply(resp: dict, unit: Unit | None, lang: str | None = None) -> dict:
     """A copy of a metric response with `display` (the requested unit) and converted prose.
 
@@ -429,10 +461,7 @@ def apply(resp: dict, unit: Unit | None, lang: str | None = None) -> dict:
         out["explanation"] = f"{display['text']} ({display['metric_text']})."
     if "text" in display and measure is not None and unit.dim != measure[1].dim and unit.dim == 1:
         # asked for a length unit, the answer is an area / a volume: say what was done instead of converting silently
-        what = {2: "An area", 3: "A volume"}[measure[1].dim]
-        word = {"in": "inches", "ft": "feet", "ftin": "feet and inches", "yd": "yards", "m": "metres",
-                "cm": "centimetres", "mm": "millimetres"}.get(unit.key, unit.label)
-        note = f"{what} cannot be given in {word} (a length), so it is shown in {display['label']}."
+        note = _dim_note(lang, measure[1].dim, unit, display["label"])
         out["explanation"] = f"{out['explanation'].rstrip()} {note}"
     out["display"] = display
     return out
