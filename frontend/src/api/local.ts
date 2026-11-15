@@ -32,7 +32,7 @@ import { t, type StringKey } from '@/i18n/strings'
 const BOX_SUBJECTS: readonly BoxSubject[] = ['window', 'door', 'washbasin', 'wc', 'bathtub', 'shower']
 const isBoxSubject = (s: Subject): s is BoxSubject => (BOX_SUBJECTS as readonly string[]).includes(s)
 
-const LANG_NAME: Record<Lang, string> = { en: 'English', fr: 'French', fi: 'Finnish', de: 'German' }
+const LANG_NAME: Record<Lang, string> = { en: 'English', fr: 'French', fi: 'Finnish', de: 'German', it: 'Italian' }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 

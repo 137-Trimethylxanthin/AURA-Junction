@@ -87,6 +87,13 @@ const EXTRA_COPY: Record<Lang, ExtraCopy> = {
     removePlan: (t) => `${t} aus Projekt entfernen`,
     uploadsPickLabel: "Bereite eigene Uploads",
   },
+  it: {
+    editProject: "Modifica",
+    moveUp: (l) => `Sposta ${l} in su`,
+    moveDown: (l) => `Sposta ${l} in giù`,
+    removePlan: (t) => `Rimuovi ${t} dal progetto`,
+    uploadsPickLabel: "I tuoi caricamenti pronti",
+  },
 }
 
 const GROUND_TOKEN_RE =

@@ -36,6 +36,7 @@ from aura import ingest_cost, tools, uploads
 from aura.agent_client import AgentClient
 from aura.budget import AGENT_PURPOSES, RASTER_PURPOSES, Budget, Ledger, RequestRecord
 from aura.cache import AnswerCache, CheckCache
+from aura.plan_notes import translated_plan
 from aura.config import Settings, get_settings, kill_file, models_enabled
 from aura.contract import (
     CONTRACT_VERSION,
@@ -1025,9 +1026,14 @@ def create_app(
             return _err("not_found", "No such file.", 404)
         cache = NO_STORE if is_upload or d.source == "upload" else LIBRARY_CACHE
         # L1: a plan.svg opened directly from the API origin can never run script.
-        return FileResponse(p, headers={"cache-control": cache, "x-content-type-options": "nosniff",
-                                        "content-security-policy": "default-src 'none'; "
-                                        "style-src 'unsafe-inline'; img-src data:; sandbox"})
+        headers = {"cache-control": cache, "x-content-type-options": "nosniff",
+                   "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"}
+        if name == "plan.svg" and request.query_params.get("lang"):
+            # the footnote of an estimated scale is drawn inside the image: serve it in the interface's language
+            body = await asyncio.to_thread(translated_plan, Path(p), request.query_params.get("lang"))
+            if body is not None:
+                return Response(body, media_type="image/svg+xml", headers=headers)
+        return FileResponse(p, headers=headers)
 
     def not_ready(request: Request, drawing_id: str) -> JSONResponse | None:
         row = upload_row(request, drawing_id)

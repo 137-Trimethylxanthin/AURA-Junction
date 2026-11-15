@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 CONTRACT_VERSION = "1.2"
 
-Lang = Literal["en", "fr", "fi", "de"]
-LANGS: tuple[str, ...] = ("en", "fr", "fi", "de")
+Lang = Literal["en", "fr", "fi", "de", "it"]
+LANGS: tuple[str, ...] = ("en", "fr", "fi", "de", "it")
 GroupColor = Literal["c1", "c2", "c3", "c4", "c5", "c6"]
 GROUP_COLORS: tuple[GroupColor, ...] = ("c1", "c2", "c3", "c4", "c5", "c6")
 Subject = Literal["window", "door", "washbasin", "wc", "bathtub", "shower", "room", "apartment",

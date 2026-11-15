@@ -6,7 +6,7 @@ import { t, type StringKey, type UiKey } from '@/i18n/strings'
 
 /** Pure view-model helpers for the answer card. Every number comes from the response or Derived. */
 
-export const LANG_NAME_EN: Record<Lang, string> = { en: 'English', fr: 'French', fi: 'Finnish', de: 'German' }
+export const LANG_NAME_EN: Record<Lang, string> = { en: 'English', fr: 'French', fi: 'Finnish', de: 'German', it: 'Italian' }
 
 export type GroupColorKey = 'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c6'
 

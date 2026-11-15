@@ -10,7 +10,7 @@ describe('translations', () => {
   ] as const) {
     it(`${name}: every language has the same placeholders as English, and no empty text`, () => {
       const en = dicts.en as Record<string, string>
-      for (const lang of ['fr', 'fi', 'de'] as const) {
+      for (const lang of ['fr', 'fi', 'de', 'it'] as const) {
         const d = dicts[lang] as Record<string, string>
         for (const k of Object.keys(en)) {
           expect(d[k], `${lang}.${k}`).toBeTruthy()

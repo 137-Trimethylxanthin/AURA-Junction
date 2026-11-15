@@ -15,12 +15,15 @@ metric; `units.apply` converts it when the question asks for another unit.
 """
 from __future__ import annotations
 
+import contextvars
 import dataclasses
 import math
 import re
 from typing import Any
 
 from . import answer as A
+from . import room_words as RW
+from .dimension_text import tx, word
 from .contract import Box, EvidenceRoom, ToolResult
 from .router import LABEL_CONCEPTS, ROOMS_WITH, _scope
 from .tools import LoadedDrawing, _rid
@@ -58,6 +61,18 @@ RANK_ROOM = _rx(r"rooms?|space|zimmer|raum|pièce|chambre|huone|stanza|camera|lo
 IMPERIAL = ("ft-in", "ft", "in")
 
 
+_LANG: contextvars.ContextVar[str] = contextvars.ContextVar("dimension_answer_lang", default="en")
+
+
+def T(key: str, **kw: object) -> str:
+    """A sentence of the answer in the language of the question being answered (set by `try_answer`)."""
+    return tx(_LANG.get(), key, **kw)
+
+
+def _o(x: dict) -> str:
+    return word(_LANG.get(), "o", x.get("orientation") or x.get("kind"))
+
+
 def _m(v: float) -> str:
     return f"{v:.2f} m"
 
@@ -66,13 +81,13 @@ def _printed(text: str | None, value_m: float, unit: str | None) -> str:
     """'12' 6" as printed = 3.81 m' for a value the sheet does not print in metres, else '3.20 m as printed'."""
     t = (text or "").strip()
     if t and (unit in IMPERIAL or "'" in t or '"' in t):
-        return f"{t} as printed = {_m(value_m)}"
+        return T("printed_as", t=t, m=_m(value_m))
     if t and unit in ("mm", "cm"):
-        return f"{t} {unit} as printed = {_m(value_m)}"
+        return T("printed_unit", t=t, unit=unit, m=_m(value_m))
     if t and t not in _m(value_m) and re.fullmatch(r"[\d.,\s]+", t):
         # a bare number that is not the metres: the file's own drawing units (inches or millimetres on a CAD sheet)
-        return f"{_m(value_m)} (written {t} in the drawing's own units)"
-    return f"{_m(value_m)} as printed" + (f" ({t})" if t and t not in _m(value_m) else "")
+        return T("written_units", m=_m(value_m), t=t)
+    return T("m_as_printed", m=_m(value_m)) + (f" ({t})" if t and t not in _m(value_m) else "")
 
 
 def _usable(d: LoadedDrawing) -> list[dict]:
@@ -140,13 +155,11 @@ def _side(dims: list[dict], orientation: str) -> dict | None:
 def _side_text(name: str, s: dict) -> str:
     x = s["dims"][0]
     if s["how"] == "overall":
-        return f"{name}: {_printed(x.get('text'), s['value'], x.get('unit'))} (the overall dimension printed on the sheet)"
+        return T("side_overall", name=name, p=_printed(x.get('text'), s['value'], x.get('unit')))
     if s["how"] == "chain":
         parts = " + ".join(str(x.get("text")) for x in s["dims"])
-        return (f"{name}: {_m(s['value'])}, the sum of {len(s['dims'])} dimensions printed in a row along one side "
-                f"({parts}); no overall dimension is printed")
-    return (f"{name}: {_printed(x.get('text'), s['value'], x.get('unit'))}, the longest {x.get('orientation')} dimension "
-            f"printed; no overall dimension is printed, so the whole side may be longer")
+        return T("side_chain", name=name, m=_m(s['value']), n=len(s['dims']), parts=parts)
+    return T("side_longest", name=name, p=_printed(x.get('text'), s['value'], x.get('unit')), o=_o(x))
 
 
 def classify(question: str, d: LoadedDrawing) -> dict | None:
@@ -161,7 +174,9 @@ def classify(question: str, d: LoadedDrawing) -> dict | None:
     axis = "size" if wants_s or (wants_w and wants_l) else "width" if wants_w else "length"
     if sup and RANK_ROOM.search(q) and not (OTHER.search(q) or FILTER.search(q) or ROOMS_WITH.search(q)):
         return {"ask": "room", "axis": axis, "scope": {"kind": "floor"}, "rank": sup}  # "how wide is the largest room"
-    if OTHER.search(q) or FILTER.search(q) or sup or ROOMS_WITH.search(q):
+    # "how wide is the stair": a stair the sheet labels as a room is a room; other stair questions are not lengths
+    stair_room = "staircase" in _types_asked(q, d)
+    if OTHER.search(RW.STAIR_WORDS.sub(" ", q) if stair_room else q) or FILTER.search(q) or sup or ROOMS_WITH.search(q):
         return None
     scope = _scope(q, d.ctx)
     if scope and scope.get("kind") in ("room", "label"):
@@ -184,7 +199,7 @@ CONCEPT_TYPES = {"bedroom": ("bedroom",), "living": ("living", "living_room", "d
 
 def _types_asked(q: str, d: LoadedDrawing) -> set[str]:
     """The room types the question names that this drawing has (a room labelled TUPAK is a kitchen)."""
-    have = {str(r.get("room_type")) for r in d.drawing.get("rooms") or [] if r.get("room_type")}
+    have = {k for r in d.drawing.get("rooms") or [] if (k := RW.room_kind(r))}
     out: set[str] = set()
     for concept, rx, _printed_labels in LABEL_CONCEPTS:
         if rx.search(q):
@@ -192,7 +207,7 @@ def _types_asked(q: str, d: LoadedDrawing) -> set[str]:
     for t in have - {"room"}:  # the type's own name ("office", "toilet", "laundry")
         if _rx(re.escape(t.replace("_", " ")) + "s?").search(q):
             out.add(t)
-    return out
+    return out | (have & RW.asked_types(q))  # room words and the abbreviations a sheet prints ("MEZZ.", "ELEV.")
 
 
 def _result(d: LoadedDrawing, args: dict, kind: str, value: float | None, text: str, boxes: list[Box],
@@ -248,22 +263,20 @@ def _weakest(dims: list[dict]) -> str:
 
 def _traced_on(d: LoadedDrawing) -> str:
     """What the outlines were traced on: a scan, or the page image of a PDF sheet (which is not a scan)."""
-    return "sheet image" if str(d.drawing.get("source_ext") or "").lower().lstrip(".") == "pdf" else "scan"
+    return T("on_sheet_image" if str(d.drawing.get("source_ext") or "").lower().lstrip(".") == "pdf" else "on_scan")
 
 
 def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built | None:
     dims = _usable(d)
     scope = {"kind": "floor"}
     sides = {"width": _side(dims, "horizontal"), "length": _side(dims, "vertical")}
-    names = {"width": "Width (across the page)", "length": "Depth (up the page)"}
+    names = {"width": T("name_width"), "length": T("name_length")}
     wanted = ["width", "length"] if axis == "size" else [axis]
     ext = d.drawing.get("extent_m") or {}
     measured = {"width": ext.get("width_m"), "length": ext.get("depth_m")}
     est = bool(ext.get("estimate"))
     scan = (d.drawing.get("evidence_method") or {}).get("room") in ("vision", "ocr")
-    label = ("an estimate: the sheet states no scale" if est else
-             f"measured on the outlines traced on the {_traced_on(d)}, not printed: an estimate" if scan else
-             "measured on the plan, not printed")
+    label = (T("lab_est") if est else T("lab_scan", on=_traced_on(d)) if scan else T("lab_plan"))
     parts, used, values, printed_any, lower_bound = [], [], [], False, False
     measures: list[dict] = []
     mname = {"width": "width", "length": "depth"}
@@ -274,9 +287,8 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
             s = None
         if s and s["how"] == "longest" and not measured[k]:
             x = s["dims"][0]
-            parts.append(f"{names[k]}: the sheet prints no overall dimension and no row of dimensions that spans this "
-                         f"side; the longest {x.get('orientation')} dimension printed is "
-                         f"{_printed(x.get('text'), s['value'], x.get('unit'))}, so the plan is at least that {'wide' if k == 'width' else 'deep'} here")
+            parts.append(T(f"lower_bound_{k}", name=names[k], o=_o(x),
+                           p=_printed(x.get('text'), s['value'], x.get('unit'))))
             used += s["dims"]
             lower_bound = True
         elif s:
@@ -287,11 +299,11 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
             printed_any = True
         elif measured[k]:
             measures.append(_measure(mname[k], measured[k], source="estimate" if est else "measured"))
-            parts.append(f"{names[k]}: {'≈ ' if est else ''}{_m(measured[k])}, the extent of the {ext.get('source', 'rooms')} "
-                         f"({label})")
+            parts.append(T("extent", name=names[k], approx="≈ " if est else "", m=_m(measured[k]),
+                           src=word(_LANG.get(), "src", ext.get("source", "rooms")), label=label))
             values.append(measured[k])
         elif axis == "size" or sides["length" if k == "width" else "width"]:
-            parts.append(f"{names[k]}: no dimension is printed along this side on the page shown")
+            parts.append(T("no_dim_side", name=names[k]))
             lower_bound = True
     if axis != "size" and not values and not used:
         other = "length" if axis == "width" else "width"
@@ -300,8 +312,7 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
             used += sides[other]["dims"]
             printed_any = True
     if not used and not values:
-        why = ("The sheet prints no overall dimension, and this page has no walls or room outlines in a known scale "
-               "to measure the plan's extent from.")
+        why = T("why_overall")
         built = A.abstain(question, lang, scope, "not_answerable", "What is the overall size of the plan", why,
                           intent_tag="router · length")
         built.body["explanation"] = why
@@ -309,7 +320,7 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
     text = ". ".join(parts) + "."
     boxes = [b for b in (_box(x) for x in used) if b is not None]
     if any("x" not in x for x in used):
-        text += " (Printed on another page of the file than the one shown.)"
+        text += T("other_page")
     if values and not printed_any and isinstance(ext.get("box"), dict):
         eb = ext["box"]  # what was measured: the extent of the plan, drawn as one box
         boxes.append(Box(id="extent", x=eb["x"], y=eb["y"], w=eb["w"], h=eb["h"], subject="label",
@@ -323,7 +334,6 @@ def _overall(question: str, lang: str, d: LoadedDrawing, axis: str) -> A.Built |
                  printed=printed_any or lower_bound, estimate=(est or scan) and not printed_any, measures=measures)
 
 
-RULE = "Width is the side across the page, depth the side up the page"
 
 
 def _across_up(r: dict, d: LoadedDrawing) -> tuple[float, float] | None:
@@ -411,7 +421,7 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         rooms = [(max if rank == "max" else min)(cands, key=lambda r: r["area_m2"])] if cands else []
     else:
         rooms = [r for r in d.drawing.get("rooms") or []
-                 if (r.get("room_type") in types if types else
+                 if (RW.room_kind(r) in types if types else
                      r["room_id"] == scope.get("room_id") if scope["kind"] == "room" else r.get("name") == scope.get("label"))]
     if (types or rank) and len(rooms) == 1:
         scope = {"kind": "room", "room_id": rooms[0]["room_id"]}
@@ -422,11 +432,7 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
     if not sized:
         # a length question never falls through to a count of the rooms it names
         on_page = any(r.get("points") for r in rooms)
-        why = ("The sheet prints no size in this room, and the room has no outline on this page to measure "
-               "(only its label was read)" +
-               ("; no dimension line printed beside the label is a plausible side of the room." if on_page else
-                "; its label is on another page of the file than the one shown, so the dimension lines beside it "
-                "cannot be matched to it."))
+        why = T("why_room") + T("why_room_on" if on_page else "why_room_off")
         built = A.abstain(question, lang, scope, "not_answerable", f"What is the size of the room {A.where_en(scope)}",
                           why, intent_tag="router · length")
         built.body["explanation"] = why
@@ -440,9 +446,9 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
     value, printed_all, est_any, turned = None, True, False, False
     many = len(sized) > 1
     for r in sized:
-        name = f"{r.get('name') or 'Room'}{' ' + r['num'] if r.get('num') and (many or rank) else ''}"
+        name = f"{r.get('name') or T('room')}{' ' + r['num'] if r.get('num') and (many or rank) else ''}"
         if rank and isinstance(r.get("area_m2"), (int, float)):
-            name = f"The {'largest' if rank == 'max' else 'smallest'} room by area, {name} ({r['area_m2']:.2f} m²)"
+            name = T(f"rank_{rank}", name=name, a=f"{r['area_m2']:.2f}")
         pre = f"{name} " if many else ""
         ev_rooms.append(EvidenceRoom(room_id=r["room_id"], included=True, area_m2=r.get("area_m2")))
         if r["room_id"] in near:
@@ -452,27 +458,25 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
             mine = [x for x in (w, dp) if x is not None]
             bits = []
             if w is not None and axis in ("width", "size"):
-                bits.append(f"{_printed(w.get('text'), w['value_m'], w.get('unit'))} wide (across the page)")
+                bits.append(T("near_wide", p=_printed(w.get('text'), w['value_m'], w.get('unit'))))
                 measures.append(_measure(f"{pre}width", w["value_m"], w))
                 value = w["value_m"] if axis == "width" else value
             if dp is not None and axis in ("length", "size"):
-                bits.append(f"{_printed(dp.get('text'), dp['value_m'], dp.get('unit'))} deep (up the page)")
+                bits.append(T("near_deep", p=_printed(dp.get('text'), dp['value_m'], dp.get('unit'))))
                 measures.append(_measure(f"{pre}depth", dp["value_m"], dp))
                 value = dp["value_m"] if axis == "length" else value
             if axis == "size" and (w is None or dp is None):
-                bits.append(f"no dimension line for its {'width' if w is None else 'depth'} is printed beside the label")
+                bits.append(T("near_none_width" if w is None else "near_none_depth"))
             if not bits:      # asked for one direction, only the other has a line: say what is there
                 other = w if w is not None else dp
-                word = "width (across the page)" if w is not None else "depth (up the page)"
-                bits.append(f"no dimension line for its {'depth' if w is not None else 'width'} is printed beside the "
-                            f"label; its {word} is {_printed(other.get('text'), other['value_m'], other.get('unit'))}")
+                bits.append(T("near_only_width" if w is not None else "near_only_depth",
+                              p=_printed(other.get('text'), other['value_m'], other.get('unit'))))
                 measures.append(_measure(f"{pre}{'width' if w is not None else 'depth'}", other["value_m"], other))
-            how = "read from the dimension lines printed beside the room's label"
+            how = T("near_how")
             if n["agrees"]:
-                how += (f"; their product, {w['value_m'] * dp['value_m']:.2f} m², agrees with the room's printed area "
-                        f"({r['area_m2']:.2f} m²)")
+                how += T("near_agrees", prod=f"{w['value_m'] * dp['value_m']:.2f}", a=f"{r['area_m2']:.2f}")
             else:
-                how += "; the room has no outline on this page, so a line may cover more or less than the room itself"
+                how += T("near_loose")
             lines.append(f"{name}: {(' × ' if w is not None and dp is not None else '; ').join(bits)} ({how})")
             used += mine
             boxes += [b for b in (_box(x) for x in mine) if b is not None]
@@ -482,25 +486,23 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         printed = src == "printed"
         printed_all &= printed
         est_any |= src == "estimate"
-        how = (f"as printed ({s['text']})" if printed and s.get("text") else "as printed" if printed else
-               "an estimate from the room outline: the sheet states no scale" if src == "estimate" else
-               f"measured on the outline traced on the {_traced_on(d)}, not printed: an estimate" if scan else
-               "measured on the room outline, not printed")
+        how = (T("how_printed_t", t=s["text"]) if printed and s.get("text") else T("how_printed") if printed else
+               T("how_est") if src == "estimate" else T("how_scan", on=_traced_on(d)) if scan else T("how_outline"))
         approx = "≈ " if src == "estimate" else ""
         if printed and s.get("text") and ("'" in s["text"] or '"' in s["text"]):
-            how = f"{s['text']} as printed"
+            how = T("how_t_printed", t=s["text"])
         msrc = "printed" if printed else "estimate" if src == "estimate" else "measured"
         au = _across_up(r, d)
         if au:      # the outline lies square to the page: width across, depth up
             w_m, d_m = au
             if axis == "width":
-                lines.append(f"{name}: {approx}{_m(w_m)} wide (across the page; {how})")
+                lines.append(T("line_w", name=name, approx=approx, m=_m(w_m), how=how))
                 value = w_m
             elif axis == "length":
-                lines.append(f"{name}: {approx}{_m(d_m)} deep (up the page; {how})")
+                lines.append(T("line_d", name=name, approx=approx, m=_m(d_m), how=how))
                 value = d_m
             else:
-                lines.append(f"{name}: {approx}{_m(w_m)} wide (across the page) × {_m(d_m)} deep (up the page) ({how})")
+                lines.append(T("line_wd", name=name, approx=approx, w=_m(w_m), d=_m(d_m), how=how))
             if axis in ("width", "size"):
                 measures.append(_measure(f"{pre}width", w_m, source=msrc))
             if axis in ("length", "size"):
@@ -508,10 +510,10 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         else:       # a printed "a × b" or a turned room: no page direction, the shorter side is the width
             turned = True
             if axis == "width":
-                lines.append(f"{name}: {approx}{_m(width)} wide (the shorter side; {how})")
+                lines.append(T("line_w_short", name=name, approx=approx, m=_m(width), how=how))
                 value = width
             elif axis == "length":
-                lines.append(f"{name}: {approx}{_m(length)} long (the longer side; {how})")
+                lines.append(T("line_l_long", name=name, approx=approx, m=_m(length), how=how))
                 value = length
             else:
                 lines.append(f"{name}: {approx}{_m(length)} × {_m(width)} ({how})")
@@ -522,9 +524,8 @@ def _room(question: str, lang: str, d: LoadedDrawing, axis: str, scope: dict, ty
         mine = by_room.get(r["room_id"]) or []
         used += mine
         boxes += [b for b in (_box(x) for x in mine) if b is not None]
-    text = "; ".join(lines) + ". " + RULE
-    text += ("; where a room's size is printed without a direction or the room is turned on the page, its shorter "
-             "side is given as the width." if turned else ".")
+    text = "; ".join(lines) + ". " + T("rule")
+    text += T("rule_turned") if turned else "."
     if len(sized) != 1:
         value = None
     em = (d.drawing.get("evidence_method") or {}).get("room")
@@ -544,23 +545,22 @@ def _extreme(question: str, lang: str, d: LoadedDrawing, which: str) -> A.Built 
         scope = {"kind": "floor"}
         areas = sum(1 for x in d.drawing.get("dimensions") or [] if x.get("kind") == "area")
         ext = d.drawing.get("extent_m") or {}
-        why = "No dimension line with a length is printed on this sheet (none was read)"
+        why = T("ext_why")
         if areas:
-            why += f"; its {areas} printed values are room areas"
+            why += T("ext_areas", n=areas)
         why += "."
         if ext.get("width_m") and ext.get("depth_m"):
-            why += (f" The plan itself measures {'≈ ' if ext.get('estimate') else ''}{_m(ext['width_m'])} × "
-                    f"{_m(ext['depth_m'])} ({'an estimate: the sheet states no scale' if ext.get('estimate') else 'measured on the outline, not printed'}).")
+            why += T("ext_plan", approx="≈ " if ext.get("estimate") else "", w=_m(ext["width_m"]), d=_m(ext["depth_m"]),
+                     label=T("lab_est" if ext.get("estimate") else "lab_outline"))
         built = A.abstain(question, lang, scope, "not_answerable", f"What is the {word} dimension printed on the sheet",
                           why, intent_tag="router · length")
         built.body["explanation"] = why
         return built
     x = (max if which == "max" else min)(dims, key=lambda x: x["value_m"])
-    text = (f"The {word} dimension printed on the sheet: {_printed(x.get('text'), x['value_m'], x.get('unit'))} "
-            f"({x.get('orientation') or x.get('kind')}; of {len(dims)} printed dimensions).")
+    text = T(f"ext_{which}", p=_printed(x.get('text'), x['value_m'], x.get('unit')), o=_o(x), n=len(dims))
     b = _box(x)
     if b is None:
-        text += " (Printed on another page of the file than the one shown.)"
+        text += T("other_page")
     tr = _result(d, {"ask": "extreme", "which": which}, "quantity", float(x["value_m"]), text, [b] if b else [], [],
                  _weakest([x]))
     return _body(question, lang, d, {"kind": "floor"}, tr, f"What is the {word} dimension printed on the sheet",
@@ -618,6 +618,14 @@ def try_answer(question: str, lang: str, d: LoadedDrawing) -> A.Built | None:
     c = classify(question, d)
     if c is None:
         return None
+    token = _LANG.set(lang)
+    try:
+        return _answer(question, lang, d, c)
+    finally:
+        _LANG.reset(token)
+
+
+def _answer(question: str, lang: str, d: LoadedDrawing, c: dict) -> A.Built | None:
     d = with_measured(d)
     doc = d.drawing
     if c["ask"] != "extreme" and not (doc.get("dimensions") or doc.get("extent_m")

@@ -19,11 +19,12 @@ import {
   type ProjectBundleLike,
 } from './badges'
 
-const RAIL_COPY: Record<'en' | 'fr' | 'fi' | 'de', { floorUp: string; floorDown: string }> = {
+const RAIL_COPY: Record<'en' | 'fr' | 'fi' | 'de' | 'it', { floorUp: string; floorDown: string }> = {
   en: { floorUp: 'Floor up', floorDown: 'Floor down' },
   fr: { floorUp: 'Étage supérieur', floorDown: 'Étage inférieur' },
   fi: { floorUp: 'Kerros ylös', floorDown: 'Kerros alas' },
   de: { floorUp: 'Stockwerk hoch', floorDown: 'Stockwerk runter' },
+  it: { floorUp: 'Piano superiore', floorDown: 'Piano inferiore' },
 }
 
 function RouterNavSink({ navRef }: { navRef: React.RefObject<NavigateFunction | null> }) {

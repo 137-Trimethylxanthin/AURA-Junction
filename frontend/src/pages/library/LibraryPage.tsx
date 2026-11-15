@@ -65,6 +65,7 @@ const GROUP_BTN_COPY: Record<Lang, { open: string; close: string }> = {
   fr: { open: "Grouper des plans", close: "Terminer" },
   fi: { open: "Ryhmittele pohjat", close: "Valmis" },
   de: { open: "Pläne gruppieren", close: "Fertig" },
+  it: { open: "Raggruppa piante", close: "Fine" },
 }
 
 type ListState =

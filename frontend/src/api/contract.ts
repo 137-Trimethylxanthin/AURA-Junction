@@ -6,8 +6,8 @@
 /** 1.2 is additive over 1.0/1.1: every new field is optional. The client accepts any major-1 body. */
 export const CONTRACT_VERSION = '1.2'
 
-export type Lang = 'en' | 'fr' | 'fi' | 'de'
-export const LANGS: readonly Lang[] = ['en', 'fr', 'fi', 'de']
+export type Lang = 'en' | 'fr' | 'fi' | 'de' | 'it'
+export const LANGS: readonly Lang[] = ['en', 'fr', 'fi', 'de', 'it']
 
 /** 1.2: 6 WCAG AA categorical evidence series tokens (`--group-1..6` + `--group-1..6-surface` in STACK.md / index.css). */
 export type GroupColor = 'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c6'

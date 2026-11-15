@@ -77,3 +77,27 @@ def test_built_answer_is_a_note_without_model_calls_in_the_questions_language():
     assert de.body["detected_lang"] == "de"
     assert O.try_answer("How many doors are there?", "en", d) is None
     assert O.try_answer("What does this drawing show?", "en", SimpleNamespace(id="swiss", drawing={"rooms": []})) is None
+
+
+def test_every_language_has_every_sentence_noun_and_sheet_kind():
+    import re
+    langs = {"en", "de", "fr", "fi", "it"}
+    holes = lambda t: sorted(re.findall(r"\{(\w+)\}", t))  # noqa: E731
+    assert set(O.TEXT) == set(O.NOUNS) == set(O.DRAWING) == langs
+    for lang in langs:
+        assert set(O.TEXT[lang]) == set(O.TEXT["en"]) and set(O.NOUNS[lang]) == set(O.NOUNS["en"])
+        for key, text in O.TEXT[lang].items():
+            assert text and holes(text) == holes(O.TEXT["en"][key]), (lang, key)
+    for _rx, names in O.SHEET_KINDS:
+        assert set(names) == langs and all(names.values())
+
+
+def test_italian_overview_question_is_answered_in_italian():
+    d = SimpleNamespace(id="st-a101", drawing=DWG)
+    for q in ("Che cosa mostra questo disegno?", "Cosa mostra questa pianta?", "Cos'è questo disegno?", "Descrivi questa tavola"):
+        assert O.is_overview_question(q), q
+        built = O.try_answer(q, "en", d)                      # the router saw no language signal
+        assert built.body["answer"]["value"] == (
+            "«XSC-Sheet - A-101-B - Enlarged First Floor Plan (East)» è una pianta da OpeningDesign · Sports Complex "
+            "(DWG). Vi è stato letto: 18 porte, 23 elementi di arredo e sanitari e 72 quote stampate."), q
+    assert not O.is_overview_question("Quante porte ci sono in questo disegno?")

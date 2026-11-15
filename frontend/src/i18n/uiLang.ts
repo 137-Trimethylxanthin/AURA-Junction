@@ -7,7 +7,7 @@ import { ui, type UiKey } from './strings'
  * browser. It never changes answers: an answer always follows its question's language.
  */
 const KEY = 'aura.ui-lang'
-const LANGS: readonly Lang[] = ['en', 'fr', 'fi', 'de']
+const LANGS: readonly Lang[] = ['en', 'fr', 'fi', 'de', 'it']
 const listeners = new Set<() => void>()
 
 function read(): Lang {

@@ -119,8 +119,8 @@ def detect_lang(text: str) -> tuple[InternalLang, bool]:
 
 
 def contract_lang(lang: str) -> str:
-    """Contract Lang is en|fr|fi|de; Italian answers in English."""
-    return lang if lang in ("en", "fr", "fi", "de") else "en"
+    """Contract Lang is en|fr|fi|de|it; anything else answers in English."""
+    return lang if lang in ("en", "fr", "fi", "de", "it") else "en"
 
 
 # ---- vocab -----------------------------------------------------------------------------------
@@ -738,18 +738,21 @@ WHERE_TO_FIND = {
         "fr": "Un tableau des portes ou la maquette IFC l’indiquerait.",
         "fi": "Tieto löytyy ovikaaviosta tai IFC-mallista.",
         "de": "Das steht in der Türliste oder im IFC-Modell.",
+        "it": "Si troverebbe in un abaco delle porte o nel modello IFC.",
     },
     "height": {
         "en": "A section drawing or the IFC model would have it.",
         "fr": "Une coupe ou la maquette IFC l’indiquerait.",
         "fi": "Tieto löytyy leikkauspiirustuksesta tai IFC-mallista.",
         "de": "Das steht in einem Schnitt oder im IFC-Modell.",
+        "it": "Si troverebbe in una sezione o nel modello IFC.",
     },
     "material": {
         "en": "The specification or the IFC model would have it.",
         "fr": "Le descriptif ou la maquette IFC l’indiquerait.",
         "fi": "Tieto löytyy rakennustapaselostuksesta tai IFC-mallista.",
         "de": "Das steht in der Baubeschreibung oder im IFC-Modell.",
+        "it": "Si troverebbe nel capitolato o nel modello IFC.",
     },
 }
 

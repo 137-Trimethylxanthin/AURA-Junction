@@ -1,5 +1,6 @@
 import type { Lang } from '@/api/contract'
 import { chromeDe, chromeEn, chromeFi, chromeFr } from './chrome'
+import { it, uiIt } from './it'
 
 /**
  * Answer-card and abstain copy (follows the question's language), and below it the interface chrome (follows the
@@ -70,6 +71,7 @@ const en = {
   lang_fr: 'French',
   lang_fi: 'Finnish',
   lang_de: 'German',
+  lang_it: 'Italian',
   lang_detected: '{lang} detected',
   // Added by chat
   chip_vision_live: 'Vision check · {agreed}/{total} agree',
@@ -233,6 +235,7 @@ const fr: Dict = {
   lang_fr: 'français',
   lang_fi: 'finnois',
   lang_de: 'allemand',
+  lang_it: 'italien',
   lang_detected: '{lang} détecté',
   chip_vision_live: 'Contrôle visuel · {agreed}/{total} en accord',
   method_ocr: 'OCR',
@@ -390,6 +393,7 @@ const fi: Dict = {
   lang_fr: 'ranska',
   lang_fi: 'suomi',
   lang_de: 'saksa',
+  lang_it: 'italia',
   lang_detected: 'Kieli: {lang}',
   chip_vision_live: 'Kuvatarkistus · {agreed}/{total} täsmää',
   method_ocr: 'OCR',
@@ -547,6 +551,7 @@ const de: Dict = {
   lang_fr: 'Französisch',
   lang_fi: 'Finnisch',
   lang_de: 'Deutsch',
+  lang_it: 'Italienisch',
   lang_detected: '{lang} erkannt',
   chip_vision_live: 'Bildprüfung · {agreed}/{total} bestätigt',
   method_ocr: 'OCR',
@@ -647,7 +652,7 @@ const de: Dict = {
   clear_group_focus: 'Alle Gruppen',
 }
 
-export const STRINGS: Record<Lang, Dict> = { en, fr, fi, de }
+export const STRINGS: Record<Lang, Dict> = { en, fr, fi, de, it }
 
 /** Translate `key` into `lang`, filling `{name}` placeholders from `vars`. Unknown placeholders stay as-is. */
 export function t(lang: Lang, key: StringKey, vars?: Record<string, string | number>): string {
@@ -2041,7 +2046,7 @@ const uiDe: UiDict = {
   v3d_hint_stack: "Stockwerk anklicken zum Betreten · ziehen zum Drehen",
 }
 
-export const UI: Record<Lang, UiDict> = { en: uiEn, fr: uiFr, fi: uiFi, de: uiDe }
+export const UI: Record<Lang, UiDict> = { en: uiEn, fr: uiFr, fi: uiFi, de: uiDe, it: uiIt }
 
 /** Interface text in `lang` (the header menu's language), with `{name}` placeholders filled. */
 export function ui(lang: Lang, key: UiKey, vars?: Record<string, string | number>): string {
