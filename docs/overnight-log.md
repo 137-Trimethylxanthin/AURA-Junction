@@ -7,10 +7,10 @@ was checked, and what is still open.
 
 ## Result at a glance (written 02:15 UTC, last updated 05:55 UTC)
 
-Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `4ea2805`. Not pushed
+Branch `overnight-improvements`, deployed to https://aura.finanzbetrug.at as `10a4740`. Not pushed
 (no GitHub credentials on the devbox): `git push -u origin overnight-improvements`.
 Suites on the final tree: backend 767 passed / 35 skipped, store 226 passed,
-frontend 370 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
+frontend 372 passed, typecheck clean. Later rounds (PDF room outlines, a second scale estimator,
 duplicate removal, Italian interface) and the open findings of the closing sweep are described at
 the end of this file.
 
@@ -585,3 +585,11 @@ de/fr/fi/it by a frontend table (`features/trace/titles.ts`), next to the step t
 the live site in the German interface on a Swiss plan: titles and the source sentence are German.
 Still English there: step tags ("router", "DXF · door layer"), a tool's own summary sentence, the
 image-check paragraph, and one hint line under the tree. Suites: frontend 370 passed.
+
+Follow-up (deployed `10a4740`): the hint line under the reasoning tree and the fixed step tags
+("count", "sum", "estimate", "room labels", "<language> · detected") are translated too. Checked
+on the live site in the Italian interface on the school plan ("Quanti locali ci sono?"): titles,
+tags, the hint line, the header counts line and the licence phrase are Italian; the sentences a
+tool or the store composes ("82 numbered rooms on this floor plan.", the store's note on why a
+count is an estimate) and the answer step's sentence for a room count are still English.
+Frontend suite: 372 passed.
