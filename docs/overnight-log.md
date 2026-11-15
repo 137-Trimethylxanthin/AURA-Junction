@@ -144,3 +144,41 @@ frontend (compare label, area formatting, `format.ts`) and the store (reader reg
   display unit; the hitos building total is 198 doors.
 - A second pass runs the dimensions reader on a showcase subset of the live store (all CAD
   drawings, the US sheet PDFs, the school plan, 60 CubiCasa scans).
+
+### 23:50–00:20 UTC — live walkthrough by two testers, fixes merged, second deploy
+
+Two testers used the deployed site in a real browser (screenshots in `/root/aura-deploy/verify/walk1`
+and `walk2` on the devbox). Verdict per reported item:
+
+| Item | Verdict on the live site |
+|---|---|
+| 1. "All N floors" | No "Unknown project" anywhere. Counts right (hitos 198 doors / 226 windows, esplanades 211 / 297, a manual Swiss group 38 doors). Area questions in that scope abstained: fixed in the follow-up below. |
+| 2. Compare for image imports | Vector drawing against the scan, aligned, on the school plan, three CubiCasa styles, two HABS and two Finna sheets and a fresh upload. |
+| 3. 3D for image imports | Extruded walls and floors, no noise. Walls on estimated-scale plans start low (1.2–1.8 m). |
+| 4. Room polygons | Rooms and highlights are polygons that follow the walls. Areas sensible on most plans; one plan (Colorful 2002) clearly too small under its estimated scale. |
+| 5. Units | Works in the chat: sq ft, sq yd, ft, cm, German, quantities inside a question, follow-ups without a model call, metric beside the converted value. |
+| 6. Printed dimensions | Worked on US sheets after the dimensions pass; failed or returned a count on bundled Swiss drawings: fixed below. |
+
+Fresh upload on the live site (a never-seen PNG): openable after 2.3 s, indexed after 54 s
+(19 model calls, $0.09); plan, Compare, 3D, largest room and door count worked; deleted again.
+
+Fixed from the walkthrough (`on/g-walkthrough-fixes`, merged, deployed as `a3c5e98`):
+
+- All-floors area questions sum each floor (Swiss group 453.12 m², hitos 8,351.15 m²), 0 model calls.
+- Bundled CAD drawings answer length questions from their room outlines (they had no extent or room sizes).
+- "Longest printed dimension" on a sheet without dimension lines abstains with the reason, never a count.
+- An IFC building without windows answers "0 windows" with the reason instead of abstaining.
+- IFC wall length without a Length quantity abstains instead of "0 ft, Exact".
+- Estimated areas read "≈ 12 m² (estimate)" in the headline too.
+- Phone header no longer clips; wording of unit notes.
+
+Suites: backend 711 passed / 34 skipped, store 158 passed / 1 skipped, frontend 347 passed.
+
+Dimensions pass on the live store: 201 showcase drawings in 25 minutes, 0 failures: 2,800
+dimensions on 114 drawings (US sheets 2,200, Swiss CAD 1,638 counted per file join, CubiCasa 382).
+A further pass over the remaining 276 image drawings with rooms started at 00:20.
+
+Still open after this round: unlabelled spaces vanish from the vector plan (balcony, bathroom core
+on one CubiCasa plan); the estimated scale is badly off on some plans; room widths on US PDFs
+abstain; method labels and wording for printed against measured values; "Model estimate" badge on
+printed areas of uploads.
