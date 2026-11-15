@@ -1199,7 +1199,11 @@ async def answer_with_tools(svc, d: tools.LoadedDrawing, question: str, lang: st
         if scope.get("kind") not in ("unit", "room", "label", "region"):
             return None  # whole model / project: not a single-plan question
         base = [r["room_id"] for r in d.engine.room_list(scope)]
-        if not base:
+        if not base and not d.drawing.get("rooms"):
+            # no rooms indexed at all (many scans): the label is only a guess of the router, so the whole
+            # floor is searched and the reasoning step looks at the sheet itself
+            scope, base = {"kind": "floor"}, None
+        elif not base:
             return None
     toolbox = has_scale(d)
     model = model or svc.settings.agent_model
@@ -1386,7 +1390,9 @@ REASON_SHEET = (
     "printed areas (m², BGF, NF), dimension strings (cm, m, or feet-inches like 12'-6\"), the scale and "
     "title block, and to count drawn items the data does not index (e.g. numbered parking bays). Prefer the "
     "plan data when it has the value. Numbers you read on the sheet go in `working` marked 'read on the "
-    "sheet', never in `plan_values`; keep printed values exactly as printed (convert units only when asked).")
+    "sheet', never in `plan_values`; keep printed values exactly as printed (convert units only when asked). "
+    "When the question says how the things are marked on the plan (e.g. 'rooms marked MH', 'labelled WC'), count "
+    "only what carries that marking on the sheet; none printed means 0, never a guess from the layout.")
 
 
 def _sheet_image(d) -> dict | None:
