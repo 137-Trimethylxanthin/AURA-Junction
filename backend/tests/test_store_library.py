@@ -345,8 +345,10 @@ def test_images_are_generated_once_into_the_data_dir(tmp_path):
     lib = library(tmp_path)
     d = lib.get(make_id("school_plan"))
     assert d.file("original.png") == page.resolve()
-    thumb = d.file("thumb.png")
-    assert thumb.parent == d.dir and thumb.read_bytes()[:2] == b"\xff\xd8" and thumb.stat().st_size < page.stat().st_size * 5
+    thumb = d.file("thumb.png")           # a scan with a rebuilt plan: the thumbnail is the rebuilt plan
+    assert thumb.parent == d.dir and thumb.suffix == ".png" and thumb.read_bytes() == b"\x89PNG fake"
+    lib.source.plan_png = lambda *a: pytest.fail("thumbnail generated twice")
+    assert d.file("thumb.png") == thumb
     svg = d.file("plan.svg")
     assert svg.parent == d.dir and svg.suffix == ".svg" and str(page.resolve()) in svg.read_text()
     lib.source.plan_svg = lambda *a: pytest.fail("generated twice")
@@ -376,7 +378,7 @@ def test_app_lists_opens_and_serves_store_drawings_for_everyone(tmp_path):
         assert doc.status_code == 200 and Drawing.model_validate(doc.json()).id == did
         assert "expires_at" not in doc.json()
         assert c.get(f"/drawings/{did}/status").json() == {"contract_version": "1.2", "id": did, "status": "ready"}
-        for name, ctype in (("original.png", "image/png"), ("thumb.png", "image/jpeg"), ("plan.svg", "image/svg+xml")):
+        for name, ctype in (("original.png", "image/png"), ("thumb.png", "image/png"), ("plan.svg", "image/svg+xml")):
             r = c.get(f"/drawings/{did}/{name}")
             assert r.status_code == 200 and r.headers["content-type"].startswith(ctype)
             assert r.headers["cache-control"] == "public, max-age=3600"
@@ -770,3 +772,20 @@ def test_a_pdf_of_several_pages_lists_the_page_shown_and_its_counts():
     (one,) = build_entries([row("one_page", "opening_design/CTR", ("pdf",), counts={"room": 2})], set(), DEFAULT_EXCLUDE)
     assert "page" not in one.summary["subtitle"]
 
+
+
+def test_thumbnail_is_the_scan_where_no_plan_was_rebuilt_or_drawing_it_fails(tmp_path):
+    page = page_render(tmp_path)
+    lib = library(tmp_path)
+    d = lib.get(make_id("school_plan"))
+
+    def boom(*a):
+        raise RuntimeError("no model")
+
+    lib.source.plan_png = boom
+    thumb = d.file("thumb.png")                     # drawing the plan failed: the scan, as a JPEG
+    assert thumb.read_bytes()[:2] == b"\xff\xd8" and thumb.stat().st_size < page.stat().st_size * 5
+    lib.source.plan_png = lambda *a: pytest.fail("a drawing that shows its page has no plan thumbnail")
+    d.drawing["images"] = {k: v for k, v in d.drawing["images"].items() if "/plan.svg" not in str(v)}
+    d.drawing["thumbnail"] = None
+    assert d.file("thumb.png") == thumb and d.file("plan.svg") is None
