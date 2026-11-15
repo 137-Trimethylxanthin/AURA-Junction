@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from aura import answer as A
-from aura.contract import CONTRACT_VERSION, ToolResult
+from aura.contract import CONTRACT_VERSION
 from aura.router import contract_lang
 
 # Exact SI definitions (international yard and pound agreement: 1 in = 0.0254 m, 1 ft = 0.3048 m).
@@ -626,16 +626,15 @@ def apply_target_unit_to_response_dict(
             src_dim, u_disp = dim_u
             si_val = float(ans["value"])
             metric_txt = f"{si_val:.2f} {u_disp}"
-    elif kind == "note":
-        if ans.get("number") is not None and ans.get("unit"):
-            u_raw = str(ans["unit"])
-            u_norm = {"m2": "m²", "m3": "m³"}.get(u_raw, u_raw)
-            src_spec = resolve_unit_token(u_norm, allow_ambiguous=True)
-            if src_spec is not None and src_spec.dim == dst.dim:
-                src_dim = src_spec.dim
-                si_val = float(ans["number"]) * src_spec.to_si
-                base_u = SI_BASE_BY_DIM[src_dim]
-                metric_txt = f"{si_val:.2f} {base_u}"
+    elif kind == "note" and ans.get("number") is not None and ans.get("unit"):
+        u_raw = str(ans["unit"])
+        u_norm = {"m2": "m²", "m3": "m³"}.get(u_raw, u_raw)
+        src_spec = resolve_unit_token(u_norm, allow_ambiguous=True)
+        if src_spec is not None and src_spec.dim == dst.dim:
+            src_dim = src_spec.dim
+            si_val = float(ans["number"]) * src_spec.to_si
+            base_u = SI_BASE_BY_DIM[src_dim]
+            metric_txt = f"{si_val:.2f} {base_u}"
 
     if si_val is None or src_dim != dst.dim:
         return body
