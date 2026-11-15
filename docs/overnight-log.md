@@ -238,3 +238,33 @@ from cache). The store now holds dimensions on 248 drawings and 733 rooms withou
 Deployed `aa03080`. Checked in a browser on the live site: the school plan and the CubiCasa plan
 "High quality 108" render as clean vector plans (walls, door swings, tinted rooms, approximate
 areas, the balcony and bathroom present), no console errors.
+
+### 01:15–01:50 UTC — final check by a tester and an auditor, fix pass, fifth deploy
+
+**Regression tester (live site, about 45 questions):** no must-level defect, no console errors, no
+failed requests on main paths. All six items work; the one path the tester could not exercise
+(saving a manual group writes data) was checked afterwards through the public API with an ad-hoc
+project scope: two Swiss floors answer 453.12 m² = 344.58 + 108.54 and 38 doors, 0 model calls.
+
+**Image-plan auditor (24 drawings opened, 36 more judged from overlays):** 9 good, 4 acceptable,
+3 bad of the 16 audit picks. The bad ones had false rooms: the outside of a building, dimension
+strips, the gap between two plans on one sheet. Two historic drawings failed to load.
+
+**Fix pass (`on/l-final-fixes`, merged, deployed as `9b0bacf`):**
+- `store/jstore/space_guard.py`: an unlabelled space is dropped when at least 15 % of its outline
+  runs along the page edge, or under 60 % is wall, or under 75 % wall with under 50 % along
+  labelled rooms. Store-wide it drops 314 of 733 spaces on 135 drawings; the balcony and bathroom
+  of "High quality 108" stay. Applied when a document is built and after new interpretations; the
+  live store was pruned once with `python -m jstore.cli prune-spaces` (marks rows `superseded`,
+  undone with `--restore`; backup `store-20261115T0143-pre-prune.dump`).
+- The two drawings that failed to load (`place_labels` crashed on a self-crossing outline) load; a
+  sweep over all 329 image plans had no failures.
+- "≈" stays on converted estimates ("≈ 240 sq ft"); internal entity ids no longer appear in answer
+  sentences; IFC models no longer offer the two stair chips that failed; US sheets with rooms sort
+  before door-only sheets.
+- Known cost of the guard: a real unlabelled balcony bounded only by railings is dropped too.
+
+Suites: backend 722 passed / 34 skipped, store 173 passed / 1 skipped, frontend 356 passed.
+
+Demo video: the scan scene was re-recorded on the live site to show the rebuilt plan, Compare and
+3D (`/root/aura-deploy/demo/aura-demo.mp4`, 84.7 s; the earlier cut is kept as `aura-demo-v1.mp4`).
