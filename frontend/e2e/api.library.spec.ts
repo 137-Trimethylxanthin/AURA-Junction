@@ -138,7 +138,7 @@ test('a DXF upload shows progress, polls until ready, opens, and can be deleted 
       'up-1': [{ status: 'queued' }, { status: 'processing', progress: 0.5 }, { status: 'ready' }],
     },
   })
-  await page.goto('/app')
+  await page.goto('/upload')
   await expect(page.getByText('Uploads are processed on our server')).toBeVisible()
   await uploadInput(page).setInputFiles(dxf())
   await expect(row(page, 'plan.dxf')).toHaveAttribute('data-upload', 'ready')
@@ -160,7 +160,7 @@ test('a DXF upload shows progress, polls until ready, opens, and can be deleted 
 
 test('drag and drop uploads a DXF too', async ({ page }) => {
   const seen = await fakeApi(page, { statuses: { 'up-1': [{ status: 'processing', progress: 0.2 }] } })
-  await page.goto('/app')
+  await page.goto('/upload')
   const dt = await page.evaluateHandle(() => {
     const d = new DataTransfer()
     d.items.add(new File(['0\nSECTION\n'], 'dropped.dxf', { type: 'application/dxf' }))
@@ -177,7 +177,7 @@ test('drag and drop uploads a DXF too', async ({ page }) => {
 
 test('client-side checks: images need presenter access, oversize and unknown types are refused without a request', async ({ page }) => {
   const seen = await fakeApi(page)
-  await page.goto('/app')
+  await page.goto('/upload')
   await uploadInput(page).setInputFiles(png())
   await expect(page.locator('[data-upload-rejected]')).toContainText('Needs CAD data. Image-only drawings are a model estimate')
   await uploadInput(page).setInputFiles(dxf('huge.dxf', 20 * 1024 * 1024 + 1))
@@ -189,8 +189,8 @@ test('client-side checks: images need presenter access, oversize and unknown typ
 
 test('with a presenter link, a PNG upload is sent with X-AURA-Presenter', async ({ page }) => {
   const seen = await fakeApi(page, { statuses: { 'up-1': [{ status: 'processing' }] } })
-  await page.goto('/app?presenter=pres-tok')
-  await expect(page).toHaveURL('/app')
+  await page.goto('/upload?presenter=pres-tok')
+  await expect(page).toHaveURL('/upload')
   await expect(page.locator('[data-presenter="on"]')).toBeVisible()
   await uploadInput(page).setInputFiles(png())
   await expect(row(page, 'scan.png')).toHaveAttribute('data-upload', 'processing')
@@ -204,7 +204,7 @@ test('a server refusal is reported and nothing is stored', async ({ page }) => {
   await fakeApi(page, {
     upload: (r) => json(r, 429, { contract_version: V, error: 'Slow down', code: 'rate_limited' }),
   })
-  await page.goto('/app')
+  await page.goto('/upload')
   await uploadInput(page).setInputFiles(dxf())
   // The server says which limit was hit; its words are shown.
   await expect(page.getByText('Slow down')).toBeVisible()
@@ -235,7 +235,7 @@ test('a failed upload explains why; an unknown id says not found', async ({ page
 
 test('the populated library keeps 12 px text and 40 px targets', async ({ page }) => {
   await fakeApi(page, { statuses: { 'up-1': [{ status: 'processing', progress: 0.3 }] } })
-  await page.goto('/app?presenter=p')
+  await page.goto('/upload?presenter=p')
   await uploadInput(page).setInputFiles(png())
   await expect(row(page, 'scan.png')).toHaveAttribute('data-upload', 'processing')
   await uploadInput(page).setInputFiles({ name: 'a.dwg', mimeType: 'application/acad', buffer: Buffer.alloc(4) })

@@ -1,13 +1,10 @@
 import { useUi } from "@/i18n/uiLang"
-import { useRef, useState } from "react"
-import { Link, useNavigate } from "react-router"
+import { Link } from "react-router"
 import { ArrowRightIcon, CloudOffIcon } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
-import { cn } from "@/lib/utils"
-import { acceptAttr, uploadHandoff, useAccepted } from "@/pages/upload/useUploads"
 
 export interface UploadPanelProps {
   base: string | null
@@ -28,8 +25,8 @@ function UsageNote() {
 }
 
 /**
- * The library's upload card: a drop target that hands files to /upload, a link there, and while something is in
- * progress a compact "N uploading" line. Finished uploads are library cards, not a list here.
+ * The library's upload card: a link to /upload (uploads happen only there), and while something is in progress a
+ * compact "N uploading" line. Finished uploads are library cards, not a list here.
  */
 export function UploadPanel({ base, uploading = 0 }: UploadPanelProps) {
   const { tu } = useUi()
@@ -42,7 +39,7 @@ export function UploadPanel({ base, uploading = 0 }: UploadPanelProps) {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {base ? (
-          <Uploader base={base} uploading={uploading} />
+          <Uploader uploading={uploading} />
         ) : (
           <>
             <Alert data-uploads-off>
@@ -58,63 +55,17 @@ export function UploadPanel({ base, uploading = 0 }: UploadPanelProps) {
   )
 }
 
-function Uploader({ base, uploading }: { base: string; uploading: number }) {
+function Uploader({ uploading }: { uploading: number }) {
   const { tu } = useUi()
-  const navigate = useNavigate()
-  const accepted = useAccepted(base)
-  const input = useRef<HTMLInputElement>(null)
-  const [over, setOver] = useState(false)
-
-  const handOff = (files: FileList | null) => {
-    const all = Array.from(files ?? [])
-    if (!all.length) return
-    uploadHandoff.files = all
-    navigate("/upload")
-  }
-
   return (
     <>
-      <div
-        data-dropzone
-        data-over={over || undefined}
-        onDragOver={(e) => {
-          e.preventDefault()
-          e.dataTransfer.dropEffect = "copy"
-          setOver(true)
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(e) => {
-          e.preventDefault()
-          setOver(false)
-          handOff(e.dataTransfer.files)
-        }}
-        className={cn(
-          "flex flex-col items-center gap-3 rounded-lg border border-dashed border-input px-4 py-6 text-center transition-colors",
-          over && "border-foreground bg-muted"
-        )}
-      >
-        <p className="text-sm text-muted-foreground">{tu("ul_lib_desc")}</p>
-        <div className="flex flex-wrap justify-center gap-2">
-          <Button onClick={() => input.current?.click()}>{tu("choose_file")}</Button>
-          <Button variant="outline" asChild>
-            <Link to="/upload">{tu("ul_lib_details")}</Link>
-          </Button>
-        </div>
-        <input
-          ref={input}
-          type="file"
-          multiple
-          accept={acceptAttr(accepted)}
-          className="sr-only"
-          tabIndex={-1}
-          aria-label={tu("up_file_aria")}
-          data-upload-input
-          onChange={(e) => {
-            handOff(e.currentTarget.files)
-            e.currentTarget.value = ""
-          }}
-        />
-      </div>
+      <p className="text-sm text-muted-foreground">{tu("ul_lib_desc")}</p>
+      <Button asChild>
+        <Link to="/upload" data-upload-link>
+          {tu("upload_title")}
+          <ArrowRightIcon data-icon="inline-end" aria-hidden />
+        </Link>
+      </Button>
 
       {uploading > 0 ? (
         <Link

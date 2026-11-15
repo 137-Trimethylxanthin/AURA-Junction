@@ -280,7 +280,7 @@ test.describe('library worst cases', () => {
       await page.route('**/__api/health', (r) => json(r, 200, { ok: true, contract_version: V }))
       await page.route('**/__api/drawings', (r) => json(r, 200, { contract_version: V, drawings: [] }))
       await page.route('**/__api/uploads', (r) => (posts.push('x'), json(r, 422, { detail: [{ msg: 'fake: not accepted' }] })))
-      await page.goto('/app')
+      await page.goto('/upload')
       const long = `Grundriss_${'Erdgeschoss_Haus_B_Revision_'.repeat(8)}.dwg`
       const files = [
         ...Array.from({ length: 9 }, (_, i) => ({ name: `plan-${i}.dxf`, mimeType: 'application/dxf', buffer: Buffer.from('0\nSECTION\n') })),
