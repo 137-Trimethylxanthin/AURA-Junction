@@ -162,3 +162,15 @@ def test_agent_down_is_a_neutral_failure_without_raw_errors(tmp_path):
         assert r["agent_failure"] == "unavailable" and r["answer"]["kind"] == "abstain"
         look = next(n for n in r["trace"] if n["id"] == "look")
         assert "127.0.0.1" not in look["body"] and "refused" not in look["body"]
+
+
+def test_internal_ids_never_reach_the_answer_text():
+    """A store id ("e143313") names nothing a person can see: prose shows the room's name instead."""
+    from aura import answer as A
+    drawing = {"rooms": [{"room_id": "e143304", "name": "Enclosed Walkway"}, {"room_id": "1.03", "name": "Bad"}]}
+    assert A.plain_ids("Multi-Purpose Hall (e143313) is the largest room: 248.23 m².", drawing) == \
+        "Multi-Purpose Hall is the largest room: 248.23 m²."
+    assert A.plain_ids("Stair (Ground) with ID e143299 connects to room e143304.", drawing) == \
+        "Stair (Ground) connects to room Enclosed Walkway."
+    assert A.plain_ids("Bad (1.03) is the largest room; see e99.", drawing) == "Bad (1.03) is the largest room; see e99."
+    assert A.INTERNAL_ID.fullmatch("e143313") and not A.INTERNAL_ID.fullmatch("1.03") and not A.INTERNAL_ID.fullmatch("E12")

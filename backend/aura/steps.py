@@ -1534,7 +1534,7 @@ async def _reason(svc, d, question: str, lang: str, caller, meter, history, sess
     boxes_ev = [box_by_id[i].model_dump(exclude_none=True) for i in dict.fromkeys(used) if i in box_by_id]
     ev_ids = [A.room_eid(r["room_id"]) for r in rooms_ev] + [b["id"] for b in boxes_ev]
     working = str(out.get("working") or "")[:1200]
-    text = str(out["answer"])[:2000]
+    text = A.plain_ids(str(out["answer"])[:2000], d.drawing)
     warn = ("Check: these numbers do not match the drawing data or the working: "
             + "; ".join(f"{b['what']} {b['value']:g} (data: {b['closest_in_data']})" for b in bad[:5])) if bad else ""
     nodes.append(A.stage_node(
