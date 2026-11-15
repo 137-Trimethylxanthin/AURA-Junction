@@ -20,7 +20,7 @@ from typing import Literal
 
 # Bumped whenever routing changes what a question resolves to: cached answers written under an
 # older router are ignored (pipeline.answer cache key).
-ROUTER_VERSION = 18  # 18: label guesses on room-less scans; 17: sql numbers only for quantity questions; 16: zero SQL counts on sheets go to the reasoning step; 15: "bedroom 2" is BEDROOM #2; 14: printed dimensions of scans; 12/13: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
+ROUTER_VERSION = 20  # 19: named things on sheets read from the sheet; 18: label guesses on room-less scans; 17: sql numbers only for quantity questions; 16: zero SQL counts on sheets go to the reasoning step; 15: "bedroom 2" is BEDROOM #2; 14: printed dimensions of scans; 12/13: named things without a room are not the floor total; 8: tried-and-empty = not_answerable; 9: metadata to tools; 10: prices to tools, money not rooms, topics via tools; 11: rooms by door/window count
 EXACT_INTENTS = frozenset({"count", "area", "quantity", "find_text", "room_rank", "adjacent", "rooms_by_count",
                            "dimension"})
 
@@ -688,6 +688,7 @@ _WHOLE_WORDS = {
 }
 _NAMED = re.compile(
     rf"\b(?:of|for)\s+(?:the|this|that|our|my)\s+(?P<en>{_L}[{_L[1:-1]}\-]{{2,}})(?=\s*(?:\?|$|,|\.|in\b|on\b|at\b))|"
+    rf"\bhow\s+(?:big|large|small)\s+(?:is|are)\s+(?:the|this|that|our|my)\s+(?P<en2>{_L}[{_L[1:-1]}\-]{{2,}})(?=\s*(?:\?|$|,|\.))|"
     rf"\b(?:ist|sind|hat|der|des)\s+(?:die|der|das|den|dem)\s+(?P<de>[A-ZÄÖÜ]{_L}{{2,}})(?=\s*(?:\?|$|,|\.))",
     re.IGNORECASE,
 )
@@ -699,7 +700,7 @@ def named_subject(text: str) -> str | None:
     m = _NAMED.search(_EXCLUSION.sub(" ", text))
     if not m:
         return None
-    word = (m.group("en") or m.group("de") or "").strip()
+    word = (m.group("en") or m.group("en2") or m.group("de") or "").strip()
     if _norm(word) in _WHOLE_WORDS:
         return None
     return word

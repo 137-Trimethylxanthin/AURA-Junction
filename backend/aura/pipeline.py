@@ -1285,7 +1285,9 @@ async def run(svc: Services, req: AskRequest, caller: Caller, context: dict | No
             gate_node = stats.get("decision_node")
             tools_built: A.Built | None = None
             try:
-                tools_built = await answer_with_tools(svc, d, question, lang, caller, stats, history, eff_scope)
+                tools_built = await answer_with_tools(
+                    svc, d, question, lang, caller, stats, history, eff_scope,
+                    sheet_first=dkind == "raster" and "named_subject" in r.matched)
             except Exception:  # the tool path must never take the turn down; the agent still runs
                 log.exception("tool-step answerer failed; escalating to sidecar agent")
             if tools_built is not None:

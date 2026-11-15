@@ -1185,7 +1185,7 @@ def has_scale(d) -> bool:
 async def answer_with_tools(svc, d: tools.LoadedDrawing, question: str, lang: str, caller,
                             stats: dict, history: list[dict] | None = None,
                             scope: dict | None = None, *,
-                            model: str | None = None) -> A.Built | None:
+                            model: str | None = None, sheet_first: bool = False) -> A.Built | None:
     """Answer with planned read-only tool steps. None = could not answer within the limits (the
     caller falls through, e.g. to the sidecar). Model requests are metered on stats['meter'].
     `scope` (contract Scope dict: floor | unit | room | label | region) limits every room pool."""
@@ -1212,7 +1212,9 @@ async def answer_with_tools(svc, d: tools.LoadedDrawing, question: str, lang: st
     trace: list[dict] = []
     ctx: dict = {}
     why = "the tools found no answer within their limits"
-    if toolbox or sql_scope is not None:  # no metric scale and no store: only the reasoning step
+    # sheet_first: the question names one thing the index has no room for (a scan's 'Lagerhalle'): the
+    # tools could only total the wrong rooms, so the reasoning step reads the sheet directly.
+    if (toolbox or sql_scope is not None) and not sheet_first:  # no scale and no store: only the reasoning step
         try:
             async with asyncio.timeout(DEADLINE_S):
                 built = await _loop(svc, d, question, lang, caller, meter, history, model, calls0, stats,

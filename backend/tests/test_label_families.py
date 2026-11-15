@@ -63,3 +63,9 @@ def test_numbered_label_named_without_hash():
     assert route("What is the area of bedroom 2?", ctx).scope == {"kind": "label", "label": "BEDROOM #2"}
     assert route("area of bedroom no. 1", ctx).scope == {"kind": "label", "label": "BEDROOM #1"}
     assert route("What is the total area of all bedrooms?", ctx).scope == {"kind": "label", "label": "BEDROOM"}
+
+
+def test_how_big_is_a_named_thing():
+    ctx = DrawingCtx(labels=["Room"], kind="raster")
+    assert route("How big is the Lagerhalle?", ctx).intent == "unknown"
+    assert route("How big is the apartment?", ctx).intent == "area"
