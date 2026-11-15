@@ -1005,6 +1005,25 @@ def _sql_nodes(rs: ResultSet, parent: str, drawn: int) -> list[dict]:
     return [grab, filt]
 
 
+_QUANTITY_CUE = re.compile(
+    r"\b(?:how\s+(?:much|big|large|long|wide|deep|high|tall|far)|total|sum|number|average|mean|percent\w*|ratio|"
+    r"largest|smallest|biggest|widest|longest|most|least|size|area|length|width|volume|cost|price|"
+    r"combien|quel(?:le)?\s+(?:est|sont)\s+(?:la|le|les)\s+(?:surface|taille|longueur|largeur|nombre)|"
+    r"wie\s+(?:viel|gro|lang|breit)\w*|anzahl|summe|fläche|kuinka|montako|paljonko|pinta-ala|quant[oiea]|"
+    r"superficie)\b|%|m²|m2|\bsq\b",
+    re.IGNORECASE)
+
+
+_LIST_CUE = re.compile(
+    r"\b(?:list|show(?!n)|display|highlight|mark|which|enumerate|name\s+(?:all|the)|liste\w*|montre\w*|quel(?:le)?s|"
+    r"zeig\w*|welche\w*|nenne\w*|listaa|näytä|mitkä|elenca|mostra|quali)\b", re.IGNORECASE)
+
+
+def _asks_quantity(question: str) -> bool:
+    """The question asks for a number (a count, an area, a size, a total ...) or a list of things."""
+    return bool(COUNT.search(question) or _QUANTITY_CUE.search(question) or _LIST_CUE.search(question))
+
+
 def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: list[dict], calls: int,
                model: str, scope: dict, sqlres: store_sql.SqlResult | None = None) -> A.Built | None:
     """An sql set as the answer: the number comes from `store_sql.take`, never from the model."""
@@ -1021,6 +1040,8 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
         taken = store_sql.take(res, shape)
     if taken is None and not COUNT.search(question):
         return None  # a row count is no answer to "what is the scale?": the reasoning step answers instead
+    if taken is not None and taken.get("kind") != "text" and not _asks_quantity(question):
+        return None  # "what is shown on this drawing?" is not answered by a number: the reasoning step is
     taken = taken or {"kind": "count", "value": q.get("total", 0), "unit": None, "rule": rs.rule}
     if d.drawing.get("kind") == "raster" and taken.get("value") in (0, 0.0, None):
         # On a scan or PDF sheet a planned query that finds nothing is weak evidence (its text filters are
