@@ -219,6 +219,7 @@ class Model:
     frames: dict[tuple[str, int], Affine] = field(default_factory=dict)   # pages in the drawing's shared frame
     walls: list = field(default_factory=list)             # an image plan: its wall polygons in percent (raster_plan)
     nominal: bool = False                                 # an image plan without a stated scale: metres are an estimate
+    sheet: tuple[int, int] | None = None                  # a PDF of several pages: (the page shown, pages of the file)
 
     @property
     def vector_scan(self) -> bool:
@@ -455,8 +456,8 @@ def pick_base(db: DB, key: str, only: set[str] | None = None) -> Base | None:
 
 def _unrendered_cad(db: DB, key: str, width: int = 2000) -> Base | None:
     """A drawing without any page image but with CAD geometry in a frame: its model space, fitted into a page of
-    our own (y up in the file, down on the page).  The extent ignores the outermost half percent of the entities,
-    so a stray point far away does not shrink the drawing to a dot."""
+    our own (y up in the file, down on the page).  The extent is that of the drawing's main body: neither a stray
+    point nor a small block of entities far away shrinks the drawing to a dot."""
     p = db.one("""select fr.file_id, fr.page_no, fr.m, fr.method, pg.name, f.format
                   from jstore.frame fr join jstore.source_file f using (file_id)
                   join jstore.page pg on pg.file_id = fr.file_id and pg.page_no = fr.page_no
@@ -464,11 +465,21 @@ def _unrendered_cad(db: DB, key: str, width: int = 2000) -> Base | None:
                   order by fr.page_no, f.format, fr.file_id limit 1""", k=key)
     if p is None or len(p["m"]) != 6 or inv(p["m"]) is None:
         return None
-    e = db.one("""select percentile_cont(0.005) within group (order by st_xmin(geom)) as x0,
+    # the extent of the main body of the drawing: entities further from the median centre than four times the
+    # distance nine in ten lie within are left out (a second block of details or a title block drawn far from the
+    # plan, more than half a percent of the entities, would otherwise shrink the plan to a speck in a corner), then
+    # the outermost half percent of what remains
+    e = db.one("""with c as (select (st_xmin(geom) + st_xmax(geom)) / 2 as cx, (st_ymin(geom) + st_ymax(geom)) / 2 as cy, geom
+                             from jstore.cad_entity where file_id = :f and space = :s and geom is not null),
+                       mid as (select percentile_cont(0.5) within group (order by cx) as mx,
+                                      percentile_cont(0.5) within group (order by cy) as my from c),
+                       d as (select c.geom, sqrt((c.cx - mid.mx) ^ 2 + (c.cy - mid.my) ^ 2) as dist from c, mid),
+                       reach as (select 4 * percentile_cont(0.9) within group (order by dist) as r from d)
+                  select percentile_cont(0.005) within group (order by st_xmin(geom)) as x0,
                          percentile_cont(0.995) within group (order by st_xmax(geom)) as x1,
                          percentile_cont(0.005) within group (order by st_ymin(geom)) as y0,
                          percentile_cont(0.995) within group (order by st_ymax(geom)) as y1
-                  from jstore.cad_entity where file_id = :f and space = :s and geom is not null""",
+                  from d, reach where reach.r is null or reach.r <= 0 or d.dist <= reach.r""",
                f=p["file_id"], s=p["name"] or "model")
     if not e or any(e[k] is None for k in ("x0", "x1", "y0", "y1")) or e["x1"] <= e["x0"] or e["y1"] <= e["y0"]:
         return None
@@ -479,6 +490,46 @@ def _unrendered_cad(db: DB, key: str, width: int = 2000) -> Base | None:
     return Base(file_id=p["file_id"], page_no=p["page_no"], format=p["format"], name=p["name"], image=None, w=width, h=height,
                 to_image=(scale, 0.0, -x0 * scale, 0.0, -scale, y1 * scale), frame=tuple(p["m"]), frame_method=p["method"],
                 registered=True)
+
+
+# ---- one page of a PDF of several: what the drawing shows is what its counts and answers are about
+OFF_PAGE_SQL = """exists (select 1 from jstore.entity_source s where s.entity_id = e.entity_id and s.file_id = :f)
+                  and not exists (select 1 from jstore.entity_source s where s.entity_id = e.entity_id
+                                  and s.file_id = :f and s.page_no = :p)"""
+
+
+def off_page(sources: list[dict], base: Base) -> bool:
+    """The entity was read from the file shown, but only on other pages of it (OFF_PAGE_SQL says the same in SQL)."""
+    mine = [s for s in sources if s["file_id"] == base.file_id]
+    return bool(mine) and not any(s["page_no"] == base.page_no for s in mine)
+
+
+def sheet_of(db: DB, base: Base | None) -> tuple[int, int] | None:
+    """(the page shown, the pages of its file) for a PDF of more than one page, else None.  Pages count as the PDF
+    numbers them when the store kept the numbers, else in the order stored."""
+    if base is None or base.format != "pdf":
+        return None
+    pages = db.run("select page_no, name from jstore.page where file_id = :f order by page_no", f=base.file_id)
+    if len(pages) < 2:
+        return None
+    numbered = all(str(p["name"] or "").isdigit() for p in pages)
+    shown = next((int(p["name"]) if numbered else n for n, p in enumerate(pages, 1) if p["page_no"] == base.page_no), None)
+    if shown is None:
+        return None
+    return shown, max(len(pages), max(int(p["name"]) for p in pages) if numbered else 0)
+
+
+def page_counts(db: DB, key: str) -> tuple[tuple[int, int], dict[str, int]] | None:
+    """For a drawing shown as one page of a PDF of several: (page shown, pages) and the active entities per kind
+    that are on it (or in another file of the drawing); None for every other drawing."""
+    base = pick_base(db, key)
+    sheet = sheet_of(db, base)
+    if sheet is None:
+        return None
+    rows = db.run(f"""select e.kind, count(*) as n from jstore.entity e
+                       where e.drawing_key = :k and e.status = 'active' and not ({OFF_PAGE_SQL}) group by 1""",
+                  k=key, f=base.file_id, p=base.page_no)
+    return sheet, {r["kind"]: int(r["n"]) for r in rows}
 
 
 _L1_GEOM = {"cad_entity": "select handle as key, geom from jstore.cad_entity where file_id = :f and handle = any(cast(:k as text[]))",
@@ -607,6 +658,10 @@ def build(db: DB, key: str, storey: Storey | None = None, storeys: list[Storey] 
     m.frames = dict(data["frames"])
     if storey is None:
         m.base = pick_base(db, key)
+        m.sheet = sheet_of(db, m.base)
+        if m.sheet is not None:          # one page of several: rooms, doors and fixtures of the other pages are not on it
+            rooms = [r for r in rooms if not off_page(srcs.get(r["entity_id"], []), m.base)]
+            items = [i for i in items if not off_page(srcs.get(i["entity_id"], []), m.base)]
     else:
         m.id = drawing_id(key) + STOREY_SEP + storey.slug
 
@@ -1114,6 +1169,7 @@ def drawing_doc(m: Model, project_meta: dict | None = None) -> dict:
         credit = dict(text="Uploaded file", license="LicenseRef-upload", license_name="Uploaded by you")
     return _clean(dict(
         printed_dimensions=m.n_dimensions or None,     # additive: lengths can be answered from the sheet
+        sheet_page=m.sheet[0] if m.sheet else None, sheet_pages=m.sheet[1] if m.sheet else None,
         dimensions=[dimension_doc(x) for x in m.dimensions] or None, extent_m=m.extent,
         contract_version=CONTRACT_VERSION, id=did, title=m.title,
         subtitle=" · ".join(x for x in (project.split("/", 1)[0], " + ".join(f.upper() for f in formats), scale,

@@ -37,6 +37,7 @@ import {
 import { useTitle } from "@/hooks/use-title"
 import { BUNDLED_DRAWING_ID } from "@/data/ids"
 import { SAMPLE_ROUTE } from "@/api/sample"
+import { has3dModel } from "@/features/viewer3d/available"
 import {
   actions,
   POLL_DEADLINE_MS,
@@ -56,7 +57,8 @@ export default function Workspace() {
   const { drawingId = BUNDLED_DRAWING_ID } = useParams()
   const load = useAppStore((s) => s.session.load)
   const drawing = useAppStore(selectDrawing)
-  const view = useAppStore((s) => s.ui.view)
+  // A drawing without a wall model has no 3D view (the choice of 3D is kept for the next drawing that has one).
+  const view = useAppStore((s) => (has3dModel(s.session.drawing) ? s.ui.view : "2d"))
 
   useEffect(() => {
     void actions().initSource()

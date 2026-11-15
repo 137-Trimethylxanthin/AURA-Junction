@@ -757,3 +757,16 @@ def test_listing_states_origin_and_counts_for_the_library_filter():
     assert by["letter"]["n_rooms"] == 0 and by["letter"]["n_doors"] == 0
     for s in by.values():
         DrawingSummary.model_validate(s)
+
+
+def test_a_pdf_of_several_pages_lists_the_page_shown_and_its_counts():
+    """The listing row of such a drawing carries the page's counts (JStoreSource.rows asks the store for them)
+    and which page it is; header and card say so."""
+    r = row("set_of_sheets", "opening_design/CTR", ("pdf",), counts={"room": 22, "door": 15, "window": 52})
+    r["sheet"] = (7, 16)
+    (e,) = build_entries([r], set(), DEFAULT_EXCLUDE)
+    assert e.summary["subtitle"] == "OpeningDesign · CTR · PDF · page 7 of 16 · 22 rooms · 15 doors · 52 windows"
+    assert (e.summary["n_rooms"], e.summary["n_doors"]) == (22, 15)
+    (one,) = build_entries([row("one_page", "opening_design/CTR", ("pdf",), counts={"room": 2})], set(), DEFAULT_EXCLUDE)
+    assert "page" not in one.summary["subtitle"]
+
