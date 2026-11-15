@@ -45,7 +45,7 @@ from PIL import Image, ImageDraw
 MODEL = os.environ.get("JSTORE_GEMINI_MODEL", "gemini-4-carbon")
 DECISION_MODEL = os.environ.get("JSTORE_GEMINI_DECISION_MODEL", "gemini-decision-1")
 THINKING = os.environ.get("JSTORE_GEMINI_THINKING", "low")       # boxes do not need more (measured)
-PROMPT_VERSION = "sym-3"
+PROMPT_VERSION = "sym-5"
 ROOT = os.environ.get("JSTORE_GEMINI_ROOT", "https://generativelanguage.googleapis.com/v1beta")
 FIXTURES = ["toilet", "washbasin", "sink", "bathtub", "shower"]
 LABELS = ["door", "window"] + FIXTURES + ["stair"]
@@ -69,10 +69,12 @@ DETECT_PROMPT = (
     "sliding or folding door, or a plain doorway drawn with a threshold line. A double door (two leaves in one "
     "opening) is ONE door. Box the opening together with its leaf and arc. Wardrobe and cupboard fronts are not "
     "doors.\n"
-    "- window: one glazed opening in a wall, drawn as thin parallel lines (or a thin frame) inside the wall "
-    "thickness. Box the stretch of wall it occupies. A window divided by mullions is one window; windows in "
-    "separate openings are separate. Drawing styles differ: the lines may run along the wall or across it like "
-    "a short ladder, and small windows (bathroom, stair, basement) count as much as large ones - check every "
+    "- window: one window unit in a wall, drawn as thin parallel lines (or a thin frame) inside the wall "
+    "thickness. Box the stretch of wall it occupies. Where a line crosses the whole wall thickness inside a "
+    "glazed stretch (a frame between two units, for example a window next to a narrow vent hatch, or two "
+    "casements), each section between such cross lines is a separate window: box each section on its own "
+    "and do not also box the whole run around them. Windows in separate openings are separate. Drawing "
+    "styles differ: the lines may run along the wall or across it like a short ladder, and small windows (bathroom, stair, basement) count as much as large ones - check every "
     "interruption of an outer wall.\n"
     "- toilet: a WC pan (oval bowl with a cistern).  - washbasin: a hand basin in a bathroom or WC.\n"
     "- sink: a kitchen or utility sink (rectangular bowl or bowls, usually in a worktop).\n"
@@ -595,6 +597,21 @@ def dedupe(cands: list[dict]) -> None:
             seen.append(c)
 
 
+def nested_windows(cands: list[dict]) -> None:
+    """A window box around two or more kept window boxes is the whole run of sections that are counted one by
+    one: drop it.  A window box inside exactly one other is a fragment of it: drop the fragment."""
+    wins = sorted((c for c in cands if c["kept"] and c["label"] == "window"), key=lambda c: -_area(c["box"]))
+    for c in wins:
+        if not c["kept"]:
+            continue
+        inner = [d for d in wins if d is not c and d["kept"] and _area(d["box"]) < _area(c["box"])
+                 and _inter(c["box"], d["box"]) >= 0.7 * _area(d["box"])]
+        if len(inner) >= 2:
+            c["kept"], c["why"] = False, f"run of {len(inner)} window sections kept one by one"
+        elif inner:
+            inner[0]["kept"], inner[0]["why"] = False, "inside a larger window box"
+
+
 def load(image) -> Image.Image:
     im = image if isinstance(image, Image.Image) else Image.open(image)
     if im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info):
@@ -683,6 +700,7 @@ def detect(image, budget_s: float | None = None, verify: bool = True, force: boo
         for c in todo:
             judge(c)
         dedupe(cands)
+        nested_windows(cands)
     out["candidates"] = cands
     out["objects"] = [dict(label=c["label"], box=c["box"], score=c["score"], view=c["view"]) for c in cands if c["kept"]]
     return done()
