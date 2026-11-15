@@ -16,7 +16,13 @@ Branch: `simon/overnight-blueprint-improvements` (pushed). Every fix is its own 
 Other fixes found on the way:
 - An area question naming one thing the drawing has no room for ("area of the Lagerhalle") no longer returns the whole-floor total.
 - An SQL row count is never the answer to a non-count question ("What is the scale?" used to answer "1").
-- "bedroom 2" means the printed label `BEDROOM #2`, not every bedroom.
+- "bedroom 2" means the printed label `BEDROOM #2`, not every bedroom — also across languages ("Wie groß ist
+  Schlafzimmer 2?"); "Wie breit ist das Gebäude?" reads the printed overall dimension.
+- A unit-only follow-up ("and in square feet?", "und in Quadratfuß?") converts the previous answer by code.
+- Questions that name one thing the index has no room for ("How big is the Lagerhalle?") are read from the
+  sheet instead of returning a floor total; descriptive questions are never answered with an SQL row count.
+- Small scans (< 1400 px) are traced at 2–3× so their walls do not merge into one blob; photos, elevations and
+  sections get no vector rebuild (plausibility gate); vectorizations queue so batch uploads don't time out.
 - `scripts/dev.sh` uses docker when podman is missing.
 - Upload copy says images/photos are accepted (EN/FR/FI/DE).
 
