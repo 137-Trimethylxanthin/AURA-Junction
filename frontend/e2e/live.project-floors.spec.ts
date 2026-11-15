@@ -82,3 +82,18 @@ test('All 2 floors answers a room-type count over a browser-only project', async
   const conv = page.locator('article[data-turn]').last()
   await expect(conv.locator('[data-answer-value]')).toHaveAttribute('data-answer-value', /129[.,]17/, { timeout: 60_000 })
 })
+
+test('an image upload compares against its vector rebuild and builds in 3D', async ({ page, request }) => {
+  test.skip(!process.env.AURA_E2E_UPLOADS, 'set AURA_E2E_UPLOADS to finished image uploads')
+  const [id] = process.env.AURA_E2E_UPLOADS!.split(',')[0].split(':')
+  const drawing = await (await request.get(`${API}/drawings/${id}`)).json()
+  expect(drawing.images.rebuilt).toMatch(/plan\.svg/)
+  await page.goto(`/d/${encodeURIComponent(id)}`)
+  const compare = page.getByRole('button', { name: /Compare with original/ })
+  await expect(compare).toBeVisible({ timeout: 60_000 })
+  await compare.click()
+  await expect(page.getByText('Vector rebuild →')).toBeVisible()
+  await compare.click()
+  await page.getByText('3D', { exact: true }).first().click()
+  await expect(page.locator('canvas').first()).toBeVisible({ timeout: 60_000 })
+})
