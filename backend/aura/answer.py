@@ -320,7 +320,7 @@ def count(question: str, lang: str, d: LoadedDrawing, tr: ToolResult, scope: dic
                   "kind": "model" if vision else "exact", "evidence_ids": answer_ids})
     evidence: dict = {"boxes": [b.model_dump(exclude_none=True) for b in tr.boxes],
                       "rooms": [r.model_dump(exclude_none=True) for r in tr.rooms]}
-    if tr.meta.get("rows") and not tr.boxes:
+    if tr.meta.get("rows") and (not tr.boxes or tr.meta.get("rows_beside_boxes")):
         evidence["rows"] = tr.meta["rows"]  # IFC elements without a 2D footprint
     if tr.groups:
         evidence["groups"] = [g.model_dump(exclude_none=True) for g in tr.groups]

@@ -1038,11 +1038,11 @@ def _build_sql(question: str, lang: str, d, rs: ResultSet, fin: dict, trace: lis
         num = int(v) if float(v).is_integer() else round(float(v), 4)
         ans = {"kind": "note", "value": what, "number": num}
         shown = f"{num:g}" if isinstance(num, float) else str(num)
-    text = (f"{what}: {shown}. Rule: {taken['rule']}. Source: SQL over the drawing store"
-            + (f" (estimate: {why})" if estimate else "") + ".")
+    text = f"{what}: {shown}. " + store_sql.said(taken, q.get("views") or [], method, why, lang)
     trace.append(A.stage_node(
         "answer", "answer", "Answer", ("estimate · " if estimate else "exact · ") + "sql over the store",
-        text + f" {calls} model call(s); the number was read from the rows by code.",
+        text + f" Rule: {taken['rule']}" + (f" ({why})" if estimate else "")
+        + f". {calls} model call(s); the number was read from the rows by code.",
         kind="model" if estimate else "exact",
         detail={"source": "sql", "method": method, "estimate": estimate, "calls": calls, "cost_usd": 0.0,
                 "set": rs.desc, "rule": taken["rule"], "planner": model},

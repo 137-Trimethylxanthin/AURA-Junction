@@ -740,6 +740,7 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
     rooms: list[EvidenceRoom] = []
     parts: list[str] = []
     missing: list[str] = []
+    rows: list[dict] = []  # elements of a floor whose drawing boxes none of them (a model file without footprints)
     counted = 0
     none_in_model = True
     for fid in ids:
@@ -758,7 +759,11 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
         tag = fid.split("--", 1)[-1] if "--" in fid else fid
         boxes += [b.model_copy(update={"id": f"{b.id}@{tag}", "drawing_id": fid}) for b in tr.boxes]
         rooms += [r.model_copy(update={"drawing_id": fid}) for r in tr.rooms]
-        parts.append(f"{fd.drawing.get('floor_label') or fd.drawing.get('title') or fid}: {n}")
+        floor = str(fd.drawing.get('floor_label') or fd.drawing.get('title') or fid)
+        if not tr.boxes:  # listed, not drawn: every counted element still appears in the evidence, with its floor
+            rows += [{**r, "name": " · ".join(x for x in (str(r.get("name") or ""), floor) if x)[:120]}
+                     for r in tr.meta.get("rows") or []]
+        parts.append(f"{floor}: {n}")
     if counted == 0:
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
                           kind="none", subject=subject, supported=False, meta={"abstain": "not_supported_yet"},
@@ -773,6 +778,7 @@ def _count_across_floors(d: LoadedDrawing, subject: str, scope: dict, args: dict
                       kind="count", subject=subject, value=float(total), numbers=[float(total)],
                       boxes=boxes, rooms=rooms, summary=summary, ms=_ms(t0),
                       meta={"floors_counted": counted, "floors_missing": missing}
+                           | ({"rows": rows, "rows_beside_boxes": True} if rows else {})
                            | ({"none_in_model": True} if none_in_model and total == 0 else {}))
 
 
