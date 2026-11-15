@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,11 @@ def _vectorizer():
     return vectorize.vectorize_image, vectorize.plan_svg
 
 
+# One vectorization at a time: it runs in the API process, and several at once (a batch upload) starve
+# the parse workers and the store's readers on a small machine. Later ones wait their turn.
+_ONE_AT_A_TIME = threading.Lock()
+
+
 def _vector(out_dir: Path) -> dict | None:
     """The vector plan of out_dir/original.png, computed once and cached as vector.json."""
     cached = out_dir / VECTOR_FILE
@@ -42,7 +48,8 @@ def _vector(out_dir: Path) -> dict | None:
         except ValueError:
             pass
     vectorize_image, _ = _vectorizer()
-    vec = vectorize_image(src)
+    with _ONE_AT_A_TIME:
+        vec = vectorize_image(src)
     tmp = cached.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(vec), encoding="utf-8")
     os.replace(tmp, cached)
