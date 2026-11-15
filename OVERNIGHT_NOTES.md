@@ -43,6 +43,26 @@ A was chosen: it is robust on real photos, deterministic and free; the weaker ro
 
 Lagerhalle site plan (the extreme example): BGF 120,00 m², 12.00 × 10.00 m, 45 parking bays — read from the sheet by the reasoning step (was 548.76 m² and an abstain).
 
+## Dataset evaluation (preview set, `backend/scripts/eval_dataset.py`)
+
+Scored like the challenge (counts exact). Same drawings, before and after tonight's fixes:
+
+| Source | Questions | Before | After |
+|---|---|---|---|
+| Swiss PDF (vector) | 28 | 28 ok | 28 ok |
+| Swiss PNG (image) | 42 | 0 ok, 42 abstain | **38 ok**, 0 abstain |
+| CubiCasa PNG | 62 | 21 ok, 28 abstain | **40 ok**, 0 abstain |
+| US door schedule sheet (A-801) | "doors listed" | 0 | **38** (truth 38) |
+
+What fixed it: (1) a thread race in the store's room reader (dimension reading decoded the same PNG
+concurrently) left image uploads without rooms; (2) room-less image uploads skipped the tool tier;
+(3) zero counts from guessed SQL on sheets were final; the reasoning step now reads the sheet instead.
+Remaining errors are detector off-by-ones (windows ±1–2, doors 17 vs 16) and Finnish room-label
+ambiguity (kitchens/saunas counted twice).
+
+The IFC-rendered PDF questions ask about the whole IFC model (doors in the model), which a single
+rendered storey cannot answer; they abstain honestly.
+
 ## Demo script (≈5 min)
 
 1. `scripts/dev.sh` (needs docker or podman; Gemini key in `~/.config/junction/env`). Open http://localhost:5173/app.
