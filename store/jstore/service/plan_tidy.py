@@ -66,6 +66,9 @@ def place_labels(rooms: list[dict], smin: float, smax: float, pad: float = 1.5) 
     order = sorted(range(len(rooms)), key=lambda i: -rooms[i]["poly"].area)
     for i in order:
         poly, lines = _valid(rooms[i]["poly"]), [t for t in rooms[i]["lines"] if t]
+        if poly.geom_type != "Polygon":                      # an outline that crosses itself: its largest piece
+            parts = [g for g in getattr(poly, "geoms", []) if g.geom_type == "Polygon" and not g.is_empty]
+            poly = max(parts, key=lambda g: g.area) if parts else shapely.Polygon()
         if not lines or poly.is_empty:
             continue
         px_, py_, r = pole(poly)

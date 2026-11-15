@@ -69,3 +69,13 @@ def test_duplicate_door_symbols_and_windows():
     assert T.same_opening(a, twin, U) and not T.same_opening(a, across, U) and not T.same_opening(a, beside, U)
     assert T.door_rank(a) > T.door_rank(twin)
     assert T.duplicate_boxes([(0, 0, 60, 6), (2, 0, 50, 6), (100, 0, 60, 6)]) == {1}
+
+
+def test_labels_of_an_outline_that_crosses_itself():
+    """A bow-tie outline is two pieces once made valid: the label goes into the larger one (this was an error, and
+    the whole plan failed to draw: Käärmetalo sheet mfa.01a30b06)."""
+    import shapely
+    bow = shapely.Polygon([(0, 0), (40, 0), (40, 30), (60, 50), (60, 30), (40, 50), (40, 30), (0, 30)])
+    assert not bow.is_valid
+    out = T.place_labels([dict(poly=bow, lines=["Room", "12 m²"])], 3.0, 11.0)
+    assert out[0] is not None and 0 < out[0]["x"] < 40

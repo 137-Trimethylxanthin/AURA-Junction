@@ -27,6 +27,7 @@ from shapely import affinity
 from shapely.geometry import box as make_box
 
 from ..db import DB
+from .. import space_guard
 from . import store
 from . import plan_tidy
 from .plan_symbols import door_paths, door_symbol, opening_cut
@@ -406,7 +407,8 @@ def signature(db: DB, key: str) -> tuple | None:
     """Changes whenever the drawing's files, pages or interpretation change; None for an unknown drawing."""
     r = db.one("""select (select count(*) from jstore.source_file where drawing_key = :k) files,
                          (select string_agg(file_id || status, ',' order by file_id) from jstore.source_file where drawing_key = :k) st,
-                         (select count(*) || '/' || coalesce(max(entity_id), 0) from jstore.entity where drawing_key = :k) ents,
+                         (select count(*) || '/' || coalesce(max(entity_id), 0) || '/' || count(*) filter (where status = 'active')
+                            from jstore.entity where drawing_key = :k) ents,
                          (select count(*) from jstore.issue where drawing_key = :k) issues,
                          (select count(p.image) || '/' || count(fr.m) from jstore.source_file f join jstore.page p using (file_id)
                             left join jstore.frame fr using (file_id, page_no) where f.drawing_key = :k) pages""", k=key)
@@ -548,6 +550,14 @@ def load(db: DB, key: str) -> dict | None:
     store.set_scope_superuser(db, [key], [f["file_id"] for f in files])
     d["rooms"] = db.run("""select entity_id, storey, number, label, room_type, apartment, area_m2, area_source, is_indoor,
                                   n_sources, agreement, is_duplicate, geom from q.rooms order by number nulls last, entity_id""")
+    if any(f["format"] in ("png", "jpg") for f in files):
+        # enclosed spaces without a label that are not rooms (a strip beside a dimension line, the gap to a page
+        # border): left out here, so the document, the plan and the 3D view agree whether or not the store was pruned
+        try:
+            false = space_guard.of_drawing(db, key)
+        except Exception:  # noqa: BLE001 - the guard never costs a drawing
+            false = {}
+        d["rooms"] = [r for r in d["rooms"] if r["entity_id"] not in false]
     d["items"] = db.run("""select entity_id, storey, kind, ifc_class, tag, label, room, apartment, width_m, height_m, n_sources,
                                   is_duplicate, duplicate_of, geom from q.items order by kind, entity_id""")
     # printed dimensions: not drawn or counted with the items, but an answer may cite them (boxes of its evidence)
