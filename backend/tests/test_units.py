@@ -84,3 +84,30 @@ def test_numbered_room_keeps_its_number_but_thresholds_keep_their_unit():
     assert units.requested_unit("What is the area of bedroom 2 in square feet?") == (
         "ft2", "What is the area of bedroom 2?")
     assert units.requested_unit("rooms over 20 in sq ft")[0] is None
+
+
+def _sse_answer(text: str) -> tuple[str | None, dict | None]:
+    conv, resp, ev = None, None, None
+    for line in text.splitlines():
+        if line.startswith("event:"):
+            ev = line[6:].strip()
+        elif line.startswith("data:") and ev in ("turn", "answer"):
+            import json
+
+            d = json.loads(line[5:])
+            conv = d.get("conversation_id", conv) if ev == "turn" else conv
+            resp = d["response"] if ev == "answer" else resp
+    return conv, resp
+
+
+def test_unit_only_follow_up_converts_the_previous_answer_by_code(client):
+    r1 = client.post("/chat", json={"drawing_id": "swiss-46639", "message": "What is the total area of apartment A?"})
+    conv, first = _sse_answer(r1.text)
+    assert first and first["answer"]["kind"] == "area"
+    r2 = client.post("/chat", json={"drawing_id": "swiss-46639", "message": "and in square feet?",
+                                    "conversation_id": conv})
+    _, second = _sse_answer(r2.text)
+    AskResponse.model_validate(second)
+    assert second["calls"] == 0 and second["answer"] == first["answer"]
+    assert second["converted"]["unit"] == "sq ft"
+    assert second["converted"]["value"] == pytest.approx(first["answer"]["value"] / 0.09290304, rel=1e-6)

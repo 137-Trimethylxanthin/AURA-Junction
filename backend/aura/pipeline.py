@@ -1445,6 +1445,11 @@ def _with_converted(body: dict, requested: str) -> dict:
                                  "text": conv.text()}, "trace": trace}
 
 
+# What is left of "and in square feet?" / "und in Quadratfuß?" once the unit phrase is taken out.
+_ONLY_A_UNIT = re.compile(r"[\s,.?!]*(?:and|und|et|ja|e|y|what about|how about|bitte|please|now|dann|then)?[\s,.?!]*",
+                          re.IGNORECASE)
+
+
 def with_units(inner):
     """Unit handling around a `run`-shaped answerer: a pure conversion question is answered by code;
     a drawing question asking for a unit ("... in square feet") is answered in metric and the
@@ -1465,7 +1470,20 @@ def with_units(inner):
             yield "answer", {"response": body}
             return
         requested, cleaned = units.requested_unit(question)
-        if requested is not None and cleaned.strip():
+        if requested is not None and _ONLY_A_UNIT.fullmatch(cleaned) and history:
+            # "and in square feet?": the previous answer in another unit, converted by code (0 model calls)
+            prev = last_turn_response(history)
+            if prev is not None and "converted" in (conv_prev := _with_converted(prev, requested)):
+                ensure_ready(svc, req.drawing_id)
+                body = conv_prev | {"answer_id": "a-" + uuid.uuid4().hex, "route": "template", "calls": 0,
+                                    "cost_usd": 0.0, "latency_ms": int((time.perf_counter() - t0) * 1000)}
+                body.pop("check", None)
+                yield "understood", {"detected_lang": body["detected_lang"], "canonical_en": body["canonical_en"],
+                                     "route": "template"}
+                _persist(svc, req.drawing_id, req.question, body, {"check_calls": 0, "check_cost_usd": 0.0})
+                yield "answer", {"response": body}
+                return
+        if requested is not None and cleaned.strip() and not _ONLY_A_UNIT.fullmatch(cleaned):
             req = req.model_copy(update={"question": cleaned})
         async for ev, data in inner(svc, req, caller, context, history, meters, **kw):
             if requested is not None and ev == "answer" and isinstance(data.get("response"), dict):
