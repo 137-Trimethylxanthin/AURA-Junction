@@ -13,7 +13,8 @@ describe("facts", () => {
     expect(merged.map((f) => f.value)).toEqual(["2"])
   })
   it("the check-cost card comes from the exporter, with the 'agreed is not accuracy' caveat", () => {
-    expect(parseFacts(manual)).toEqual([])
+    expect(parseFacts(manual).map((f) => f.id)).toEqual(["scan-area-within-5", "scan-area-within-2", "scan-perimeter-within-2"])
+    expect(parseFacts(manual).every((f) => f.label.startsWith("Scans:"))).toBe(true)
     expect(factById("check-cost-library")?.caveat).toContain("not a measured accuracy")
   })
   it("keeps exported order and appends manual-only entries", () => {

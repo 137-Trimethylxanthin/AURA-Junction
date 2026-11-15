@@ -1,4 +1,41 @@
 {
-  "note": "Measured facts not written by backend/eval/export_facts.py. An entry with the same id as an exported fact replaces it (use only while an export is being corrected).",
-  "facts": []
+  "note": "Measured facts not written by backend/eval/export_facts.py (scan benchmarks). An entry with the same id as an exported fact replaces it.",
+  "facts": [
+    {
+      "id": "scan-area-within-5",
+      "kind": "result",
+      "label": "Scans: room areas within 5 % of the CAD original, from the image alone",
+      "value": "97 %",
+      "n": 909,
+      "n_unit": "rooms",
+      "scope": "909 rooms on 32 held-back Swiss Dwellings floor plans, read as PNG images without their CAD file; plans that state their scale",
+      "method": "A vision model outlines each labelled room on the image, the outline is snapped to the drawn lines, and its area is compared with the CAD original of the same floor",
+      "measured": "2026-11-14",
+      "caveat": "Scans only, no CAD or BIM file. Plans without a stated scale are not included: there the scale is estimated and areas are shown as estimates."
+    },
+    {
+      "id": "scan-area-within-2",
+      "kind": "result",
+      "label": "Scans: room areas within 2 % of the CAD original",
+      "value": "89 %",
+      "n": 909,
+      "n_unit": "rooms",
+      "scope": "909 rooms on 32 held-back Swiss Dwellings floor plans, read as PNG images without their CAD file; plans that state their scale",
+      "method": "A vision model outlines each labelled room on the image, the outline is snapped to the drawn lines, and its area is compared with the CAD original of the same floor",
+      "measured": "2026-11-14",
+      "caveat": "Scans only, no CAD or BIM file. Plans without a stated scale are not included: there the scale is estimated and areas are shown as estimates."
+    },
+    {
+      "id": "scan-perimeter-within-2",
+      "kind": "result",
+      "label": "Scans: room perimeters within 2 % of the CAD original",
+      "value": "96 %",
+      "n": 909,
+      "n_unit": "rooms",
+      "scope": "909 rooms on 32 held-back Swiss Dwellings floor plans, read as PNG images without their CAD file; plans that state their scale",
+      "method": "A vision model outlines each labelled room on the image, the outline is snapped to the drawn lines, and its perimeter is compared with the CAD original of the same floor",
+      "measured": "2026-11-14",
+      "caveat": "Scans only, no CAD or BIM file. Plans without a stated scale are not included: there the scale is estimated and areas are shown as estimates."
+    }
+  ]
 }

@@ -447,7 +447,7 @@ function Measured() {
     <Section
       id="measured"
       title="Accuracy and cost, measured with their n"
-      lead="These CAD and IFC accuracy figures were measured on AURA’s deterministic geometry engine (0 model calls), with sample size and date shown."
+      lead="The CAD and IFC figures were measured on AURA’s deterministic geometry engine (0 model calls). The figures marked Scans were measured on plan images alone, with no CAD or BIM file. Sample size and date are shown on each."
     >
       <Reveal
         as="ul"
