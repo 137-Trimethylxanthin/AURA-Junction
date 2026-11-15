@@ -718,6 +718,14 @@ def count_objects(d: LoadedDrawing, subject: str, scope: dict | None = None) -> 
                           kind="count", subject=subject, value=0.0, numbers=[0.0], ms=_ms(t0),
                           summary=f"0 {noun(subject, 2)}: {where} contains no {_element_name(subject)} elements.",
                           meta={"none_in_model": True})
+    if (not d.engine.supports(subject) and getattr(d, "store_library", False) is True
+            and subject in ("door", "window", "room") and scope.get("kind") == "floor"):
+        # A sheet the drawing store read (a site plan, a detail sheet, one page of a set): when nothing of this
+        # kind was read on it, say so, as a zero with its reason; a model would only guess.
+        return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects", args=args,
+                          kind="count", subject=subject, value=0.0, numbers=[0.0], ms=_ms(t0),
+                          summary=f"0 {noun(subject, 2)}: no {noun(subject, 1)} was read on this sheet.",
+                          meta={"none_in_model": True})
     if not d.engine.supports(subject):
         return ToolResult(result_id=_rid(d.id, "count_objects", args), tool="count_objects",
                           args=args, kind="none", subject=subject, supported=False,
