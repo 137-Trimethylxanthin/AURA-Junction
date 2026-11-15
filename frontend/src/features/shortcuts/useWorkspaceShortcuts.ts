@@ -21,6 +21,7 @@ export const CLOSE_DIALOG_LABEL: Record<Lang, string> = {
   fr: 'Fermer',
   fi: 'Sulje',
   de: 'Schliessen',
+  it: 'Chiudi',
 }
 
 export function isMacPlatform(

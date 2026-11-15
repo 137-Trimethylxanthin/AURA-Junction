@@ -65,6 +65,7 @@ const LANGUAGE_ITEMS: readonly { code: Lang; name: string }[] = [
   { code: 'fr', name: 'Français' },
   { code: 'fi', name: 'Suomi' },
   { code: 'de', name: 'Deutsch' },
+  { code: 'it', name: 'Italiano' },
 ]
 
 /** Power rows that already have a dedicated palette item (which just shows the pill). */

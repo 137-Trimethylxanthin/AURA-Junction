@@ -575,4 +575,32 @@ export const STAGE_COPY: Record<Lang, StageCopyEntry> = {
     groupLegendAria: 'Farbcodierte Gruppen',
     jumpToFloor: (label) => `${label} öffnen`,
   },
+  it: {
+    phase: (p) =>
+      p === 'checking'
+        ? 'Verifica dei riquadri'
+        : p === 'working'
+          ? 'Esame del disegno'
+          : p === 'understood'
+            ? 'Ricerca dei candidati'
+            : 'Lettura della domanda',
+    toolStep: (slug) =>
+      slug === 'view_image' || slug === 'crop'
+        ? 'Esame del ritaglio'
+        : slug === 'scan-candidates' || slug === 'scan_candidates'
+          ? 'Ricerca dei candidati'
+          : slug === 'check_boxes_with_decisions'
+            ? 'Verifica dei riquadri'
+            : 'Esame del disegno',
+    queue: (n) => `In coda (n. ${n})…`,
+    step: (n, label) => (n > 0 ? `Passo ${n} · ${label}` : label),
+    marked: (n) => `${n} segnati`,
+    dropped: (n) => `${n} esclusi`,
+    showFilteredOut: (n) => `Mostra ${n} esclusi`,
+    hideFilteredOut: (n) => `Nascondi ${n} esclusi`,
+    allFloors: (n) => `Tutti i ${n} piani`,
+    floorSwitcherAria: "Piani dell'edificio",
+    groupLegendAria: 'Gruppi colorati',
+    jumpToFloor: (label) => `Apri ${label}`,
+  },
 }

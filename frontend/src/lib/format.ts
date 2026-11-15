@@ -1,6 +1,6 @@
 import type { BoxSubjectAny, Display, Lang } from '@/api/contract'
 
-export const LOCALE: Record<Lang, string> = { en: 'en-GB', fr: 'fr-FR', fi: 'fi-FI', de: 'de-DE' }
+export const LOCALE: Record<Lang, string> = { en: 'en-GB', fr: 'fr-FR', fi: 'fi-FI', de: 'de-DE', it: 'it-IT' }
 
 const areaFmt = new Map<Lang, Intl.NumberFormat>()
 const countFmt = new Map<Lang, Intl.NumberFormat>()
@@ -81,6 +81,27 @@ export function fmtCost(usd: number): string {
 type Forms = [one: string, other: string]
 
 const NOUNS: Record<Lang, Record<BoxSubjectAny, Forms>> = {
+  it: {
+    window: ['finestra', 'finestre'],
+    door: ['porta', 'porte'],
+    washbasin: ['lavabo', 'lavabi'],
+    wc: ['WC', 'WC'],
+    bathtub: ['vasca da bagno', 'vasche da bagno'],
+    shower: ['doccia', 'docce'],
+    room: ['locale', 'locali'],
+    apartment: ['appartamento', 'appartamenti'],
+    label: ['testo stampato', 'testi stampati'],
+    fire_rating: ['resistenza al fuoco', 'resistenze al fuoco'],
+    bedroom: ['camera da letto', 'camere da letto'],
+    kitchen: ['cucina', 'cucine'],
+    bathroom: ['bagno', 'bagni'],
+    wc_room: ['locale WC', 'locali WC'],
+    sauna: ['sauna', 'saune'],
+    sink: ['lavello', 'lavelli'],
+    shower_or_bathtub: ['doccia o vasca', 'docce o vasche'],
+    storey: ['piano', 'piani'],
+    balcony: ['balcone', 'balconi'],
+  },
   en: {
     window: ['window', 'windows'],
     door: ['door', 'doors'],
